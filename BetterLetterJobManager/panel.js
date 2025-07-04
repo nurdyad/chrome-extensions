@@ -702,7 +702,7 @@ function showToast(message) {
       const numericDocId = getNumericDocIdFromInput(docIdFullString);
       if (!numericDocId) return showToast("No Document ID");
       if (!/^\d{6}$/.test(numericDocId)) return showToast("Invalid Document ID");
-      const url = `https://app.betterletter.ai/oban/jobs?args=document_id++${numericDocId}&state=available`;
+      const url = `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${input}&state=available`;
       
       navigator.clipboard.writeText(url).then(() => {
           showToast(`Copied URL: ${url}`);
