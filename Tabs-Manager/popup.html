@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>Link & Tab Manager</title>
+
+<style>
+
+body { font-family: Arial, sans-serif; margin: 10px; }
+
+#section-container > div { display: none; }
+
+button { margin-top: 10px; padding: 5px 10px; }
+
+.visible { display: block; }
+
+</style>
+
+</head>
+
+<body>
+
+<select id="mode-selector">
+
+<option value="open-links">Open Links</option>
+
+<option value="close-tabs">Close Tabs</option>
+
+</select>
+
+
+
+<div id="section-container">
+
+<!-- Open Links Section -->
+
+<div id="open-links-section">
+
+<label>How many links to open:</label>
+
+<select id="open-mode">
+
+<option value="all">All</option>
+
+<option value="amount">Specific Amount</option>
+
+</select>
+
+<input type="number" id="amount-input" placeholder="Enter amount" min="1" style="display: none;">
+
+<button id="open-links">Open Links</button>
+
+</div>
+
+
+
+<!-- Close Tabs Section -->
+
+<div id="close-tabs-section">
+
+<h3>Select tabs to keep:</h3>
+
+<div id="tabs-container" style="max-height: 300px; overflow-y: auto; border: 1px solid #ccc;"></div>
+
+<button id="close-tabs">Close Other Tabs</button>
+
+</div>
+
+</div>
+
+
+
+<script src="popup.js"></script>
+
+</body>
+
+</html>

@@ -1,0 +1,16 @@
+{
+    "manifest_version": 3,
+    "name": "Oban Document Navigator",
+    "version": "1.0",
+    "description": "Navigate to OBan jobs for a specific document ID.",
+    "permissions": ["tabs"],
+    "action": {
+      "default_popup": "popup.html",
+      "default_icon": {
+        "16": "icons/icon-16.jpg",
+        "48": "icons/icon-48.jpg",
+        "128": "icons/icon-128.jpg"
+      }
+    }
+  }
+  

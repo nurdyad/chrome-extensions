@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "BetterLetter Password Tools",
+  "version": "1.2",
+  "description": "Enhanced password management for BetterLetter Mailroom",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": [
+    "https://app.betterletter.ai/admin_panel/practices/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.betterletter.ai/admin_panel/practices/*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [{
+    "resources": ["styles.css"],
+    "matches": ["<all_urls>"]
+  }]
+}

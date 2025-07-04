@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Practice Settings Navigator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 10px;
+      width: 270px;
+    }
+    input, select {
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 10px;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+<body>
+  <h3>Practice Settings Navigator</h3>
+  <label for="practice-input">Enter Practice ID / Name:</label>
+  <input type="text" id="practice-input" placeholder="Enter Practice Name or ID">
+
+  <label for="settings-dropdown">Choose Setting:</label>
+  <select id="settings-dropdown">
+    <option value="basic">Basic Settings</option>
+    <option value="service">Service Settings</option>
+    <option value="workflows">Workflows</option>
+    <option value="ehr_settings">EHR Settings</option>
+  </select>
+
+  <button id="open-practice">Open Practice</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>

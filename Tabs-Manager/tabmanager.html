@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Tab Manager</title>
+<style>
+body {
+font-family: Arial, sans-serif;
+margin: 10px;
+}
+
+#tabs-container {
+max-height: 400px;
+overflow-y: auto;
+border: 1px solid #ccc;
+padding: 10px;
+}
+
+button {
+margin-top: 10px;
+padding: 8px 12px;
+background-color: #4CAF50;
+color: white;
+border: none;
+font-size: 14px;
+cursor: pointer;
+}
+
+button:hover {
+background-color: #45a049;
+}
+
+</style>
+</head>
+<body>
+<h3>Select Tabs to Keep:</h3>
+<div id="tabs-container">Loading tabs...</div>
+<button id="close-tabs">Close Other Tabs</button>
+
+<script src="tabmanager.js"></script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>BetterLetter Password Tools</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    
+    body {
+      background: #f8f9fa;
+      color: #212529;
+      padding: 16px;
+      min-width: 320px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #dee2e6;
+    }
+    
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #0d6efd;
+      margin-bottom: 4px;
+    }
+    
+    .header p {
+      font-size: 13px;
+      color: #6c757d;
+    }
+    .btn-container {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+    .btn {
+      flex: 1 1 48%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 12px;
+      background: #0d6efd;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+      box-shadow: 0 4px 6px rgba(13, 110, 253, 0.2);
+    }
+    
+    .btn:hover {
+      background: #0b5ed7;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 8px rgba(13, 110, 253, 0.25);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+      box-shadow: 0 4px 6px rgba(108, 117, 125, 0.2);
+    }
+    
+    .btn-secondary:hover {
+      background: #5c636a;
+      box-shadow: 0 6px 8px rgba(108, 117, 125, 0.25);
+    }
+    
+    .section {
+      background: white;
+      border-radius: 10px;
+      padding: 18px;
+      margin: 20px 0;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e9ecef;
+    }
+    
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 15px;
+      color: #212529;
+    }
+    
+    .section-title svg {
+      flex-shrink: 0;
+    }
+    
+    #password-list {
+      list-style: none;
+      max-height: 200px;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    
+    #password-list li {
+      padding: 12px 0;
+      border-bottom: 1px solid #e9ecef;
+    }
+    
+    #password-list li:last-child {
+      border-bottom: none;
+    }
+    
+    .pw-label {
+      display: block;
+      font-size: 13px;
+      color: #6c757d;
+      margin-bottom: 4px;
+    }
+    
+    .pw-value {
+      display: block;
+      background: #f8f9fa;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+      border: 1px solid #e9ecef;
+    }
+    
+    .error-message {
+      color: #dc3545;
+      font-weight: 500;
+      text-align: center;
+      padding: 10px 0;
+    }
+    
+    #status-message {
+      text-align: center;
+      margin: 10px 0;
+      font-weight: 500;
+      font-size: 14px;
+      min-height: 20px;
+    }
+    
+    footer {
+      text-align: center;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #e9ecef;
+      color: #6c757d;
+      font-size: 12px;
+    }
+    
+    /* Scrollbar styling */
+    #password-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    #password-list::-webkit-scrollbar-track {
+      background: #f1f3f5;
+      border-radius: 10px;
+    }
+    
+    #password-list::-webkit-scrollbar-thumb {
+      background: #ced4da;
+      border-radius: 10px;
+    }
+    
+    #password-list::-webkit-scrollbar-thumb:hover {
+      background: #adb5bd;
+    }
+  </style>
+</head>
+<body style="min-width: 240px; padding: 12px;">
+  <div class="header">
+    <h1>BetterLetter Password Tools</h1>
+    <p>Enhanced password management</p>
+  </div>
+  
+  <div class="btn-container">
+    <button id="show-passwords" class="btn">👁 Show</button>
+    <button id="generate-passwords" class="btn btn-secondary">🔄 Generate</button>
+  </div>  
+  
+  <div id="status-message"></div>
+  
+  <div class="section">
+    <div class="section-title">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+      </svg>
+      <span>Password Fields on Page</span>
+    </div>
+    <ul id="password-list">
+      <li class="no-passwords">Passwords will appear here</li>
+    </ul>
+  </div>
+  
+  <footer>
+    <p>BetterLetter Mailroom Extension v1.3</p>
+  </footer>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

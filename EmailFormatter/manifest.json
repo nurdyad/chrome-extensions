@@ -1,0 +1,10 @@
+{
+    "manifest_version": 3,
+    "name": "Email Formatter",
+    "version": "1.0",
+    "description": "Convert email addresses to comma-separated format.",
+    "action": {
+      "default_popup": "popup.html"
+    },
+    "permissions": ["clipboardWrite"]
+  }

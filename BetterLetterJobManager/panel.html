@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BetterLetter Job Panel</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 15px;
+      width: 320px;
+      background-color: #f4f7f6;
+      color: #333;
+    }
+
+    .section-container {
+      background-color: #fff;
+      border-radius: 8px;
+      padding: 10px; /* Reduced from 15px */
+      margin-bottom: 10px; /* Reduced from 15px */
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+
+    h3 {
+      margin-top: 0;
+      margin-bottom: 8px; /* Reduced from 10px */
+      color: #00BFFF;
+      font-size: 1.1em;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 3px; /* Reduced from 5px */
+    }
+
+    label {
+      display: block;
+      margin-bottom: 3px; /* Reduced from 5px */
+      font-weight: bold;
+      color: #555;
+    }
+
+    input[type="text"], input[list], select {
+      width: 100%;
+      padding: 8px; /* Reduced from 10px */
+      margin-bottom: 8px; /* Reduced from 10px */
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      box-sizing: border-box; /* Added early on */
+      font-size: 0.9em;
+      background-color: #fcfcfc;
+    }
+    input[readonly] {
+      background-color: #e9ecef;
+      cursor: default;
+    }
+
+    button {
+      background-color: #00BFFF;
+      color: white;
+      border: none;
+      padding: 8px 12px; /* Base button padding adjusted for consistency */
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.95em;
+      transition: background-color 0.2s ease;
+      width: 100%;
+      margin-top: 3px; /* Reduced from 5px */
+    }
+    button:hover {
+      background-color: #009ACD;
+    }
+
+    /* Document Actions grid to be responsive */
+    .button-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); /* Responsive grid for 3-buttons or 2-buttons */
+      gap: 10px;
+      margin-top: 5px;
+    }
+
+    .button-grid button { /* Added for consistent height */
+      padding: 8px; /* Consistent with small-button height */
+      font-size: 0.8em; /* Slightly smaller font for compactness */
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 6px 0; /* Reduced from 8px */
+      border-bottom: 1px dashed #eee;
+      font-size: 0.9em;
+      color: #444;
+    }
+    .info-row:last-of-type {
+      border-bottom: none;
+      margin-bottom: 8px; /* Reduced from 10px */
+    }
+
+    .info-value {
+      font-weight: bold;
+      color: #444;
+      text-align: right;
+    }
+
+    .input-with-button {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 8px; /* Reduced from 10px */
+    }
+   
+    .input-with-button .info-input {
+      flex-grow: 1;
+      margin-bottom: 0;
+    }
+    /* Adjusted: small-button padding for icon only */
+    .input-with-button .small-button {
+      width: auto;
+      flex-shrink: 0;
+      padding: 8px; /* Changed from 8px 12px to 8px for a more square icon button */
+      font-size: 0.85em; /* Keep font size for icon to be visible */
+      margin-top: 0;
+    }
+
+    .custom-autocomplete-results {
+      position: absolute;
+      top: 100%;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1002; /* Increased z-index to ensure it sits on top of other sections */
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      display: none;
+      margin-top: -5px;
+    }
+
+    .custom-autocomplete-results .autocomplete-item {
+      padding: 10px;
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+      font-size: 0.9em;
+      color: #333;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .custom-autocomplete-results .autocomplete-item:last-child {
+      border-bottom: none;
+    }
+
+    .custom-autocomplete-results .autocomplete-item:hover,
+    .custom-autocomplete-results .autocomplete-item.active {
+      background-color: #f0f0f0;
+      color: #00BFFF;
+    }
+
+    /* Specific Practice Input Grid for layout */
+    .practice-input-grid {
+      display: grid;
+      grid-template-columns: 3fr 1fr 1fr; /* Input takes 3 parts, buttons take 1 part each, more balanced */
+      gap: 5px;
+    }
+    .practice-input-grid input {
+      margin-bottom: 0 !important; /* Override general input margin */
+    }
+    .practice-input-grid button {
+      margin-top: 0 !important; /* Override general button margin */
+    }
+
+
+    /* Toast */
+    #toast {
+      display: none;
+      position: fixed;
+      bottom: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #323232;
+      color: white;
+      padding: 10px 15px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 1000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      white-space: nowrap;
+    }
+
+    /* Specific Job Title Section adjustments for vertical spacing */
+    #jobTitleSection {
+      margin-top: 10px !important; /* Reduced from 15px */
+      padding-top: 8px !important; /* Reduced from 10px */
+      border-top: 1px dashed #eee; /* Existing border-top */
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Document Selection Section -->
+  <div id="documentSelectionSection">
+    <div class="section-container">
+      <h3>Document Selection</h3>
+      <label for="documentDropdown">Document ID:</label>
+      <div class="input-with-button">
+        <input id="documentDropdown" placeholder="Enter or select document ID" autocomplete="off">
+        <button id="copySelectedDocId" class="small-button">&#x1F4CB;</button>
+        <div id="autocompleteResults" class="custom-autocomplete-results"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Document Actions Section -->
+  <div id="documentActionsSection">
+    <div class="section-container">
+      <h3>Document Actions</h3>
+      <div class="button-grid">
+        <button id="openDocumentStatus">Status</button>
+        <button id="openObanJob">Oban</button>
+        <button id="openAnnotation">Annotation</button>
+        <button id="openEventLog">Evt Log</button>
+        <button id="openLetterAdmin">L. Admin</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Practice Info Section -->
+  <div class="section-container">
+    <h3>Practice Details</h3>
+    <label for="practiceDropdown">Practice Name:</label>
+    <div class="input-with-button practice-input-grid">
+      <input id="practiceDropdown" placeholder="Enter or select practice" autocomplete="off">
+      <button id="openPractice" class="small-button">Open</button>
+      <button id="copyPracticeName" class="small-button">&#x1F4CB;</button>
+      <div id="practiceAutocompleteResults" class="custom-autocomplete-results"></div>
+    </div>
+
+    <div class="info-row" style="margin-top: 10px; border-bottom: none;">
+      <span>ODS Code:</span>
+      <span id="ods-code" class="info-value">—</span>
+    </div>
+  </div>
+
+  <!-- Job Info Section -->
+  <div class="section-container">
+    <h3>Job Details</h3>
+    <div class="info-row">
+      <span>Job Type:</span>
+      <span id="job-type-label" class="info-value">—</div>
+    <label for="job-id">Job ID:</label>
+    <div class="autocomplete-wrapper"> <!-- NEW: Wrap job-id input for autocomplete -->
+      <div class="input-with-button">
+        <input type="text" id="job-id" readonly class="info-input">
+        <button id="copy-job-id" class="small-button">&#x1F4CB;</button>
+      </div>
+      <div id="jobIdAutocompleteResults" class="custom-autocomplete-results"></div> <!-- NEW: Job ID autocomplete results -->
+    </div>
+    <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+      <button id="openJobDirect" class="small-button" style="flex: 1;">Open Job Page</button>
+      <button id="copyJobPageUrl" class="small-button" style="flex: 1;">&#x1F4CB; URL</button>
+    </div>
+
+    <!-- Job Title Display Section - MOVED AND STYLED AS PART OF JOB DETAILS -->
+    <div id="jobTitleSection" style="display: none; margin-top: 15px; padding-top: 10px; border-top: 1px dashed #eee;">
+      <label for="jobTitleDisplay">Job Title:</label>
+      <div class="input-with-button">
+        <input type="text" id="jobTitleDisplay" readonly class="info-input">
+        <button id="copyJobTitle" class="small-button">&#x1F4CB;</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
