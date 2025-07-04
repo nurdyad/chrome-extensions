@@ -1,1 +1,31 @@
+# macOS system files
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Chrome Extension dev files
+*.log
+*.zip
+*.crx
+*.pem
+
+# VS Code project settings (optional, if using workspace)
+.vscode/
+
+# Node.js (in case you use npm tools later)
+node_modules/
+npm-debug.log
+dist/
+build/
+
+# Environment or secret files
+.env
+.env.local
+.env.*.local
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
