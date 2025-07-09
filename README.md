@@ -1,4 +1,4 @@
-# 🧩 Chrome Extensions Collection
+# 🧩 BetterLetter Chrome Extensions Collection
 
 A curated collection of custom-built Chrome extensions developed to streamline workflows for BetterLetter, OBAN, and browser-based productivity. Each extension lives in its own folder and can be installed independently.
 
