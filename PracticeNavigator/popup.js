@@ -8,14 +8,14 @@ let currentSelectedOdsCode = null;
 // Make statusDisplayEl and statusEl global variables
 let statusDisplayEl = null;
 let statusEl = null;
-let cdbSearchResultEl = null; // New: Global variable for CDB search result display
+let cdbSearchResultEl = null; // Global variable for CDB search result display
 
 // Helper to enable/disable contextual buttons
 function setContextualButtonsState(enable) {
   document.getElementById('usersBtn').disabled = !enable;
   document.getElementById('preparingBtn').disabled = !enable;
   document.getElementById('rejectedBtn').disabled = !enable;
-  document.getElementById('statusBtn').disabled = !enable; // Also disable status button
+  // Removed statusBtn from here as it's no longer a button
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Assign to global variables here
   statusEl = document.getElementById('status');
   statusDisplayEl = document.getElementById('statusDisplay');
-  cdbSearchResultEl = document.getElementById('cdbSearchResult'); // New: Assign CDB search result element
+  cdbSearchResultEl = document.getElementById('cdbSearchResult'); // Assign CDB search result element
 
   if (statusDisplayEl) { // Defensive check
     statusDisplayEl.style.display = 'none'; // Ensure hidden on load
@@ -32,16 +32,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     cdbSearchResultEl.style.display = 'none'; // Ensure hidden on load
   }
 
-
   // Initial check for cache
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
     if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
       cachedPractices = response.practiceCache;
       console.log(`%c[BL Nav - Popup] Practice suggestions loaded from background. Cache size: ${Object.keys(cachedPractices).length}`, 'color: blue;');
-      updateContextualButtonsOnInput();
+      // Do NOT trigger updateContextualButtonsOnInput(true) here, only update basic states
+      updateContextualButtonsOnInput(false); 
       showStatus('Practice cache loaded.', 'success');
-      // Use global statusEl
+      // If there's a pre-filled value in practiceInput (e.g., from browser restore),
+      // manually trigger status display after cache is loaded.
+      if (practiceInputEl.value.trim() !== '') {
+          // Find the ODS for the current input value to set currentSelectedOdsCode
+          const foundPractice = Object.values(cachedPractices).find(p => 
+              `${p.name} (${p.ods})`.toLowerCase() === practiceInputEl.value.toLowerCase().trim() ||
+              p.ods.toLowerCase() === practiceInputEl.value.toLowerCase().trim()
+          );
+          if (foundPractice) {
+              currentSelectedOdsCode = foundPractice.ods;
+              setContextualButtonsState(true);
+              displayPracticeStatus(); // Trigger status display for the pre-filled value
+          } else {
+              setContextualButtonsState(false);
+          }
+      }
+
       if (statusEl) setTimeout(() => statusEl.style.display = 'none', 1500);
     } else {
       console.log('%c[BL Nav - Popup] Cache empty or not loaded. Requesting active foreground scrape...', 'color: orange;');
@@ -57,7 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (newCacheResponse && newCacheResponse.practiceCache && Object.keys(newCacheResponse.practiceCache).length > 0) {
             cachedPractices = newCacheResponse.practiceCache;
             console.log(`%c[BL Nav - Popup] Practice suggestions loaded after active scrape. Cache size: ${Object.keys(cachedPractices).length}`, 'color: blue;');
-            updateContextualButtonsOnInput();
+            updateContextualButtonsOnInput(false); // Only update states, not status
             showStatus('Practices loaded successfully!', 'success');
             if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
           } else {
@@ -69,7 +85,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.error(`%c[BL Nav - Popup] Active scrape request failed: ${scrapeResponse?.error}`, 'color: red;');
         }
       } catch (scrapeErr) {
-        showStatus(`Failed to load practices: ${scrapeErr.message}`, 'error');
+        showStatus(`Error fetching status: ${scrapeErr.message}`, 'error');
         console.error(`%c[BL Nav - Popup] Error during active scrape request: ${scrapeErr.message}`, 'color: red;', scrapeErr);
       }
     }
@@ -115,8 +131,8 @@ document.getElementById('rejectedBtn').addEventListener('click', () => {
   }
 });
 
-// --- Status Button Logic ---
-document.getElementById('statusBtn').addEventListener('click', async () => {
+// --- Status Display Logic (Integrated into selection) ---
+async function displayPracticeStatus() {
     // Use global statusDisplayEl
     if (statusDisplayEl) statusDisplayEl.style.display = 'none'; // Hide previous status
     if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none'; // Hide CDB search results
@@ -152,12 +168,14 @@ document.getElementById('statusBtn').addEventListener('click', async () => {
             showStatus(`Failed to get status: ${response?.error || 'No data found'}`, 'error');
             console.error(`%c[BL Nav - Popup] Failed to get status: ${response?.error}`, 'color: red;');
         }
-    } catch (err) {
+    }
+    // Added catch for fetch errors (e.g., network issues)
+    catch (err) {
         showStatus(`Error fetching status: ${err.message}`, 'error');
         console.error(`%c[BL Nav - Popup] Error fetching status: ${err.message}`, 'color: red;', err);
     }
-});
-// --- END Status Button Logic ---
+}
+// --- END Status Display Logic ---
 
 // --- NEW: CDB Search Logic ---
 document.getElementById('searchCdbBtn').addEventListener('click', async () => {
@@ -194,7 +212,7 @@ document.getElementById('searchCdbBtn').addEventListener('click', async () => {
             // Populate main input for convenience
             document.getElementById('practiceInput').value = `${response.practice.name} (${response.practice.ods})`;
             currentSelectedOdsCode = response.practice.ods;
-            updateContextualButtonsOnInput();
+            updateContextualButtonsOnInput(true); // Update button states and trigger status display
         } else {
             if (cdbSearchResultEl) {
                 cdbSearchResultEl.innerHTML = `<strong class="text-red-500">Error:</strong> ${response?.error || 'Practice not found for this CDB.'}`;
@@ -260,12 +278,13 @@ function showStatus(message, type) {
 
 const practiceInputEl = document.getElementById('practiceInput');
 const suggestionsList = document.getElementById('suggestions');
-const cdbSearchInputEl = document.getElementById('cdbSearchInput'); // New: Get CDB search input
-const cdbSuggestionsList = document.getElementById('cdbSuggestions'); // New: Get CDB suggestions list
+const cdbSearchInputEl = document.getElementById('cdbSearchInput'); // Get CDB search input
+const cdbSuggestionsList = document.getElementById('cdbSuggestions'); // Get CDB suggestions list
 
 let cachedPractices = {};
 
-async function updateContextualButtonsOnInput() {
+// Added a parameter 'triggerStatus' to control whether status is displayed
+async function updateContextualButtonsOnInput(triggerStatus = true) {
   const inputValue = practiceInputEl.value.trim();
   let foundOds = null;
 
@@ -275,17 +294,15 @@ async function updateContextualButtonsOnInput() {
       const dataOdsLower = data && data.ods ? data.ods.toLowerCase().trim() : '';
       const keyLower = key ? key.toLowerCase().trim() : '';
 
-      // Adopt the more robust matching from background.js
+      // Match either by exact full name/ODS string, or by partial if the input is significant enough
       if (
         dataNameLower === inputValue.toLowerCase() ||
         dataOdsLower === inputValue.toLowerCase() ||
         keyLower === inputValue.toLowerCase() ||
-        dataNameLower.includes(inputValue.toLowerCase()) || // Added .includes() for partial name match
-        dataOdsLower.includes(inputValue.toLowerCase())    // Added .includes() for partial ODS match
+        (dataNameLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3) || // Partial match only if 3+ chars
+        (dataOdsLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3)
       ) {
         foundOds = data.ods;
-        // REMOVED: The aggressive auto-population that was preventing typing.
-        // The value is now set explicitly when a suggestion is clicked or via CDB search.
         break;
       }
     }
@@ -294,6 +311,9 @@ async function updateContextualButtonsOnInput() {
   if (foundOds) {
     currentSelectedOdsCode = foundOds;
     setContextualButtonsState(true);
+    if (triggerStatus) { // Only display status if explicitly triggered (e.g., from a click/Enter)
+        displayPracticeStatus();
+    }
   } else {
     currentSelectedOdsCode = null;
     setContextualButtonsState(false);
@@ -307,12 +327,26 @@ practiceInputEl.addEventListener('input', () => {
   const query = practiceInputEl.value.toLowerCase().trim();
   const cachedPracticeDisplayNames = Object.keys(cachedPractices);
 
-  if (!query || cachedPracticeDisplayNames.length === 0) {
-    suggestionsList.style.display = 'none';
-    setContextualButtonsState(false);
+  if (!query) { // If query is empty, show all practices.
+    const practicesToShow = cachedPracticeDisplayNames; // Show ALL practices
+    
+    suggestionsList.innerHTML = '';
+    practicesToShow.forEach(name => { // Iterate over all practices
+      const li = document.createElement('li');
+      li.textContent = name;
+      li.addEventListener('click', () => {
+        practiceInputEl.value = name; // This line now explicitly sets the value on click
+        suggestionsList.style.display = 'none';
+        updateContextualButtonsOnInput(true); // Pass true to trigger status display on explicit selection
+      });
+      suggestionsList.appendChild(li);
+    });
+    suggestionsList.style.display = 'block';
+    updateContextualButtonsOnInput(false); // Don't trigger status when just showing all suggestions (only update button states)
     return;
   }
 
+  // If there's a query, filter based on it and limit to 8 suggestions.
   const matches = cachedPracticeDisplayNames
     .filter(name => name.toLowerCase().includes(query))
     .slice(0, 8);
@@ -331,7 +365,7 @@ practiceInputEl.addEventListener('input', () => {
     li.addEventListener('click', () => {
       practiceInputEl.value = name; // This line now explicitly sets the value on click
       suggestionsList.style.display = 'none';
-      updateContextualButtonsOnInput();
+      updateContextualButtonsOnInput(true); // Pass true to trigger status display on explicit selection
       // Logic for 'Add New Practice' is not clearly defined in provided files,
       // but keeping the display logic for settingType and openSettingsBtn for completeness.
       if (name.toLowerCase().includes('add new practice')) { // Assuming this is a special suggestion.
@@ -347,14 +381,23 @@ practiceInputEl.addEventListener('input', () => {
   });
 
   suggestionsList.style.display = 'block';
-  updateContextualButtonsOnInput();
+  updateContextualButtonsOnInput(false); // Don't trigger status on every key stroke (only update button states)
 });
+
+// Trigger suggestions when the input is clicked/focused
+practiceInputEl.addEventListener('focus', () => {
+    // Only show all if the input is currently empty
+    if (practiceInputEl.value.trim() === '') {
+        practiceInputEl.dispatchEvent(new Event('input')); // Simulate an input event to show all suggestions
+    }
+});
+
 
 document.addEventListener('click', (e) => {
   if (!suggestionsList.contains(e.target) && e.target !== practiceInputEl) {
     suggestionsList.style.display = 'none';
   }
-  // NEW: Hide CDB suggestions if clicking outside
+  // Hide CDB suggestions if clicking outside
   if (!cdbSuggestionsList.contains(e.target) && e.target !== cdbSearchInputEl) {
     cdbSuggestionsList.style.display = 'none';
   }
@@ -384,10 +427,7 @@ practiceInputEl.addEventListener('keydown', (e) => {
     case 'Enter':
       e.preventDefault();
       if (currentIndex >= 0 && items[currentIndex]) {
-        practiceInputEl.value = items[currentIndex].textContent; // This line explicitly sets the value on Enter
-        suggestionsList.style.display = 'none';
-        updateContextualButtonsOnInput();
-        practiceInputEl.dispatchEvent(new Event('input')); // Trigger input event to re-evaluate suggestions/buttons
+        items[currentIndex].click(); // Simulate click on the highlighted item to trigger full selection logic
       }
       return;
     case 'Escape':
@@ -409,13 +449,14 @@ practiceInputEl.addEventListener('keydown', (e) => {
 cdbSearchInputEl.addEventListener('input', () => {
     const query = cdbSearchInputEl.value.toLowerCase().trim();
     
-    if (!query || Object.keys(cachedPractices).length === 0) {
-        cdbSuggestionsList.style.display = 'none';
-        return;
-    }
+    // Always filter the CDB suggestions based on whether CDB data is present and matches
+    const practicesWithValidCDB = Object.values(cachedPractices).filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error');
 
-    const matches = Object.values(cachedPractices)
-        .filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb.toLowerCase().includes(query))
+    const matches = query
+        ? practicesWithValidCDB.filter(p => p.cdb.toLowerCase().includes(query))
+        : practicesWithValidCDB; // If no query, show all practices with a valid CDB
+
+    const displayMatches = matches
         .map(p => ({
             displayName: `${p.name} (${p.ods}) - ${p.cdb}`,
             ods: p.ods,
@@ -425,12 +466,12 @@ cdbSearchInputEl.addEventListener('input', () => {
         .slice(0, 8); // Limit to 8 suggestions
 
     cdbSuggestionsList.innerHTML = '';
-    if (matches.length === 0) {
+    if (displayMatches.length === 0) {
         cdbSuggestionsList.style.display = 'none';
         return;
     }
 
-    matches.forEach(match => {
+    displayMatches.forEach(match => {
         const li = document.createElement('li');
         li.textContent = match.displayName;
         li.addEventListener('click', () => {
@@ -438,13 +479,22 @@ cdbSearchInputEl.addEventListener('input', () => {
             practiceInputEl.value = `${match.name} (${match.ods})`; // Also populate main practice input
             currentSelectedOdsCode = match.ods; // Set the current selected ODS
             cdbSuggestionsList.style.display = 'none';
-            updateContextualButtonsOnInput(); // Update button states
+            updateContextualButtonsOnInput(true); // Update button states and trigger status display
         });
         cdbSuggestionsList.appendChild(li);
     });
 
     cdbSuggestionsList.style.display = 'block';
 });
+
+// Trigger suggestions when the CDB input is clicked/focused
+cdbSearchInputEl.addEventListener('focus', () => {
+    // Only show all if the input is currently empty
+    if (cdbSearchInputEl.value.trim() === '') {
+        cdbSearchInputEl.dispatchEvent(new Event('input')); // Simulate an input event to show all suggestions
+    }
+});
+
 
 cdbSearchInputEl.addEventListener('keydown', (e) => {
     const items = cdbSuggestionsList.querySelectorAll('li');

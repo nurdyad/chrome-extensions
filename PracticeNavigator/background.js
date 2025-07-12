@@ -17,7 +17,7 @@ let practiceCache = {};
 // Constants for cache management and periodic refresh intervals.
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds for local storage cache expiry.
 const REALTIME_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds for periodic background refresh.
-const cdbCache = {}; // ODS => CDB value
+const cdbCache = {}; // ODS => CDB value (This in-memory cache will store scraped CDBs)
 
 // Global variable to store the ID of the floating window, to prevent multiple instances.
 let floatingWindowId = null;
@@ -45,6 +45,12 @@ async function ensureCacheLoaded() {
             Date.now() - result.cacheTimestamp < CACHE_EXPIRY
         ) {
             practiceCache = result.practiceCache;
+            // Also re-hydrate the in-memory cdbCache from the loaded practiceCache entries that have CDB
+            for (const key in practiceCache) {
+                if (practiceCache[key].cdb && practiceCache[key].cdb !== 'N/A' && practiceCache[key].cdb !== 'Error') {
+                    cdbCache[practiceCache[key].ods] = practiceCache[key].cdb;
+                }
+            }
             console.log(`%c[BL Nav - BG] In-memory practice cache re-hydrated from storage. Size: ${Object.keys(practiceCache).length}`, 'color: green;');
         } else {
             // If no valid cache, trigger a fresh fetch and store it.
@@ -264,6 +270,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
          }
          
          // Return an object containing all relevant practice data.
+         // Note: CDB is *not* scraped here as it requires navigating to a sub-tab.
          return { id: ods, name: practiceName, ehrType, collectionQuota, collectedToday, serviceLevel };
        }).filter(p => p !== null); // Filter out any null entries (invalid rows).
      },
@@ -281,6 +288,10 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
    // Convert the array of practice objects into a map for faster lookup (keyed by "Name (ODS)").
    const cacheMap = {};
    practicesArray.forEach((p) => {
+     // Retrieve existing CDB from old cache if available, to persist it across refreshes
+     const existingPractice = Object.values(practiceCache).find(ep => ep.ods === p.id);
+     const cdbToKeep = existingPractice ? existingPractice.cdb : undefined; // Keep existing CDB if any
+
      cacheMap[`${p.name} (${p.id})`] = { 
        ods: p.id, 
        timestamp: Date.now(), 
@@ -288,7 +299,8 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
        ehrType: p.ehrType,           // Store EHR Type.
        collectionQuota: p.collectionQuota, // Store Collection Quota.
        collectedToday: p.collectedToday,    // Store Collected Today.
-       serviceLevel: p.serviceLevel         // Store Service Level.
+       serviceLevel: p.serviceLevel,         // Store Service Level.
+       cdb: cdbToKeep // Carry over existing CDB if present
      };
    });
    practiceCache = cacheMap; // Update the global in-memory cache.
@@ -436,33 +448,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             // Attempt to find the practice entry in the current cache.
+            // Find the *exact* cache entry for the ODS.
             let practiceEntry = Object.values(practiceCache).find(p => p.ods === practiceOds);
             
             let practiceCDB = 'N/A';
-            // Only scrape CDB if it's not already in the cache for this practice or is explicitly 'N/A'/'Error'
-            if (practiceEntry && practiceEntry.cdb && practiceEntry.cdb !== 'N/A' && practiceEntry.cdb !== 'Error') {
+            
+            // Prioritize cached CDB from in-memory cdbCache first for speed
+            if (cdbCache[practiceOds]) {
+                practiceCDB = cdbCache[practiceOds];
+                console.log(`%c[BL Nav - Background] CDB found in in-memory cdbCache for ${practiceOds}: ${practiceCDB}`, 'color: green;');
+            } else if (practiceEntry && practiceEntry.cdb && practiceEntry.cdb !== 'N/A' && practiceEntry.cdb !== 'Error') {
+                // If not in `cdbCache`, check the main `practiceCache` entry (which might have been loaded from storage)
                 practiceCDB = practiceEntry.cdb;
-                console.log(`%c[BL Nav - Background] CDB found in cache for ${practiceOds}: ${practiceCDB}`, 'color: green;');
+                cdbCache[practiceOds] = practiceCDB; // Populate `cdbCache` for future quick access
+                console.log(`%c[BL Nav - Background] CDB found in main practiceCache for ${practiceOds}: ${practiceCDB}`, 'color: green;');
             } else {
+                // If CDB is missing or marked as error in cache, then scrape it for this specific practice
                 try {
+                    console.log(`%c[BL Nav - Background] CDB missing for ${practiceOds}. Triggering specific scrape.`, 'color: orange;');
                     practiceCDB = await scrapePracticeCDB(practiceOds);
-                    // Update cache with scraped CDB
-                    // Only update if scrape was successful and provided a value
-                    if (practiceEntry && practiceCDB && practiceCDB !== 'N/A' && practiceCDB !== 'Error') {
+                    // Update main practiceCache entry with the newly scraped CDB
+                    if (practiceEntry) { // Ensure practiceEntry exists before updating its cdb property
                         practiceEntry.cdb = practiceCDB;
-                        // Also populate in-memory cdbCache immediately for rapid subsequent lookups
-                        cdbCache[odsCode] = practiceCDB; 
-                        await chrome.storage.local.set({ practiceCache: practiceCache }); // Persist updated cache
+                        // Persist updated practiceCache to storage to save the new CDB value
+                        await chrome.storage.local.set({ practiceCache: practiceCache }); 
                     }
                 } catch (cdbError) {
                     console.warn(`%c[BL Nav - Background] Failed to scrape CDB for ${practiceOds}: ${cdbError.message}`, 'color: orange;');
                     practiceCDB = 'Error'; // Indicate failure in UI
+                    if (practiceEntry) {
+                        practiceEntry.cdb = 'Error'; // Mark as error in cache
+                        await chrome.storage.local.set({ practiceCache: practiceCache });
+                    }
                 }
             }
 
-            // If found and has status data, return it.
+            // After attempting to get CDB (either from cache or scrape), retrieve other status details.
+            // It's possible the main practiceEntry might be stale or missing some primary details
+            // if it wasn't recently scraped via fetchAndCachePracticeList.
+            // We ensure we have the most up-to-date details here.
+            if (!practiceEntry || practiceEntry.ehrType === undefined || practiceEntry.collectionQuota === undefined || practiceEntry.collectedToday === undefined || practiceEntry.serviceLevel === undefined) {
+                console.warn(`%c[BL Nav - Background] Full status data (other than CDB) not found/complete for ODS: ${practiceOds}. Attempting fresh main scrape...`, 'color: orange;');
+                // This call updates the main `practiceCache` in the background worker.
+                const freshlyScrapedPractices = await fetchAndCachePracticeList('status lookup (full refresh)');
+                practiceEntry = Object.values(practiceCache).find(p => p.ods === practiceOds); // Use practiceCache directly after refresh
+            }
+
+            // Return status data if the practice entry is now complete.
             if (practiceEntry && practiceEntry.ehrType !== undefined && practiceEntry.collectionQuota !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.serviceLevel !== undefined) {
-                console.log(`%c[BL Nav - Background] Found status in current cache for ODS ${practiceOds}:`, 'color: green;', practiceEntry);
+                console.log(`%c[BL Nav - Background] Found complete status data for ODS ${practiceOds}:`, 'color: green;', practiceEntry);
                 return { 
                     success: true,
                     status: {
@@ -471,46 +505,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         collectionQuota: practiceEntry.collectionQuota,
                         collectedToday: practiceEntry.collectedToday,
                         serviceLevel: practiceEntry.serviceLevel,
-                        practiceCDB: practiceCDB // NEW: Include Practice CDB
+                        practiceCDB: practiceCDB // Use the resolved CDB
                     }
                 };
             } else {
-                // If not found in current cache or data is incomplete, perform a fresh scrape.
-                console.warn(`%c[BL Nav - Background] Status not found in current cache for ODS: ${practiceOds}. Attempting fresh scrape...`, 'color: orange;');
-                const freshlyScrapedPractices = await fetchAndCachePracticeList('status lookup');
-                // Lookup in the newly scraped array.
-                practiceEntry = freshlyScrapedPractices.find(p => p.id === practiceOds);
-
-                // Return fresh data if found.
-                if (practiceEntry && practiceEntry.ehrType !== undefined && practiceEntry.collectionQuota !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.serviceLevel !== undefined) {
-                    // Update cache with the newly scraped CDB if it was fetched with a full practice object.
-                    // This might be redundant if scrapePracticeCDB already updated it, but safe.
-                    if (practiceEntry.cdb && practiceEntry.cdb !== 'N/A' && practiceEntry.cdb !== 'Error') {
-                        practiceCDB = practiceEntry.cdb;
-                        // Ensure in-memory cdbCache is updated
-                        cdbCache[odsCode] = practiceCDB;
-                    }
-                    console.log(`%c[BL Nav - Background] Found status after fresh scrape for ODS ${practiceOds}:`, 'color: green;', practiceEntry);
-                    return { 
-                        success: true,
-                        status: {
-                            odsCode: practiceEntry.ods, 
-                            ehrType: practiceEntry.ehrType, 
-                            collectionQuota: practiceEntry.collectionQuota,
-                            collectedToday: practiceEntry.collectedToday,
-                            serviceLevel: practiceEntry.serviceLevel,
-                            practiceCDB: practiceCDB // Include Practice CDB (from cache or fresh scrape)
-                        }
-                    };
-                } else {
-                    return { error: `Status data not found for practice ${practiceOds} even after fresh scrape.` };
-                }
+                return { error: `Complete status data not found for practice ${practiceOds} even after trying to refresh.` };
             }
         } catch (error) {
             console.error(`%c[BL Nav - Background] Error in getPracticeStatus: ${error.message}`, 'color: red; font-weight: bold;', error);
             return { error: `Failed to get status: ${error.message}` };
         }
-    } else if (message.action === 'searchCDB') { // NEW: Handle CDB search request
+    } else if (message.action === 'searchCDB') { // Handle CDB search request
         try {
             const searchedCDB = message.cdb;
             if (!searchedCDB) {
@@ -519,61 +524,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log(`%c[BL Nav - Background] Initiating CDB search for: "${searchedCDB}"`, 'color: #DA70D6;');
 
             let foundPractice = null;
-            const allPractices = Object.values(practiceCache);
-
-            // First, try to find in already cached CDBs to avoid opening tabs.
-            for (const p of allPractices) {
-                // Ensure p.cdb exists and is not 'N/A' or 'Error' before comparing
-                if (p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb === searchedCDB) {
-                    foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
-                    console.log(`%c[BL Nav - Background] Match found in CACHE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                    break;
-                }
-            }
-
-            // If not found in cached CDBs, then iterate and scrape as needed.
-            if (!foundPractice) {
-                console.log(`%c[BL Nav - Background] CDB not in cache. Will attempt to scrape practices for match.`, 'color: orange;');
-                for (const p of allPractices) {
-                    // Only scrape if CDB is not already cached for this specific practice or is 'N/A'/'Error'
-                    if (p.ods && (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error')) {
-                        try {
-                            const scrapedCDB = await scrapePracticeCDB(p.ods);
-                            // Update cache for this practice
-                            p.cdb = scrapedCDB;
-                            // Persist updated cache immediately after each scrape for robustness
-                            await chrome.storage.local.set({ practiceCache: practiceCache }); 
-                            // Ensure in-memory cdbCache is updated
-                            cdbCache[p.ods] = scrapedCDB;
-
-                            if (scrapedCDB === searchedCDB) {
-                                foundPractice = { name: p.name, ods: p.ods, cdb: scrapedCDB };
-                                console.log(`%c[BL Nav - Background] Match found by SCRAPE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                                break; // Found a match, no need to check further
-                            }
-                        } catch (scrapeError) {
-                            console.warn(`%c[BL Nav - Background] Could not scrape CDB for ${p.name} (${p.ods}) during search: ${scrapeError.message}`, 'color: orange;');
-                            // Mark as error in cache to avoid re-scraping immediately for this practice
-                            if (p.cdb === undefined || p.cdb === 'N/A') { // Only mark if not already a valid CDB
-                                p.cdb = 'Error';
-                                await chrome.storage.local.set({ practiceCache: practiceCache });
-                            }
-                            // Continue to next practice if one fails
-                        }
-                    } else if (p.ods && p.cdb === searchedCDB) {
-                        // This case handles if it was found in a previous scrape within this loop but not in the initial cache check.
-                        foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
-                        console.log(`%c[BL Nav - Background] Match found (already scraped) for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                        break;
+            
+            // Phase 1: Search only in existing cached CDBs (in-memory cdbCache first, then practiceCache)
+            // This avoids opening any new tabs for the search itself.
+            for (const ods in cdbCache) {
+                if (cdbCache[ods] === searchedCDB) {
+                    const practice = Object.values(practiceCache).find(p => p.ods === ods);
+                    if (practice) {
+                        foundPractice = { name: practice.name, ods: practice.ods, cdb: cdbCache[ods] };
+                        console.log(`%c[BL Nav - Background] Match found in in-memory cdbCache for CDB "${searchedCDB}": ${practice.name} (${practice.ods})`, 'color: #32CD32; font-weight: bold;');
+                        return { success: true, practice: foundPractice }; // Return immediately
                     }
                 }
             }
 
-            if (foundPractice) {
-                return { success: true, practice: foundPractice };
-            } else {
-                return { success: false, error: `No practice found for CDB: "${searchedCDB}". Please ensure the CDB is correct.` };
+            // If not found in in-memory cdbCache, check the main practiceCache (which came from storage)
+            const allPracticesInCache = Object.values(practiceCache);
+            for (const p of allPracticesInCache) {
+                if (p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb === searchedCDB) {
+                    foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
+                    cdbCache[p.ods] = p.cdb; // Add to in-memory cdbCache for future quick access
+                    console.log(`%c[BL Nav - Background] Match found in main practiceCache for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
+                    return { success: true, practice: foundPractice }; // Return immediately
+                }
             }
+            // --- END Phase 1 ---
+
+            // If still not found after checking all existing caches
+            console.log(`%c[BL Nav - Background] CDB "${searchedCDB}" not found in any existing cache. No further scraping will be done for this search.`, 'color: orange;');
+            return { success: false, error: `No practice found for CDB: "${searchedCDB}" in cached data. You may need to select a practice first to load its CDB.` };
 
         } catch (error) {
             console.error(`%c[BL Nav - Background] Error during CDB search: ${error.message}`, 'color: red; font-weight: bold;', error);
@@ -635,8 +614,8 @@ async function getOdsCodeFromName(input) {
       dataNameLower === inputLower || 
       dataOdsLower === inputLower || 
       keyLower === inputLower ||
-      dataNameLower.includes(inputLower) || // Added .includes() for partial name match
-      dataOdsLower.includes(inputLower)    // Added .includes() for partial ODS match (though less common)
+      (dataNameLower.includes(inputLower) && inputLower.length >= 3) || // Only partial match if significant input
+      (dataOdsLower.includes(inputLower) && inputLower.length >= 3)    // Only partial match if significant input
     ) {
         console.log(`%c[BL Nav - Background] Found ODS in memory cache for: "${input}" -> ${data.ods}`, 'color: green;');
         return data.ods;
@@ -651,7 +630,7 @@ async function getOdsCodeFromName(input) {
   
   // Try to find the practice in the newly scraped list.
   const matched = freshPracticesArray.find(p => 
-      p && (p.name.toLowerCase().trim() === inputLower || p.id.toLowerCase().trim() === inputLower || p.name.toLowerCase().trim().includes(inputLower))
+      p && (p.name.toLowerCase().trim() === inputLower || p.id.toLowerCase().trim() === inputLower || (p.name.toLowerCase().trim().includes(inputLower) && inputLower.length >= 3))
   );
 
   if (!matched) {
@@ -736,6 +715,7 @@ async function openPracticePage(practiceId, settingType) {
  * @throws {Error} If the CDB cannot be found or the scraping process fails.
  */
 async function scrapePracticeCDB(odsCode) {
+  // Check in-memory cache first to avoid re-scraping
   if (cdbCache[odsCode]) {
     console.log(`[BL Nav - Background] Returning cached CDB for ${odsCode}: ${cdbCache[odsCode]}`);
     return cdbCache[odsCode];

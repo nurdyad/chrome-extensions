@@ -1,158 +1,718 @@
-// popup.js
+// This script runs in the context of the floating_window.html popup.
 
-// Global variable to store extracted data
-let extractedDataGlobal = [];
+chrome.action.setBadgeText({ text: "Nav" }); // Changed default badge text to indicate navigator
 
-// Function to display a temporary message in the popup
-function showMessage(message, type = 'success') {
-    const messageBox = document.getElementById('messageBox');
-    messageBox.textContent = message;
-    messageBox.className = `message-box show bg-${type === 'success' ? 'green' : 'red'}-500`;
-    setTimeout(() => {
-        messageBox.classList.remove('show');
-    }, 2000); // Message disappears after 2 seconds
+let currentSelectedOdsCode = null;
+
+// Global variables for main view elements
+let practiceNavigatorView = null;
+let emailFormatterView = null;
+let passwordManagerView = null; // New global for password manager view
+
+// Global variables for status and CDB display
+let statusDisplayEl = null;
+let statusEl = null;
+let cdbSearchResultEl = null;
+
+// Helper to enable/disable contextual buttons
+function setContextualButtonsState(enable) {
+  document.getElementById('usersBtn').disabled = !enable; // Users button now depends on selected practice again
+  document.getElementById('preparingBtn').disabled = !enable;
+  document.getElementById('rejectedBtn').disabled = !enable;
 }
 
-// Function to copy text to clipboard using document.execCommand
-function copyToClipboard(text) {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed'; // Prevent scrolling to bottom
-    textarea.style.left = '-9999px'; // Move out of sight
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-        const successful = document.execCommand('copy');
-        if (successful) {
-            showMessage('Copied to clipboard!');
+// Function to switch between views
+function showView(viewId) {
+  practiceNavigatorView.style.display = 'none';
+  emailFormatterView.style.display = 'none';
+  passwordManagerView.style.display = 'none'; // Hide password manager view
+
+  if (viewId === 'practiceNavigatorView') {
+    practiceNavigatorView.style.display = 'block';
+  } else if (viewId === 'emailFormatterView') {
+    emailFormatterView.style.display = 'block';
+  } else if (viewId === 'passwordManagerView') { // Show password manager view
+    passwordManagerView.style.display = 'block';
+    // Clear password list and status message when showing the view
+    document.getElementById("password-list").innerHTML = '<li class="no-passwords">Click \'Show Passwords\' to see fields from the active BetterLetter page.</li>';
+    document.getElementById("status-message-password").textContent = "";
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Assign view containers
+  practiceNavigatorView = document.getElementById('practiceNavigatorView');
+  emailFormatterView = document.getElementById('emailFormatterView');
+  passwordManagerView = document.getElementById('passwordManagerView'); // Assign password manager view
+
+  // Initially show the main navigator view
+  showView('practiceNavigatorView');
+
+  setContextualButtonsState(false);
+  // Assign to global variables for status and CDB display
+  statusEl = document.getElementById('status');
+  statusDisplayEl = document.getElementById('statusDisplay');
+  cdbSearchResultEl = document.getElementById('cdbSearchResult');
+
+  if (statusDisplayEl) {
+    statusDisplayEl.style.display = 'none';
+  }
+  if (cdbSearchResultEl) {
+    cdbSearchResultEl.style.display = 'none';
+  }
+
+  // Initial check for cache
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+    if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
+      cachedPractices = response.practiceCache;
+      console.log(`%c[BL Nav - Popup] Practice suggestions loaded from background. Cache size: ${Object.keys(cachedPractices).length}`, 'color: blue;');
+      updateContextualButtonsOnInput(false); 
+      showStatus('Practice cache loaded.', 'success');
+      
+      if (practiceInputEl.value.trim() !== '') {
+          const foundPractice = Object.values(cachedPractices).find(p => 
+              `${p.name} (${p.ods})`.toLowerCase() === practiceInputEl.value.toLowerCase().trim() ||
+              p.ods.toLowerCase() === practiceInputEl.value.toLowerCase().trim()
+          );
+          if (foundPractice) {
+              currentSelectedOdsCode = foundPractice.ods;
+              setContextualButtonsState(true);
+              displayPracticeStatus();
+          } else {
+              setContextualButtonsState(false);
+          }
+      }
+
+      if (statusEl) setTimeout(() => statusEl.style.display = 'none', 1500);
+    } else {
+      console.log('%c[BL Nav - Popup] Cache empty or not loaded. Requesting active foreground scrape...', 'color: orange;');
+      showStatus('Loading practices... Please wait.', 'loading');
+
+      try {
+        const scrapeResponse = await new Promise(resolve => {
+          chrome.runtime.sendMessage({ action: 'requestActiveScrape' }, resolve);
+        });
+
+        if (scrapeResponse && scrapeResponse.success) {
+          const newCacheResponse = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+          if (newCacheResponse && newCacheResponse.practiceCache && Object.keys(newCacheResponse.practiceCache).length > 0) {
+            cachedPractices = newCacheResponse.practiceCache;
+            console.log(`%c[BL Nav - Popup] Practice suggestions loaded after active scrape. Cache size: ${Object.keys(cachedPractices).length}`, 'color: blue;');
+            updateContextualButtonsOnInput(false);
+            showStatus('Practices loaded successfully!', 'success');
+            if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
+          } else {
+             showStatus('Practices loaded, but cache still empty.', 'error');
+             console.error('%c[BL Nav - Popup] Active scrape reported success but cache still empty.', 'color: red;');
+          }
         } else {
-            showMessage('Failed to copy. Please try again.', 'error');
+          showStatus(`Failed to load practices: ${scrapeResponse?.error || 'Unknown error'}`, 'error');
+          console.error(`%c[BL Nav - Popup] Active scrape request failed: ${scrapeResponse?.error}`, 'color: red;');
+        }
+      } catch (scrapeErr) {
+        showStatus(`Error fetching status: ${scrapeErr.message}`, 'error');
+        console.error(`%c[BL Nav - Popup] Error during active scrape request: ${scrapeErr.message}`, 'color: red;', scrapeErr);
+      }
+    }
+  } catch (error) {
+    console.error(`%c[BL Nav - Popup] Error during initial cache load: ${error.message}`, 'color: red;', error);
+    showStatus('Failed to load practice data. Check console.', 'error');
+  }
+
+  // Set up event listeners for the Email Formatter elements
+  document.getElementById("convertEmailBtn").addEventListener("click", convertEmails);
+  document.getElementById("copyEmailBtn").addEventListener("click", copyEmails);
+  document.getElementById("backToNavigatorBtn").addEventListener("click", () => showView('practiceNavigatorView'));
+  
+  // Email Formatter Toggle Button (now at top)
+  document.getElementById("emailFormatterToggleBtn").addEventListener("click", () => showView('emailFormatterView'));
+
+  // Password Manager Toggle Button (now in old Create Practice spot)
+  document.getElementById("passwordToggleBtn").addEventListener("click", () => showView('passwordManagerView'));
+  document.getElementById("backToNavigatorBtnPassword").addEventListener("click", () => showView('practiceNavigatorView')); // Back button for password manager
+
+  // Password Manager specific buttons
+  document.getElementById("show-passwords").addEventListener("click", showBLPasswords);
+  document.getElementById("generate-passwords").addEventListener("click", generateBLPasswords);
+
+  // Create Practice button (now at top)
+  document.getElementById('createPracticeTopBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices/new' });
+  });
+});
+
+
+document.getElementById('practicesBtn').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices' });
+});
+
+// Users button remains as original functionality
+document.getElementById('usersBtn').addEventListener('click', () => {
+  if (currentSelectedOdsCode) {
+    const url = `https://app.betterletter.ai/mailroom/practices/${currentSelectedOdsCode}/users`;
+    chrome.tabs.create({ url });
+  } else {
+    showStatus('Please select a valid practice first to view users.', 'error');
+  }
+});
+
+// Original Create Practice button is now gone, replaced by passwordToggleBtn
+
+document.getElementById('preparingBtn').addEventListener('click', () => {
+  if (currentSelectedOdsCode) {
+    const url = `https://app.betterletter.ai/mailroom/preparing?only_action_items=true&practice=${currentSelectedOdsCode}&service=self&sort=upload_date&sort_dir=asc&urgent=false`;
+    chrome.tabs.create({ url });
+  } else {
+    showStatus('Please select a valid practice first.', 'error');
+  }
+});
+
+document.getElementById('rejectedBtn').addEventListener('click', () => {
+  if (currentSelectedOdsCode) {
+    const url = `https://app.betterletter.ai/mailroom/rejected?practice=${currentSelectedOdsCode}&service=full&show_processed=false&sort=inserted_at&sort_dir=asc`;
+    chrome.tabs.create({ url });
+  } else {
+    showStatus('Please select a valid practice first.', 'error');
+  }
+});
+
+// --- Status Display Logic (Integrated into selection) ---
+async function displayPracticeStatus() {
+    if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+    if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
+
+    if (!currentSelectedOdsCode) {
+        showStatus('Please select a valid practice first to get status.', 'error');
+        return;
+    }
+
+    showStatus('Fetching status (this might open a temporary window briefly)...', 'loading');
+
+    try {
+        const response = await new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: 'getPracticeStatus', odsCode: currentSelectedOdsCode }, resolve);
+        });
+
+        if (response && response.success && response.status) {
+            if (statusDisplayEl) {
+                statusDisplayEl.innerHTML = `
+                    <strong>ODS Code:</strong> ${response.status.odsCode || 'N/A'}<br>
+                    <strong>EHR Type:</strong> ${response.status.ehrType || 'N/A'}<br>
+                    <strong>Collection Quota:</strong> ${response.status.collectionQuota || 'N/A'}<br>
+                    <strong>Collected Today:</strong> ${response.status.collectedToday || 'N/A'}<br>
+                    <strong>Service Level:</strong> ${response.status.serviceLevel || 'N/A'}<br>
+                    <strong>Practice CDB:</strong> ${response.status.practiceCDB || 'N/A'}
+                `;
+                statusDisplayEl.style.display = 'block';
+            }
+            showStatus('Status fetched successfully!', 'success');
+            if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
+        } else {
+            showStatus(`Failed to get status: ${response?.error || 'No data found'}`, 'error');
+            console.error(`%c[BL Nav - Popup] Failed to get status: ${response?.error}`, 'color: red;');
+        }
+    }
+    catch (err) {
+        showStatus(`Error fetching status: ${err.message}`, 'error');
+        console.error(`%c[BL Nav - Popup] Error fetching status: ${err.message}`, 'color: red;', err);
+    }
+}
+// --- END Status Display Logic ---
+
+// --- NEW: CDB Search Logic ---
+document.getElementById('searchCdbBtn').addEventListener('click', async () => {
+    const cdbSearchInput = document.getElementById('cdbSearchInput').value.trim();
+    if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+    if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
+
+    if (!cdbSearchInput) {
+        showStatus('Please enter a CDB code to search.', 'error');
+        return;
+    }
+
+    showStatus('Searching for practice by CDB (this is a heavy operation)...', 'loading');
+    if (cdbSearchResultEl) cdbSearchResultEl.innerHTML = '<div class="text-center py-2">Searching... This might take a moment as it checks all practices.</div>';
+    if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'block';
+
+
+    try {
+        const response = await new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: 'searchCDB', cdb: cdbSearchInput }, resolve);
+        });
+
+        if (response && response.success && response.practice) {
+            if (cdbSearchResultEl) {
+                cdbSearchResultEl.innerHTML = `
+                    <strong>Practice Found:</strong><br>
+                    <strong>Name:</strong> ${response.practice.name}<br>
+                    <strong>ODS:</strong> ${response.practice.ods}<br>
+                    <strong>CDB:</strong> ${response.practice.cdb}
+                `;
+                cdbSearchResultEl.style.display = 'block';
+            }
+            showStatus('Practice found by CDB!', 'success');
+            // Populate main input for convenience
+            document.getElementById('practiceInput').value = `${response.practice.name} (${response.practice.ods})`;
+            currentSelectedOdsCode = response.practice.ods;
+            updateContextualButtonsOnInput(true);
+        } else {
+            if (cdbSearchResultEl) {
+                cdbSearchResultEl.innerHTML = `<strong class="text-red-500">Error:</strong> ${response?.error || 'Practice not found for this CDB.'}`;
+                cdbSearchResultEl.style.display = 'block';
+            }
+            showStatus(`Search failed: ${response?.error || 'Practice not found.'}`, 'error');
+            console.error(`%c[BL Nav - Popup] CDB Search failed: ${response?.error}`, 'color: red;');
         }
     } catch (err) {
-        showMessage('Error copying: ' + err, 'error');
-    } finally {
-        document.body.removeChild(textarea);
-    }
-}
-
-// Get references to DOM elements
-const loadingIndicator = document.getElementById('loading');
-const mainContent = document.getElementById('mainContent');
-const rowDataSelect = document.getElementById('rowDataSelect');
-const dynamicButtonsContainer = document.getElementById('dynamicButtonsContainer');
-
-// Request the content script to run and send data
-function requestDataFromContentScript() {
-    chrome.runtime.sendMessage({ action: "executeContentScript" }, (response) => {
-        if (response && response.success) {
-            console.log("Content script execution requested successfully.");
-            // Content script will send data back via another message
-        } else if (response && response.error) {
-            console.error("Failed to execute content script:", response.error);
-            loadingIndicator.textContent = `Error: ${response.error}. Ensure you are on the correct page and permissions are set.`;
-        } else {
-            console.error("No response from background script.");
-            loadingIndicator.textContent = "Error: No response from extension. Check permissions and URL.";
-        }
-    });
-}
-
-// Listener for messages from the content script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === "extractedData") {
-        const extractedData = message.data;
-        if (extractedData && extractedData.length > 0) {
-            extractedDataGlobal = extractedData; // Store data globally
-            loadingIndicator.classList.add('hidden'); // Hide loading
-            mainContent.classList.remove('hidden'); // Show main content
-            populateDropdown(extractedData.slice(0, 10)); // Populate dropdown with first 10 rows
-            showMessage('Data loaded successfully!');
-        } else {
-            loadingIndicator.textContent = "No data found on this page. Make sure the table exists.";
-            mainContent.classList.add('hidden'); // Keep main content hidden
-            showMessage('No data extracted!', 'error');
-        }
-        sendResponse({ status: "received" }); // Acknowledge receipt
+        showStatus(`Error during CDB search: ${err.message}`, 'error');
+        console.error(`%c[BL Nav - Popup] Error during CDB search: ${err.message}`, 'color: red;', err);
     }
 });
+// --- END NEW: CDB Search Logic ---
 
-// Function to populate the dropdown with the first N rows
-function populateDropdown(data) {
-    rowDataSelect.innerHTML = '<option value="">-- Select a patient row --</option>'; // Clear and add default
-    data.forEach((rowData, index) => {
-        const option = document.createElement('option');
-        // Use a unique identifier (like index or originalName) for the option value
-        option.value = index; // Store the index of the row in the global data array
-        // Display a meaningful summary in the dropdown
-        // Using `originalName` for the numeric ID and `documentId` for the long hash
-        option.textContent = `Original: ${rowData.originalName} | Patient: ${rowData.patientName} (NHS No: ${rowData.nhsNo})`;
-        rowDataSelect.appendChild(option);
+
+document.getElementById('openSettingsBtn').addEventListener('click', async () => {
+  const rawInput = document.getElementById('practiceInput').value.trim();
+  const cleanInput = rawInput.replace(/\s*\([A-Z]\d{5}\)\s*$/, '').trim(); 
+  const settingType = document.getElementById('settingType').value;
+  if (statusEl) {
+    showStatus('Searching for practice...', 'loading');
+  }
+
+  if (!cleanInput) {
+    showStatus('Please enter a practice name or ODS code', 'error');
+    return;
+  }
+
+  try {
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        action: 'openPractice',
+        input: rawInput,
+        settingType
+      }, resolve);
     });
-}
 
-// Function to create dynamic buttons based on the selected row
-function createDynamicButtons(rowData) {
-    dynamicButtonsContainer.innerHTML = ''; // Clear previous buttons
-
-    // Define the order and labels for the buttons
-    const buttonOrder = [
-        'originalName',
-        'documentId', // Ensure this is explicitly listed if it's a new field from content.js
-        'nhsNo',
-        'patientName',
-        'practice',
-        'reason',
-        'rejectedBy',
-        'on',
-        'status'
-    ];
-
-    const columnLabels = {
-        originalName: 'Original Name (Numeric ID)', // Clarified label
-        documentId: 'Document ID',                   // Added label for Document ID
-        nhsNo: 'NHS No.',
-        patientName: 'Patient Name',
-        practice: 'Practice',
-        reason: 'Reason',
-        rejectedBy: 'Rejected By',
-        on: 'On',
-        status: 'Status'
-    };
-
-    // Iterate through the defined button order and create a button for each field
-    buttonOrder.forEach(key => {
-        // Only create a button if the data exists for this key
-        if (rowData.hasOwnProperty(key) && rowData[key]) {
-            const button = document.createElement('button');
-            button.classList.add('copy-button', 'rounded-lg', 'bg-gradient-to-r', 'from-indigo-500', 'to-blue-600', 'hover:from-indigo-600', 'hover:to-blue-700', 'focus:ring-indigo-500', 'shadow-md', 'active:scale-95', 'transform', 'transition-all', 'duration-150', 'ease-in-out');
-            button.textContent = `${columnLabels[key] || key}: ${rowData[key]}`;
-            button.setAttribute('data-value', rowData[key]); // Store the actual value to copy
-
-            button.addEventListener('click', (event) => {
-                const valueToCopy = event.target.getAttribute('data-value');
-                copyToClipboard(valueToCopy);
-            });
-            dynamicButtonsContainer.appendChild(button);
-        }
-    });
-}
-
-// Event listener for dropdown selection change
-rowDataSelect.addEventListener('change', (event) => {
-    const selectedIndex = event.target.value;
-    if (selectedIndex !== "") {
-        // Retrieve the full row data from the global array using the index
-        const selectedRowData = extractedDataGlobal[parseInt(selectedIndex)];
-        if (selectedRowData) {
-            createDynamicButtons(selectedRowData);
-        } else {
-            dynamicButtonsContainer.innerHTML = ''; // Clear buttons if selection is invalid
-            console.error("Selected index not found in data.");
-        }
+    if (response && response.error) {
+      showStatus(`Error: ${response.error}`, 'error');
     } else {
-        dynamicButtonsContainer.innerHTML = ''; // Clear buttons if default option is selected
+      showStatus('Settings opened successfully!', 'success');
+      if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
+    }
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error');
+  }
+});
+
+function showStatus(message, type) {
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.className = type;
+    statusEl.style.display = 'block';
+  } else {
+    console.warn("Status element not found in DOM when trying to showStatus:", message);
+  }
+}
+
+const practiceInputEl = document.getElementById('practiceInput');
+const suggestionsList = document.getElementById('suggestions');
+const cdbSearchInputEl = document.getElementById('cdbSearchInput');
+const cdbSuggestionsList = document.getElementById('cdbSuggestions');
+
+let cachedPractices = {};
+
+async function updateContextualButtonsOnInput(triggerStatus = true) {
+  const inputValue = practiceInputEl.value.trim();
+  let foundOds = null;
+
+  if (inputValue) {
+    for (const [key, data] of Object.entries(cachedPractices)) {
+      const dataNameLower = data && data.name ? data.name.toLowerCase().trim() : '';
+      const dataOdsLower = data && data.ods ? data.ods.toLowerCase().trim() : '';
+      const keyLower = key ? key.toLowerCase().trim() : '';
+
+      if (
+        dataNameLower === inputValue.toLowerCase() ||
+        dataOdsLower === inputValue.toLowerCase() ||
+        keyLower === inputValue.toLowerCase() ||
+        (dataNameLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3) ||
+        (dataOdsLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3)
+      ) {
+        foundOds = data.ods;
+        break;
+      }
+    }
+  }
+
+  if (foundOds) {
+    currentSelectedOdsCode = foundOds;
+    setContextualButtonsState(true);
+    if (triggerStatus) {
+        displayPracticeStatus();
+    }
+  } else {
+    currentSelectedOdsCode = null;
+    setContextualButtonsState(false);
+    if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+    if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
+  }
+}
+
+practiceInputEl.addEventListener('input', () => {
+  const query = practiceInputEl.value.toLowerCase().trim();
+  const cachedPracticeDisplayNames = Object.keys(cachedPractices);
+
+  if (!query) {
+    const practicesToShow = cachedPracticeDisplayNames; 
+    
+    suggestionsList.innerHTML = '';
+    practicesToShow.forEach(name => {
+      const li = document.createElement('li');
+      li.textContent = name;
+      li.addEventListener('click', () => {
+        practiceInputEl.value = name;
+        suggestionsList.style.display = 'none';
+        updateContextualButtonsOnInput(true);
+      });
+      suggestionsList.appendChild(li);
+    });
+    suggestionsList.style.display = 'block';
+    updateContextualButtonsOnInput(false);
+    return;
+  }
+
+  const matches = cachedPracticeDisplayNames
+    .filter(name => name.toLowerCase().includes(query))
+    .slice(0, 8);
+
+  suggestionsList.innerHTML = '';
+  if (matches.length === 0) {
+    suggestionsList.style.display = 'none';
+    setContextualButtonsState(false);
+    return;
+  }
+
+  matches.forEach(name => {
+    const li = document.createElement('li');
+    li.textContent = name;
+
+    li.addEventListener('click', () => {
+      practiceInputEl.value = name;
+      suggestionsList.style.display = 'none';
+      updateContextualButtonsOnInput(true);
+      if (name.toLowerCase().includes('add new practice')) {
+        document.getElementById('settingType').style.display = 'none';
+        document.getElementById('openSettingsBtn').style.display = 'none';
+      } else {
+        document.getElementById('settingType').style.display = 'block';
+        document.getElementById('openSettingsBtn').style.display = 'inline-block';
+      }
+    });
+
+    suggestionsList.appendChild(li);
+  });
+
+  suggestionsList.style.display = 'block';
+  updateContextualButtonsOnInput(false);
+});
+
+practiceInputEl.addEventListener('focus', () => {
+    if (practiceInputEl.value.trim() === '') {
+        practiceInputEl.dispatchEvent(new Event('input'));
     }
 });
 
-// When the popup loads, request data
-document.addEventListener('DOMContentLoaded', requestDataFromContentScript);
+
+document.addEventListener('click', (e) => {
+  if (!suggestionsList.contains(e.target) && e.target !== practiceInputEl) {
+    suggestionsList.style.display = 'none';
+  }
+  if (!cdbSuggestionsList.contains(e.target) && e.target !== cdbSearchInputEl) {
+    cdbSuggestionsList.style.display = 'none';
+  }
+});
+
+practiceInputEl.addEventListener('keydown', (e) => {
+  const items = suggestionsList.querySelectorAll('li');
+  if (items.length === 0 || suggestionsList.style.display === 'none') return;
+
+  let currentIndex = -1;
+  items.forEach((item, i) => {
+      if (item.classList.contains('highlighted')) {
+          currentIndex = i;
+          item.classList.remove('highlighted');
+      }
+  });
+
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      currentIndex = (currentIndex + 1) % items.length;
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      currentIndex = (currentIndex - 1 + items.length) % items.length;
+      break;
+    case 'Enter':
+      e.preventDefault();
+      if (currentIndex >= 0 && items[currentIndex]) {
+        items[currentIndex].click();
+      }
+      return;
+    case 'Escape':
+      e.preventDefault();
+      suggestionsList.style.display = 'none';
+      return;
+    default:
+      return;
+  }
+
+  if (currentIndex >= 0 && items[currentIndex]) {
+      items[currentIndex].classList.add('highlighted');
+      items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+});
+
+
+// --- NEW: CDB Auto-suggestion Logic ---
+cdbSearchInputEl.addEventListener('input', () => {
+    const query = cdbSearchInputEl.value.toLowerCase().trim();
+    
+    const practicesWithValidCDB = Object.values(cachedPractices).filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error');
+
+    const matches = query
+        ? practicesWithValidCDB.filter(p => p.cdb.toLowerCase().includes(query))
+        : practicesWithValidCDB;
+
+    const displayMatches = matches
+        .map(p => ({
+            displayName: `${p.name} (${p.ods}) - ${p.cdb}`,
+            ods: p.ods,
+            cdb: p.cdb,
+            name: p.name
+        }))
+        .slice(0, 8);
+
+    cdbSuggestionsList.innerHTML = '';
+    if (displayMatches.length === 0) {
+        cdbSuggestionsList.style.display = 'none';
+        return;
+    }
+
+    displayMatches.forEach(match => {
+        const li = document.createElement('li');
+        li.textContent = match.displayName;
+        li.addEventListener('click', () => {
+            cdbSearchInputEl.value = match.cdb;
+            practiceInputEl.value = `${match.name} (${match.ods})`;
+            currentSelectedOdsCode = match.ods;
+            cdbSuggestionsList.style.display = 'none';
+            updateContextualButtonsOnInput(true);
+        });
+        cdbSuggestionsList.appendChild(li);
+    });
+
+    cdbSuggestionsList.style.display = 'block';
+});
+
+cdbSearchInputEl.addEventListener('focus', () => {
+    if (cdbSearchInputEl.value.trim() === '') {
+        cdbSearchInputEl.dispatchEvent(new Event('input'));
+    }
+});
+
+
+cdbSearchInputEl.addEventListener('keydown', (e) => {
+    const items = cdbSuggestionsList.querySelectorAll('li');
+    if (items.length === 0 || cdbSuggestionsList.style.display === 'none') return;
+
+    let currentIndex = -1;
+    items.forEach((item, i) => {
+        if (item.classList.contains('highlighted')) {
+            currentIndex = i;
+            item.classList.remove('highlighted');
+        }
+    });
+
+    switch (e.key) {
+        case 'ArrowDown':
+            e.preventDefault();
+            currentIndex = (currentIndex + 1) % items.length;
+            break;
+        case 'ArrowUp':
+            e.preventDefault();
+            currentIndex = (currentIndex - 1 + items.length) % items.length;
+            break;
+        case 'Enter':
+            e.preventDefault();
+            if (currentIndex >= 0 && items[currentIndex]) {
+                items[currentIndex].click();
+            }
+            return;
+        case 'Escape':
+            e.preventDefault();
+            cdbSuggestionsList.style.display = 'none';
+            return;
+        default:
+            return;
+    }
+
+    if (currentIndex >= 0 && items[currentIndex]) {
+        items[currentIndex].classList.add('highlighted');
+        items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+});
+
+// --- END NEW: CDB Auto-suggestion Logic ---
+
+// --- Email Formatter Logic (Copied from provided popup.js) ---
+function extractNameFromEmail(email) {
+    const localPart = email.split("@")[0];
+    const cleaned = localPart.replace(/[._]/g, " ");
+    
+    return cleaned
+      .split(" ")
+      .map(w => {
+        const word = w.replace(/\d+/g, '');
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
+      .join(" ")
+      .trim();
+}  
+
+function convertEmails() {
+    const input = document.getElementById("inputEmailFormatter").value;
+  
+    const rawEntries = input
+      .split(/[\n;,]+/)
+      .map(entry => entry.trim())
+      .filter(entry => entry.length > 0);
+  
+    const parsedList = rawEntries.map(entry => {
+      const match = entry.match(/<?([\w.-]+@[\w.-]+\.\w+)>?/);
+      if (match) {
+        const email = match[1].trim();
+        const name = extractNameFromEmail(email);
+        return `${name} <${email}>`;
+      } else {
+        return entry;
+      }
+    });
+  
+    document.getElementById("outputEmailFormatter").value = parsedList.join(",\n");
+}
+
+function copyEmails() {
+    const output = document.getElementById("outputEmailFormatter");
+    output.select();
+    document.execCommand("copy");
+}
+// --- END Email Formatter Logic ---
+
+// --- Password Manager Logic (Adapted from provided popup.js) ---
+async function showBLPasswords() {
+  try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      // LOG THE URL FOR DEBUGGING
+      console.log(`[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`);
+
+      // Check if current tab is a BetterLetter practices page
+      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+          showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
+          return;
+      }
+
+      const list = document.getElementById("password-list");
+      list.innerHTML = ""; // Clear previous list
+      showPasswordStatus("Loading passwords...", "loading");
+
+      let response;
+      try {
+        // Attempt to send message to content script
+        response = await chrome.tabs.sendMessage(tab.id, { action: "getPasswords" });
+      } catch (e) {
+        // Catch error if content script isn't injected or page is not ready
+        showPasswordError("Could not connect to password tools on this page. Ensure content script is active by refreshing the BetterLetter page.");
+        console.error("Error sending message to content script:", e);
+        return;
+      }
+
+      if (!response || !Array.isArray(response.passwords) || response.passwords.length === 0) {
+          showPasswordError("No password fields found on this page.");
+          return;
+      }
+
+      response.passwords.forEach((pwData, i) => {
+          const li = document.createElement("li");
+          li.innerHTML = `
+              <span class="pw-label">${pwData.id || `Field ${i+1}`}:</span>
+              <code class="pw-value">${pwData.value || "<em>(empty)</em>"}</code>
+          `;
+          list.appendChild(li);
+      });
+      showPasswordStatus("Passwords loaded successfully!", "success");
+
+  } catch (error) {
+      console.error("Password Manager Popup error:", error);
+      showPasswordError("An unexpected error occurred. Check console for details.");
+  }
+}
+
+async function generateBLPasswords() {
+  try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+          showPasswordError("Please open a BetterLetter Mailroom practice settings page first to generate passwords.");
+          return;
+      }
+
+      showPasswordStatus("Generating passwords...", "loading");
+      
+      let response;
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, { action: "generatePasswords" });
+      } catch (e) {
+        showPasswordError("Could not connect to password tools on this page. Ensure content script is active by refreshing the BetterLetter page.");
+        console.error("Error sending message to content script for generation:", e);
+        return;
+      }
+
+      if (response && response.status === "done") {
+        showPasswordStatus("✓ Passwords generated!", "success");
+        // Optionally, refresh the displayed list after generation
+        showBLPasswords(); // Re-show passwords after generation
+      } else {
+        showPasswordStatus("⚠️ Failed to generate passwords.", "error");
+      }
+
+  } catch (error) {
+      console.error("Error generating passwords:", error);
+      showPasswordStatus("⚠️ Failed to generate passwords.", "error");
+  }
+}
+
+// Helper functions for Password Manager UI
+function showPasswordError(message) {
+  const list = document.getElementById("password-list");
+  list.innerHTML = `
+      <li class="error-message-password">${message}</li>
+  `;
+  document.getElementById("status-message-password").textContent = ""; // Clear status
+}
+
+function showPasswordStatus(message, type) {
+  const status = document.getElementById("status-message-password");
+  status.textContent = message;
+  status.style.color = type === "success" ? "#28a745" : (type === "error" ? "#dc3545" : "#0d6efd"); // blue for loading
+
+  if (type !== "loading") { // Only clear if not a persistent loading message
+    setTimeout(() => {
+        status.textContent = "";
+        status.style.color = ""; // Reset color
+    }, 3000); // Increased timeout for visibility
+  }
+}
+// --- END Password Manager Logic ---
