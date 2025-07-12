@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Practice Navigator</title>
+  <style>
+    body {
+      width: 320px;
+      padding: 15px;
+      font-family: Arial, sans-serif;
+      background: #f8f9fa;
+      margin: 0;
+      box-sizing: border-box;
+    }
+    h1 {
+      font-size: 1rem;
+      text-align: center;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      justify-content: center;
+    }
+    .btn {
+      padding: 8px;
+      flex: 1;
+      font-size: 13px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.2s ease, opacity 0.2s ease;
+    }
+    .btn:hover:not(:disabled) {
+      background-color: #2980b9;
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    #usersBtn {
+      background-color: #2ecc71;
+    }
+    #usersBtn:hover:not(:disabled) {
+      background-color: #27ae60;
+    }
+    /* Mailroom Buttons Styling */
+    #preparingBtn {
+      background-color: #f39c12;
+    }
+    #preparingBtn:hover:not(:disabled) {
+      background-color: #e67e22;
+    }
+    #rejectedBtn {
+      background-color: #e74c3c;
+    }
+    #rejectedBtn:hover:not(:disabled) {
+      background-color: #c0392b;
+    }
+    /* CDB Search Button Styling */
+    #searchCdbBtn {
+        background-color: #007bff; /* Blue */
+    }
+    #searchCdbBtn:hover:not(:disabled) {
+        background-color: #0056b3; /* Darker Blue */
+    }
+
+    /* New Create Practice Button at top */
+    #createPracticeTopBtn {
+        background-color: #3498db; /* Blue, consistent with default */
+        flex: none;
+        width: auto;
+        padding: 8px 15px;
+        margin-right: 6px;
+    }
+    #createPracticeTopBtn:hover {
+        background-color: #2980b9;
+    }
+
+    /* Email Formatter Toggle Button Style */
+    #emailFormatterToggleBtn {
+        background-color: #9b59b6; /* Purple */
+        flex: none; /* Don't expand like other buttons in btn-row */
+        width: auto; /* Allow content to dictate width */
+        padding: 8px 15px; /* More horizontal padding */
+    }
+    #emailFormatterToggleBtn:hover {
+        background-color: #8e44ad; /* Darker Purple */
+    }
+
+    /* Password Manager Toggle Button Style (now in old Create Practice spot) */
+    #passwordToggleBtn { /* Renamed from #passwordManagerToggleBtn */
+        background-color: #6495ED; /* Cornflower Blue */
+    }
+    #passwordToggleBtn:hover {
+        background-color: #4169E1; /* Royal Blue */
+    }
+
+
+    input, select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 0.9em;
+      color: #555;
+    }
+    #suggestions, #cdbSuggestions { /* Apply consistent styling to both suggestion lists */
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid #ccc;
+      max-height: 140px;
+      overflow-y: auto;
+      display: none;
+      background: white;
+      position: absolute;
+      width: calc(100% - 30px); /* Adjust width to fit container padding */
+      z-index: 1000;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      border-radius: 4px;
+    }
+    #suggestions li, #cdbSuggestions li { /* Apply consistent styling to both suggestion list items */
+      padding: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.1s ease;
+    }
+    #suggestions li:hover, #suggestions li.highlighted,
+    #cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
+      background-color: #e9e9e9;
+    }
+    #status {
+      margin-top: 10px;
+      padding: 6px;
+      text-align: center;
+      border-radius: 4px;
+      display: none;
+      font-size: 0.9em;
+    }
+    .success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .loading {
+      background: #cce5ff;
+      color: #004085;
+    }
+    /* Status Display Area */
+    #statusDisplay {
+        margin-top: 10px;
+        padding: 8px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background-color: #f0f0f0;
+        text-align: left;
+        font-size: 0.9em;
+        color: #333;
+        display: none; /* Hidden by default */
+    }
+    /* New CDB Search Result Display */
+    #cdbSearchResult {
+        margin-top: 10px;
+        padding: 8px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background-color: #f0f0f0;
+        text-align: left;
+        font-size: 0.9em;
+        color: #333;
+        display: none; /* Hidden by default */
+    }
+
+    /* Styles for Email Formatter (from styles.css) */
+    .email-formatter-container textarea {
+      width: 100%;
+      height: 100px;
+      margin-bottom: 10px;
+      box-sizing: border-box; /* Ensure padding is included in the width */
+    }
+    .email-formatter-container button {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 10px;
+      background-color: #4285f4; /* Blue color from provided styles.css */
+      color: white;
+      border: none;
+      cursor: pointer;
+      border-radius: 4px; /* Align with existing button styles */
+      transition: background-color 0.2s ease;
+    }
+    .email-formatter-container button:hover {
+        background-color: #3b74d9; /* Darker blue on hover */
+    }
+    /* Specific styles for Email Formatter buttons to make them look distinct */
+    #convertEmailBtn, #copyEmailBtn {
+      background-color: #4CAF50; /* A distinct green */
+    }
+    #convertEmailBtn:hover, #copyEmailBtn:hover {
+        background-color: #45a049; /* Darker green on hover */
+    }
+    #backToNavigatorBtn, #backToNavigatorBtnPassword { /* Added #backToNavigatorBtnPassword */
+      background-color: #6c757d; /* Gray for back button */
+    }
+    #backToNavigatorBtn:hover, #backToNavigatorBtnPassword:hover { /* Added #backToNavigatorBtnPassword */
+        background-color: #5a6268; /* Darker Gray */
+    }
+
+    /* Styles for Password Manager (from provided styles.css) - scoped to .password-manager-container */
+    .password-manager-container {
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        color: #212529;
+        /* Padding and background set by common body style, might need adjustment */
+    }
+    .password-manager-container .header {
+        text-align: center;
+        margin-bottom: 15px; /* Reduced from 20px for panel integration */
+        padding-bottom: 10px; /* Reduced from 15px */
+        border-bottom: 1px solid #dee2e6;
+    }
+    .password-manager-container .header h1 {
+        font-size: 1.1rem; /* Adjusted for panel size */
+        font-weight: 700;
+        color: #0d6efd;
+        margin-bottom: 2px; /* Adjusted */
+    }
+    .password-manager-container .header p {
+        font-size: 0.75rem; /* Adjusted */
+        color: #6c757d;
+    }
+    .password-manager-container .btn-container {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        margin-bottom: 10px; /* Added margin-bottom */
+    }
+    .password-manager-container .btn-password { /* Renamed from .btn to .btn-password to avoid conflict */
+        flex: 1 1 48%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 10px; /* Adjusted from 12px */
+        background: #0d6efd;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.8rem; /* Adjusted */
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(13, 110, 253, 0.2);
+    }
+    .password-manager-container .btn-password:hover {
+        background: #0b5ed7;
+        transform: translateY(-1px); /* Less aggressive transform */
+        box-shadow: 0 5px 7px rgba(13, 110, 253, 0.25);
+    }
+    .password-manager-container .btn-password:active {
+        transform: translateY(0);
+    }
+    .password-manager-container .btn-secondary-password { /* Renamed from .btn-secondary */
+        background: #6c757d;
+        box-shadow: 0 4px 6px rgba(108, 117, 125, 0.2);
+    }
+    .password-manager-container .btn-secondary-password:hover {
+        background: #5c636a;
+        box-shadow: 0 5px 7px rgba(108, 117, 125, 0.25);
+    }
+    .password-manager-container .section-password { /* Renamed from .section */
+        background: white;
+        border-radius: 8px; /* Adjusted */
+        padding: 15px; /* Adjusted */
+        margin: 15px 0; /* Adjusted */
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); /* Adjusted */
+        border: 1px solid #e9ecef;
+    }
+    .password-manager-container .section-title-password { /* Renamed from .section-title */
+        display: flex;
+        align-items: center;
+        gap: 8px; /* Adjusted */
+        font-size: 0.9rem; /* Adjusted */
+        font-weight: 600;
+        margin-bottom: 12px; /* Adjusted */
+        color: #212529;
+    }
+    .password-manager-container .section-title-password svg {
+        flex-shrink: 0;
+        width: 18px; /* Adjusted */
+        height: 18px; /* Adjusted */
+    }
+    .password-manager-container #password-list {
+        list-style: none;
+        max-height: 180px; /* Adjusted for panel size */
+        overflow-y: auto;
+        padding-right: 5px;
+    }
+    .password-manager-container #password-list li {
+        padding: 10px 0; /* Adjusted */
+        border-bottom: 1px solid #e9ecef;
+    }
+    .password-manager-container #password-list li:last-child {
+        border-bottom: none;
+    }
+    .password-manager-container .pw-label {
+        display: block;
+        font-size: 0.8rem; /* Adjusted */
+        color: #6c757d;
+        margin-bottom: 2px; /* Adjusted */
+    }
+    .password-manager-container .pw-value {
+        display: block;
+        background: #f8f9fa;
+        padding: 6px 10px; /* Adjusted */
+        border-radius: 4px; /* Adjusted */
+        font-family: 'Courier New', monospace;
+        word-break: break-all;
+        border: 1px solid #e9ecef;
+        font-size: 0.85rem; /* Adjusted */
+    }
+    .password-manager-container .error-message-password { /* Renamed from .error-message */
+        color: #dc3545;
+        font-weight: 500;
+        text-align: center;
+        padding: 8px 0; /* Adjusted */
+        font-size: 0.85rem; /* Adjusted */
+    }
+    .password-manager-container #status-message-password { /* Renamed from #status-message */
+        text-align: center;
+        margin: 8px 0; /* Adjusted */
+        font-weight: 500;
+        font-size: 0.85rem; /* Adjusted */
+        min-height: 20px;
+    }
+    .password-manager-container footer {
+        text-align: center;
+        margin-top: 15px; /* Adjusted */
+        padding-top: 15px; /* Adjusted */
+        border-top: 1px solid #e9ecef;
+        color: #6c757d;
+        font-size: 0.7rem; /* Adjusted */
+    }
+    /* Scrollbar styling for password-list */
+    .password-manager-container #password-list::-webkit-scrollbar {
+        width: 5px;
+    }
+    .password-manager-container #password-list::-webkit-scrollbar-track {
+        background: #f1f3f5;
+        border-radius: 10px;
+    }
+    .password-manager-container #password-list::-webkit-scrollbar-thumb {
+        background: #ced4da;
+        border-radius: 10px;
+    }
+    .password-manager-container #password-list::-webkit-scrollbar-thumb:hover {
+        background: #adb5bd;
+    }
+  </style>
+</head>
+<body>
+  <div class="btn-row" style="margin-bottom: 15px; justify-content: flex-start; gap: 10px;">
+    <button id="createPracticeTopBtn" class="btn">Create Practice</button>
+    <button id="emailFormatterToggleBtn" class="btn">Email Formatter</button>
+  </div>
+
+  <div id="practiceNavigatorView">
+    <h1>Practice Navigator</h1>
+
+    <div class="btn-row">
+      <button id="practicesBtn" class="btn">Practices</button>
+      <button id="usersBtn" class="btn">Users</button>
+    </div>
+
+    <label for="practiceInput">Practice Name or ODS</label>
+    <input id="practiceInput" placeholder="e.g. Ashfield or H81017" autocomplete="off"/>
+    <ul id="suggestions"></ul>
+
+    <label for="settingType">Setting Type</label>
+    <select id="settingType">
+      <option value="basic">Basic</option>
+      <option value="service">Service</option>
+      <option value="workflows">Workflows</option>
+      <option value="ehr_settings">EHR Settings</option>
+    </select>
+
+    <div class="btn-row">
+      <button id="openSettingsBtn" class="btn">Open Settings</button>
+      <button id="passwordToggleBtn" class="btn">Password</button> </div>
+
+    <div class="btn-row">
+      <button id="preparingBtn" class="btn">Preparing</button>
+      <button id="rejectedBtn" class="btn">Rejected</button>
+    </div>
+
+    <label for="cdbSearchInput">Search by Practice CDB</label>
+    <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off"/>
+    <ul id="cdbSuggestions"></ul> <div class="btn-row">
+      <button id="searchCdbBtn" class="btn">Search CDB</button>
+    </div>
+    <div id="cdbSearchResult"></div> <div id="status"></div>
+    <div id="statusDisplay"></div>
+  </div>
+
+  <div id="emailFormatterView" class="email-formatter-container" style="display: none;">
+    <h1>Email Formatter</h1>
+    <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
+    <button id="convertEmailBtn">Convert</button>
+    <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
+    <button id="copyEmailBtn">Copy</button>
+    <button id="backToNavigatorBtn" class="btn">Back to Navigator</button>
+  </div>
+
+  <div id="passwordManagerView" class="password-manager-container" style="display: none;">
+    <div class="header">
+        <h1>BetterLetter Password Tools</h1>
+        <p>Enhanced password management</p>
+    </div>
+    
+    <div class="btn-container">
+        <button id="show-passwords" class="btn-password">👁 Show Passwords</button>
+        <button id="generate-passwords" class="btn-password btn-secondary-password">🔄 Generate All</button>
+    </div>  
+    
+    <div id="status-message-password"></div>
+    
+    <div class="section-password">
+        <div class="section-title-password">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+            </svg>
+            <span>Password Fields on Page</span>
+        </div>
+        <ul id="password-list">
+            <li class="no-passwords">Click 'Show Passwords' to see fields from the active BetterLetter page.</li>
+        </ul>
+    </div>
+    <button id="backToNavigatorBtnPassword" class="btn">Back to Navigator</button>
+    
+    <footer>
+        <p>BetterLetter Mailroom Extension v1.3</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

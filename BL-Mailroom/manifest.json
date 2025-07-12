@@ -1,28 +1,36 @@
 {
-    "manifest_version": 3,
-    "name": "BetterLetter Data Extractor",
-    "version": "1.0",
-    "description": "Extracts table data from BetterLetter and allows easy copying.",
-    "icons": {
-        "16": "icons/icon16.png",
-        "48": "icons/icon48.png",
-        "128": "icons/icon128.png"
-    },
-    "action": {
-        "default_popup": "popup.html",
-        "default_icon": {
-            "16": "icons/icon16.png",
-            "48": "icons/icon48.png"
-        }
-    },
-    "permissions": [
-        "activeTab",
-        "scripting"
-    ],
-    "host_permissions": [
-        "https://*.betterletter.ai/*"
-    ],
-    "background": {
-        "service_worker": "background.js"
+  "manifest_version": 3,
+  "name": "BetterLetter Practice Admin Panel",
+  "version": "3.2",
+  "description": "Navigate to practice settings and mailroom by name or ODS code, with integrated Email Formatter and Password Tools.",
+  "permissions": ["tabs", "scripting", "storage", "windows", "activeTab"],
+  "host_permissions": ["https://app.betterletter.ai/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
     }
+
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.betterletter.ai/admin_panel/practices/*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [{
+    "resources": ["styles.css"],
+    "matches": ["<all_urls>"]
+  }]
 }
