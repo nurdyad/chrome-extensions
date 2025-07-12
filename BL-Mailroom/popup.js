@@ -36,6 +36,9 @@ function showView(viewId) {
     // Clear password list and status message when showing the view
     document.getElementById("password-list").innerHTML = '<li class="no-passwords">Click \'Show Passwords\' to see fields from the active BetterLetter page.</li>';
     document.getElementById("status-message-password").textContent = "";
+
+    // IMPORTANT: Automatically try to inject and run getPasswords when password view is opened
+    triggerPasswordManagerFunctionality();
   }
 }
 
@@ -132,7 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById("passwordToggleBtn").addEventListener("click", () => showView('passwordManagerView'));
   document.getElementById("backToNavigatorBtnPassword").addEventListener("click", () => showView('practiceNavigatorView')); // Back button for password manager
 
-  // Password Manager specific buttons
+  // Password Manager specific buttons (still listen for clicks, but trigger via a unified function)
   document.getElementById("show-passwords").addEventListener("click", showBLPasswords);
   document.getElementById("generate-passwords").addEventListener("click", generateBLPasswords);
 
@@ -611,14 +614,52 @@ function copyEmails() {
 // --- END Email Formatter Logic ---
 
 // --- Password Manager Logic (Adapted from provided popup.js) ---
+
+// This function attempts to inject content.js and then show passwords
+async function triggerPasswordManagerFunctionality() {
+  console.log(`%c[BL Nav - Password] Triggering Password Manager Functionality.`, 'color: #1E90FF;');
+  const passwordListEl = document.getElementById("password-list");
+  passwordListEl.innerHTML = '<li class="no-passwords">Attempting to connect to the page...</li>';
+  showPasswordStatus("Attempting to connect...", "loading");
+
+  try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      console.log(`%c[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`, 'color: gray;');
+
+      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+          showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
+          return;
+      }
+
+      // First, try to execute the content script. This serves as a manual injection attempt.
+      // If content.js is already running, this will effectively do nothing (or re-run it depending on logic).
+      try {
+          await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['content.js'] // Path to your content.js file
+          });
+          console.log(`%c[BL Nav - Password] Manual content.js injection successful.`, 'color: green;');
+      } catch (injectionError) {
+          console.error(`%c[BL Nav - Password] Manual content.js injection failed: ${injectionError.message}`, 'color: red;', injectionError);
+          showPasswordError("Failed to inject password tools into the page. Ensure page is fully loaded and try refreshing.");
+          return;
+      }
+
+      // Now that content.js should be running, try to get passwords
+      await showBLPasswords();
+
+  } catch (error) {
+      console.error(`%c[BL Nav - Password] Error in triggerPasswordManagerFunctionality: ${error.message}`, 'color: red;', error);
+      showPasswordError("An unexpected error occurred during setup. Check console for details.");
+  }
+}
+
 async function showBLPasswords() {
   try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      // LOG THE URL FOR DEBUGGING
-      console.log(`[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`);
-
-      // Check if current tab is a BetterLetter practices page
+      // The URL check is repeated here as a fallback, though triggerPasswordManagerFunctionality also checks.
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
@@ -626,16 +667,17 @@ async function showBLPasswords() {
 
       const list = document.getElementById("password-list");
       list.innerHTML = ""; // Clear previous list
-      showPasswordStatus("Loading passwords...", "loading");
+      showPasswordStatus("Loading passwords...", "loading"); // Update status just before message send
 
       let response;
       try {
         // Attempt to send message to content script
+        // Add a timeout to sendMessage to catch unresponsive content scripts
         response = await chrome.tabs.sendMessage(tab.id, { action: "getPasswords" });
       } catch (e) {
-        // Catch error if content script isn't injected or page is not ready
-        showPasswordError("Could not connect to password tools on this page. Ensure content script is active by refreshing the BetterLetter page.");
-        console.error("Error sending message to content script:", e);
+        // This catch specifically handles errors during sendMessage, e.g., no listener, disconnected port.
+        showPasswordError("Could not communicate with password tools on this page. Try refreshing the BetterLetter page.");
+        console.error(`%c[BL Nav - Password] Error during sendMessage (getPasswords): ${e.message}`, 'color: red;', e);
         return;
       }
 
@@ -655,8 +697,8 @@ async function showBLPasswords() {
       showPasswordStatus("Passwords loaded successfully!", "success");
 
   } catch (error) {
-      console.error("Password Manager Popup error:", error);
-      showPasswordError("An unexpected error occurred. Check console for details.");
+      console.error(`%c[BL Nav - Password] Error in showBLPasswords: ${error.message}`, 'color: red;', error);
+      showPasswordError("An unexpected error occurred while displaying passwords.");
   }
 }
 
@@ -675,8 +717,8 @@ async function generateBLPasswords() {
       try {
         response = await chrome.tabs.sendMessage(tab.id, { action: "generatePasswords" });
       } catch (e) {
-        showPasswordError("Could not connect to password tools on this page. Ensure content script is active by refreshing the BetterLetter page.");
-        console.error("Error sending message to content script for generation:", e);
+        showPasswordError("Could not communicate with password tools on this page. Try refreshing the BetterLetter page.");
+        console.error(`%c[BL Nav - Password] Error during sendMessage (generatePasswords): ${e.message}`, 'color: red;', e);
         return;
       }
 
@@ -689,7 +731,7 @@ async function generateBLPasswords() {
       }
 
   } catch (error) {
-      console.error("Error generating passwords:", error);
+      console.error(`%c[BL Nav - Password] Error generating passwords: ${error.message}`, 'color: red;', error);
       showPasswordStatus("⚠️ Failed to generate passwords.", "error");
   }
 }
@@ -700,7 +742,7 @@ function showPasswordError(message) {
   list.innerHTML = `
       <li class="error-message-password">${message}</li>
   `;
-  document.getElementById("status-message-password").textContent = ""; // Clear status
+  document.getElementById("status-message-password").textContent = ""; // Clear status message
 }
 
 function showPasswordStatus(message, type) {

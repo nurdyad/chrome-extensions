@@ -1,4 +1,5 @@
 // --- Global State Management ---
+console.log('BetterLetter Password Tools: content.js injected and running!'); // NEW: Diagnostic log at the very top
 let floatingPanel = null;
 let currentInput = null;
 let inputOriginalValues = new WeakMap();

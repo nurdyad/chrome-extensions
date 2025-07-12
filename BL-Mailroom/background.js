@@ -524,35 +524,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log(`%c[BL Nav - Background] Initiating CDB search for: "${searchedCDB}"`, 'color: #DA70D6;');
 
             let foundPractice = null;
-            
-            // Phase 1: Search only in existing cached CDBs (in-memory cdbCache first, then practiceCache)
-            // This avoids opening any new tabs for the search itself.
-            for (const ods in cdbCache) {
-                if (cdbCache[ods] === searchedCDB) {
-                    const practice = Object.values(practiceCache).find(p => p.ods === ods);
-                    if (practice) {
-                        foundPractice = { name: practice.name, ods: practice.ods, cdb: cdbCache[ods] };
-                        console.log(`%c[BL Nav - Background] Match found in in-memory cdbCache for CDB "${searchedCDB}": ${practice.name} (${practice.ods})`, 'color: #32CD32; font-weight: bold;');
-                        return { success: true, practice: foundPractice }; // Return immediately
+            const allPractices = Object.values(practiceCache);
+
+            // First, try to find in already cached CDBs to avoid opening tabs.
+            for (const p of allPractices) {
+                // Ensure p.cdb exists and is not 'N/A' or 'Error' before comparing
+                if (p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb === searchedCDB) {
+                    foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
+                    console.log(`%c[BL Nav - Background] Match found in CACHE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
+                    break;
+                }
+            }
+
+            // If not found in cached CDBs, then iterate and scrape as needed.
+            // This loop *is* the one that would cause "too many pages"
+            if (!foundPractice) {
+                console.log(`%c[BL Nav - Background] CDB not in cache. Will attempt to scrape practices for match.`, 'color: orange;');
+                for (const p of allPractices) {
+                    // Only scrape if CDB is not already cached for this specific practice or is 'N/A'/'Error'
+                    if (p.ods && (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error')) {
+                        try {
+                            const scrapedCDB = await scrapePracticeCDB(p.ods);
+                            // Update cache for this practice
+                            p.cdb = scrapedCDB;
+                            // Persist updated cache immediately after each scrape for robustness
+                            await chrome.storage.local.set({ practiceCache: practiceCache }); 
+                            // Ensure in-memory cdbCache is updated
+                            cdbCache[p.ods] = scrapedCDB;
+
+                            if (scrapedCDB === searchedCDB) {
+                                foundPractice = { name: p.name, ods: p.ods, cdb: scrapedCDB };
+                                console.log(`%c[BL Nav - Background] Match found by SCRAPE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
+                                break; // Found a match, no need to check further
+                            }
+                        } catch (scrapeError) {
+                            console.warn(`%c[BL Nav - Background] Could not scrape CDB for ${p.name} (${p.ods}) during search: ${scrapeError.message}`, 'color: orange;');
+                            // Mark as error in cache to avoid re-scraping immediately for this practice
+                            if (p.cdb === undefined || p.cdb === 'N/A') { // Only mark if not already a valid CDB
+                                p.cdb = 'Error';
+                                await chrome.storage.local.set({ practiceCache: practiceCache });
+                            }
+                            // Continue to next practice if one fails
+                        }
+                    } else if (p.ods && p.cdb === searchedCDB) {
+                        // This case handles if it was found in a previous scrape within this loop but not in the initial cache check.
+                        foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
+                        console.log(`%c[BL Nav - Background] Match found (already scraped) for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
+                        break;
                     }
                 }
             }
 
-            // If not found in in-memory cdbCache, check the main practiceCache (which came from storage)
-            const allPracticesInCache = Object.values(practiceCache);
-            for (const p of allPracticesInCache) {
-                if (p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb === searchedCDB) {
-                    foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
-                    cdbCache[p.ods] = p.cdb; // Add to in-memory cdbCache for future quick access
-                    console.log(`%c[BL Nav - Background] Match found in main practiceCache for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                    return { success: true, practice: foundPractice }; // Return immediately
-                }
+            if (foundPractice) {
+                return { success: true, practice: foundPractice };
+            } else {
+                return { success: false, error: `No practice found for CDB: "${searchedCDB}". Please ensure the CDB is correct.` };
             }
-            // --- END Phase 1 ---
-
-            // If still not found after checking all existing caches
-            console.log(`%c[BL Nav - Background] CDB "${searchedCDB}" not found in any existing cache. No further scraping will be done for this search.`, 'color: orange;');
-            return { success: false, error: `No practice found for CDB: "${searchedCDB}" in cached data. You may need to select a practice first to load its CDB.` };
 
         } catch (error) {
             console.error(`%c[BL Nav - Background] Error during CDB search: ${error.message}`, 'color: red; font-weight: bold;', error);
