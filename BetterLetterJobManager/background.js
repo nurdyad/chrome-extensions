@@ -1,4 +1,3 @@
-// BetterLetterJobManager/background.js (FINAL VERSION - Annotation Button Injector Removed)
 
 // Listener for when the extension icon is clicked
 chrome.action.onClicked.addListener(async (tab) => {
@@ -59,5 +58,17 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
 });
 
-// Removed chrome.runtime.onMessage.addListener for 'open_annotation_url'
-// as the annotation_button.js content script is no longer used.
+// NEW: Listener for messages from mailroom_page_integrator.js
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Listener for data from mailroom_page_integrator.js
+    if (message.type === 'mailroom_doc_clicked' && message.data) {
+        // Store the received data in storage so panel.js can access it
+        chrome.storage.local.set({ clickedMailroomDocData: message.data }).then(() => {
+            console.log("Received mailroom_doc_clicked data:", message.data);
+        }).catch(err => {
+            console.error("Error storing mailroom_doc_clicked data:", err);
+        });
+        return true; // Indicate asynchronous response
+    }
+    // If there were other message types, they would be handled by 'else if' or separate listeners here.
+});
