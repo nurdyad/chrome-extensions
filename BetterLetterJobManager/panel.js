@@ -1,4 +1,3 @@
-// BetterLetterJobManager/panel.js (FINAL VERSION)
 
 chrome.action.setBadgeText({ text: "Job Panel" });
 
@@ -7,62 +6,64 @@ function showToast(message) {
     toast.textContent = message;
     toast.style.display = "block";
     setTimeout(() => toast.style.display = "none", 2000);
-  }
+}
 
-  document.addEventListener("DOMContentLoaded", async () => {
+document.addEventListener("DOMContentLoaded", async () => {
     const [
-      docInput,
-      autocompleteResultsContainer,
-      copyDocBtn,
-      statusBtn,
-      obanBtn,
-      annoBtn,
-      eventLogBtn,
-      letterAdminBtn,
-      odsCodeLabel,
-      openPracticeBtn,
-      jobTypeLabel,
-      jobIdInput,
-      copyJobBtn,
-      openJobBtn,
-      documentSelectionSection,
-      documentActionsSection,
-      practiceInput,
-      practiceAutocompleteResultsContainer,
-      jobTitleSection,
-      jobTitleDisplay,
-      copyJobTitle,
-      copyPracticeNameBtn,
-      copyJobPageUrlBtn,
-      jobIdAutocompleteResultsContainer
+        docInput,
+        autocompleteResultsContainer,
+        copyDocBtn,
+        statusBtn,
+        obanBtn,
+        annoBtn,
+        eventLogBtn,
+        letterAdminBtn,
+        odsCodeLabel,
+        openPracticeBtn,
+        jobTypeLabel,
+        jobIdInput,
+        copyJobBtn,
+        openJobBtn,
+        documentSelectionSection,
+        documentActionsSection,
+        practiceInput,
+        practiceAutocompleteResultsContainer,
+        jobTitleSection,
+        jobTitleDisplay,
+        copyJobTitle,
+        copyPracticeNameBtn,
+        copyJobPageUrlBtn,
+        jobIdAutocompleteResultsContainer,
+        clearDocIdBtn
     ] = [
-      document.getElementById("documentDropdown"),
-      document.getElementById("autocompleteResults"),
-      document.getElementById("copySelectedDocId"),
-      document.getElementById("openDocumentStatus"),
-      document.getElementById("openObanJob"),
-      document.getElementById("openAnnotation"),
-      document.getElementById("openEventLog"),
-      document.getElementById("openLetterAdmin"),
-      document.getElementById("ods-code"),
-      document.getElementById("openPractice"),
-      document.getElementById("job-type-label"),
-      document.getElementById("job-id"),
-      document.getElementById("copy-job-id"),
-      document.getElementById("openJobDirect"),
-      document.getElementById("documentSelectionSection"),
-      document.getElementById("documentActionsSection"),
-      document.getElementById("practiceDropdown"),
-      document.getElementById("practiceAutocompleteResults"),
-      document.getElementById("jobTitleSection"),
-      document.getElementById("jobTitleDisplay"),
-      document.getElementById("copyJobTitle"),
-      document.getElementById("copyPracticeName"),
-      document.getElementById("copyJobPageUrl"),
-      document.getElementById("jobIdAutocompleteResults")
+        document.getElementById("documentDropdown"),
+        document.getElementById("autocompleteResults"),
+        document.getElementById("copySelectedDocId"),
+        document.getElementById("openDocumentStatus"),
+        document.getElementById("openObanJob"),
+        document.getElementById("openAnnotation"),
+        document.getElementById("openEventLog"),
+        document.getElementById("openLetterAdmin"),
+        document.getElementById("ods-code"),
+        document.getElementById("openPractice"),
+        document.getElementById("job-type-label"),
+        document.getElementById("job-id"),
+        document.getElementById("copy-job-id"),
+        document.getElementById("openJobDirect"),
+        document.getElementById("documentSelectionSection"),
+        document.getElementById("documentActionsSection"),
+        document.getElementById("practiceDropdown"),
+        document.getElementById("practiceAutocompleteResults"),
+        document.getElementById("jobTitleSection"),
+        document.getElementById("jobTitleDisplay"),
+        document.getElementById("copyJobTitle"),
+        document.getElementById("copyPracticeName"),
+        document.getElementById("copyJobPageUrl"),
+        document.getElementById("jobIdAutocompleteResults"),
+        document.getElementById("clearDocId")
     ];
 
-    // Helper function to clear dependent fields
+    // Helper functions (moved inside DOMContentLoaded for correct scope)
     function clearDependentFields() {
         jobIdInput.value = "";
         jobTypeLabel.textContent = "—";
@@ -71,30 +72,58 @@ function showToast(message) {
         jobTitleSection.style.display = 'none';
         practiceInput.value = "";
         jobIdAutocompleteResultsContainer.innerHTML = "";
+        documentActionsSection.style.display = 'none';
     }
 
-    // Helper function to extract numeric Document ID from formatted string
     function getNumericDocIdFromInput(inputString) {
         const match = inputString.trim().match(/^\d+/);
         return match ? match[0] : null;
     }
 
-    // Helper to get ODS code from practice name
     function getOdsCodeFromPracticeName(practiceName) {
         const found = uniquePractices.find(p => p.practiceName === practiceName);
         return found ? found.odsCode : null;
+    }
+
+    function openTabWithTimeout(url) {
+        chrome.tabs.create({ url }).catch(err => {
+            console.error("Failed to open tab:", err);
+            showToast("Failed to open page.");
+        });
     }
 
     let jobData = [];
     let uniquePractices = [];
     let refreshIntervalId;
 
-    // ORIGINAL openTabWithTimeout function (without inactivity detection)
-    function openTabWithTimeout(url) { // No 'delay' parameter, as inactivity timer is removed
-        chrome.tabs.create({ url }).catch(err => {
-            console.error("Failed to open tab:", err);
-            showToast("Failed to open page.");
-        });
+    // Autocomplete active index variables
+    let docActive = -1;
+    let practiceActive = -1;
+    let jobIdActive = -1;
+
+    // Helper for adding/removing active class
+    function addActive(activeIdx, items) {
+        if (!items) return -1;
+        removeActive(items);
+        if (activeIdx >= items.length) activeIdx = 0;
+        if (activeIdx < 0) activeIdx = (items.length - 1);
+        items[activeIdx].classList.add("active");
+        return activeIdx;
+    }
+
+    function removeActive(items) {
+        for (var i = 0; i < items.length; i++) {
+            items[i].classList.remove("active");
+        }
+    }
+
+    // NEW: Centralized hide suggestions function
+    function hideSuggestions() {
+        setTimeout(() => {
+            autocompleteResultsContainer.style.display = 'none';
+            practiceAutocompleteResultsContainer.style.display = 'none';
+            jobIdAutocompleteResultsContainer.style.display = 'none';
+        }, 100); // Small delay to allow click events to register
     }
 
     // Functions for custom Document ID autocomplete
@@ -102,10 +131,10 @@ function showToast(message) {
         const searchTerm = docInput.value.trim().toLowerCase();
         autocompleteResultsContainer.innerHTML = '';
         autocompleteResultsContainer.style.display = 'none';
+        docActive = -1;
 
         const isInputFocused = (document.activeElement === docInput);
 
-        // Only proceed if there's a search term, OR if input is focused AND there's actual data to show
         if (!searchTerm && (!isInputFocused || jobData.length === 0)) {
             return;
         }
@@ -118,13 +147,12 @@ function showToast(message) {
             );
         }
 
-         // Only display items if filteredData actually has items
-        if (filteredData.length === 0) { // If no matches, or no data at all
-            return; // Don't show empty dropdown
+        if (filteredData.length === 0) {
+            return;
         }
 
         filteredData.forEach(job => {
-            if(job.documentId){
+            if (job.documentId) {
                 const item = document.createElement('div');
                 item.classList.add('autocomplete-item');
                 item.textContent = job.documentId;
@@ -137,17 +165,8 @@ function showToast(message) {
             }
         });
 
-        if (filteredData.length > 0 && isInputFocused) {
+        if (autocompleteResultsContainer.children.length > 0 && isInputFocused) {
             const inputRect = docInput.getBoundingClientRect();
-
-            // Set position and width directly based on viewport coordinates
-            autocompleteResultsContainer.style.left = `${inputRect.left}px`; // Relative to viewport left
-            autocompleteResultsContainer.style.top = `${inputRect.bottom}px`; // Below the input
-            autocompleteResultsContainer.style.width = `${inputRect.width}px`;
-            autocompleteResultsContainer.style.display = 'block';
-        } else if (jobData.length > 0 && !searchTerm && isInputFocused) {
-            const inputRect = docInput.getBoundingClientRect();
-
             autocompleteResultsContainer.style.left = `${inputRect.left}px`;
             autocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
             autocompleteResultsContainer.style.width = `${inputRect.width}px`;
@@ -160,69 +179,41 @@ function showToast(message) {
         docInput.value = selectedDocId;
         autocompleteResultsContainer.style.display = 'none';
         docInput.dispatchEvent(new Event('input'));
-    }
-
-    function hideSuggestions() {
-        setTimeout(() => {
-            autocompleteResultsContainer.style.display = 'none';
-            practiceAutocompleteResultsContainer.style.display = 'none';
-        }, 100);
-    }
-
-    let currentActive = -1;
-
-    function addActive(items) {
-        if (!items) return false;
-        removeActive(items);
-        if (currentActive >= items.length) currentActive = 0;
-        if (currentActive < 0) currentActive = (items.length - 1);
-        items[currentActive].classList.add("active");
-    }
-
-    function removeActive(items) {
-        for (var i = 0; i < items.length; i++) {
-            items[i].classList.remove("active");
-        }
+        docActive = -1;
     }
 
     // Functions for custom Practice Name autocomplete
     function filterAndDisplayPracticeSuggestions() {
         const searchTerm = practiceInput.value.trim().toLowerCase();
-        practiceAutocompleteResultsContainer.innerHTML = ''; // Clear previous suggestions
-        practiceAutocompleteResultsContainer.style.display = 'none'; // Hide container by default
+        practiceAutocompleteResultsContainer.innerHTML = '';
+        practiceAutocompleteResultsContainer.style.display = 'none';
+        practiceActive = -1;
 
         const isInputFocused = (document.activeElement === practiceInput);
 
-        // If there's no search term AND the input is not focused, AND there's no data,
-        // then simply return. This prevents showing an empty dropdown or popping up without interaction.
-        if ((!searchTerm && !isInputFocused && uniquePractices.length === 0) || (uniquePractices.length === 0 && !searchTerm)) {
+        if (!searchTerm && (!isInputFocused || uniquePractices.length === 0)) {
             return;
         }
 
         let filteredData = uniquePractices;
-        // Filter data if a search term is present
         if (searchTerm) {
             filteredData = uniquePractices.filter(p =>
-                // Ensure practiceName and odsCode exist before calling toLowerCase()
                 (p.practiceName || '').toLowerCase().includes(searchTerm) ||
                 (p.odsCode || '').toLowerCase().includes(searchTerm)
             );
         }
 
-        // Only proceed to create and display items if there's actual filtered data
         if (filteredData.length === 0) {
-            return; // If no matches, or filtered data is empty, don't show the dropdown
+            return;
         }
 
-        // Iterate through filtered data and create suggestion items
         filteredData.forEach(p => {
-            // IMPORTANT: Only create an item if both practiceName and odsCode actually exist
-            if (p.practiceName && p.odsCode) { 
+            if (p.practiceName && p.odsCode) {
                 const item = document.createElement('div');
                 item.classList.add('autocomplete-item');
-                item.textContent = `${p.practiceName} (${p.odsCode})`; // Display formatted practice name and ODS code
-                item.dataset.practiceName = p.practiceName; // Store full practice name
-                item.dataset.odsCode = p.odsCode; // Store ODS code
+                item.textContent = `${p.practiceName} (${p.odsCode})`;
+                item.dataset.practiceName = p.practiceName;
+                item.dataset.odsCode = p.odsCode;
 
                 item.addEventListener('click', () => {
                     selectPracticeSuggestion(item);
@@ -231,11 +222,8 @@ function showToast(message) {
             }
         });
 
-        // Only show the container if it actually has children (suggestions) AND the input is focused
         if (practiceAutocompleteResultsContainer.children.length > 0 && isInputFocused) {
             const inputRect = practiceInput.getBoundingClientRect();
-            
-            // Position the autocomplete container based on the input field's viewport coordinates
             practiceAutocompleteResultsContainer.style.left = `${inputRect.left}px`;
             practiceAutocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
             practiceAutocompleteResultsContainer.style.width = `${inputRect.width}px`;
@@ -250,95 +238,87 @@ function showToast(message) {
         practiceInput.value = selectedPracticeName;
         odsCodeLabel.textContent = selectedOdsCode;
         practiceAutocompleteResultsContainer.style.display = 'none';
+        practiceActive = -1;
     }
 
-    function filterAndDisplaySuggestions() {
-        const searchTerm = docInput.value.trim().toLowerCase();
-        autocompleteResultsContainer.innerHTML = ''; // Clear previous suggestions
-        autocompleteResultsContainer.style.display = 'none'; // Hide container by default
+    // Functions for custom Job ID autocomplete
+    function filterAndDisplayJobIdSuggestions() {
+        const currentDocId = getNumericDocIdFromInput(docInput.value);
+        let relevantJobIds = [];
 
-        const isInputFocused = (document.activeElement === docInput);
+        if (currentDocId) {
+            const matchingJobs = jobData.filter(job => job.documentId === currentDocId);
+            const uniqueJobIds = new Set(matchingJobs.map(job => job.jobId).filter(Boolean));
+            relevantJobIds = Array.from(uniqueJobIds);
+        }
 
-        // If there's no search term AND the input is not focused, AND there's no data,
-        // OR if there's no data at all, then simply return.
-        // This prevents showing an empty dropdown or popping up without interaction.
-        if ((!searchTerm && !isInputFocused && jobData.length === 0) || (jobData.length === 0 && !searchTerm)) {
+        jobIdAutocompleteResultsContainer.innerHTML = '';
+        jobIdAutocompleteResultsContainer.style.display = 'none';
+        jobIdActive = -1;
+
+        const isInputFocused = (document.activeElement === jobIdInput);
+
+        if (relevantJobIds.length === 0 || !isInputFocused) {
             return;
         }
 
-        let filteredData = jobData;
-        // Filter data if a search term is present
-        if (searchTerm) {
-            filteredData = jobData.filter(job =>
-                // Ensure job.documentId and job.practiceName exist before calling toLowerCase()
-                (job.documentId || '').toLowerCase().includes(searchTerm) ||
-                (job.practiceName || '').toLowerCase().includes(searchTerm)
-            );
-        }
+        relevantJobIds.forEach(jobId => {
+            const item = document.createElement('div');
+            item.classList.add('autocomplete-item');
+            item.textContent = jobId;
+            item.dataset.jobId = jobId;
 
-        // Only proceed to create and display items if there's actual filtered data
-        if (filteredData.length === 0) {
-            return; // If no matches, or filtered data is empty, don't show the dropdown
-        }
-
-        // Iterate through filtered data and create suggestion items
-        filteredData.forEach(job => {
-            // IMPORTANT: Only create an item if job.documentId actually exists
-            if (job.documentId) { 
-                const item = document.createElement('div');
-                item.classList.add('autocomplete-item');
-                item.textContent = job.documentId; // Display only the document ID
-                item.dataset.documentId = job.documentId; // Store the ID for selection
-
-                item.addEventListener('click', () => {
-                    selectSuggestion(item);
-                });
-                autocompleteResultsContainer.appendChild(item);
-            }
+            item.addEventListener('click', () => {
+                selectJobIdSuggestion(item);
+            });
+            jobIdAutocompleteResultsContainer.appendChild(item);
         });
 
-        // Only show the container if it actually has children (suggestions) AND the input is focused
-        if (autocompleteResultsContainer.children.length > 0 && isInputFocused) {
-            const inputRect = docInput.getBoundingClientRect();
-            
-            // Position the autocomplete container based on the input field's viewport coordinates
-            autocompleteResultsContainer.style.left = `${inputRect.left}px`; 
-            autocompleteResultsContainer.style.top = `${inputRect.bottom}px`; // Place directly below the input
-            autocompleteResultsContainer.style.width = `${inputRect.width}px`; // Match input width
-            autocompleteResultsContainer.style.display = 'block'; // Make it visible
+        if (jobIdAutocompleteResultsContainer.children.length > 0 && isInputFocused) {
+            const inputRect = jobIdInput.getBoundingClientRect();
+            jobIdAutocompleteResultsContainer.style.left = `${inputRect.left}px`;
+            jobIdAutocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
+            jobIdAutocompleteResultsContainer.style.width = `${inputRect.width}px`;
+            jobIdAutocompleteResultsContainer.style.display = 'block';
         }
     }
 
     function selectJobIdSuggestion(item) {
         const selectedJobId = item.dataset.jobId;
-        jobIdInput.value = selectedJobId; // Populate the readonly input
-        jobIdAutocompleteResultsContainer.style.display = 'none'; // Hide suggestions
-        // No need to dispatch 'input' as it's readonly and doesn't drive other fields directly
+        jobIdInput.value = selectedJobId;
+        jobIdAutocompleteResultsContainer.style.display = 'none';
+        jobIdActive = -1;
     }
 
 
     // Main data fetching and UI population function
     async function fetchAndPopulateData() {
         const { targetTabId } = await chrome.storage.local.get("targetTabId");
+        // Get data from a clicked Mailroom document link, if available
+        const { clickedMailroomDocData } = await chrome.storage.local.get("clickedMailroomDocData");
+
         let currentTab;
         let extractedDocIdFromUrl = null; 
         let extractedJobIdFromUrl = null; 
 
+        // Store the current value of docInput before any processing
         const userTypedDocId = docInput.value; 
 
         // Define URL regexes
         const dashboardUrlPrefix = "https://app.betterletter.ai/admin_panel/bots/dashboard";
         const annotationUrlRegex = /^https:\/\/app\.betterletter\.ai\/mailroom\/annotations\/(\d+)/; 
-        const jobPageUrlRegex = /^https:\/\/app\.betterletter\.ai\/admin_panel\/bots\/jobs\/([a-f0-9-]+)\/?/; 
+        const jobPageUrlRegex = /^https:\/\/app\.betterletter.ai\/admin_panel\/bots\/jobs\/([a-f0-9-]+)\/?/; 
+        const mailroomUrlPrefix = "https://app.betterletter.ai/mailroom/"; 
 
         // Reset Job Title section's visibility initially, it will be set to 'block' if relevant.
         jobTitleDisplay.value = "";
         jobTitleSection.style.display = 'none';
+        documentActionsSection.style.display = 'none';
 
         if (!targetTabId) {
             showToast("No active tab context. Please ensure a tab is active.");
             clearDependentFields();
-            docInput.value = userTypedDocId; // Preserve user's input
+            docInput.value = userTypedDocId; 
             return;
         }
 
@@ -347,25 +327,43 @@ function showToast(message) {
         } catch (e) {
             showToast("Target tab no longer exists or is inaccessible.");
             clearDependentFields();
-            docInput.value = userTypedDocId; // Preserve user's input
+            docInput.value = userTypedDocId; 
             return;
         }
 
         if (!currentTab.url) { 
             showToast("Cannot read URL from the active tab.");
             clearDependentFields();
-            docInput.value = userTypedDocId; // Preserve user's input
+            docInput.value = userTypedDocId; 
             return;
         }
 
-        // --- Extract IDs from current URL if applicable ---
+        // --- Prioritize data from a clicked Mailroom Document link ---
+        if (clickedMailroomDocData) {
+            console.log("DEBUG: Using data from clicked Mailroom Document:", clickedMailroomDocData);
+            docInput.value = clickedMailroomDocData.documentId || "";
+            jobIdInput.value = clickedMailroomDocData.jobId || "";
+            jobTypeLabel.textContent = clickedMailroomDocData.jobType || "—";
+            practiceInput.value = clickedMailroomDocData.practiceName || "";
+            odsCodeLabel.textContent = clickedMailroomDocData.odsCode || "—";
+
+            // Clear the stored data immediately after using it
+            await chrome.storage.local.remove("clickedMailroomDocData");
+            
+            // Ensure Document Actions are shown if ID is valid
+            if (docInput.value && /^\d{6}$/.test(docInput.value)) {
+                documentActionsSection.style.display = 'block';
+            }
+            // No need to fetch from dashboard or parse other URLs if we got data from a click
+            return; 
+        }
+
+        // --- Existing logic for extracting IDs from current URL (Job Page or Annotation) ---
         const jobPageMatch = currentTab.url.match(jobPageUrlRegex);
         if (jobPageMatch && jobPageMatch[1]) {
             extractedJobIdFromUrl = jobPageMatch[1]; 
             console.log("DEBUG: Extracted Job ID from Job Page URL:", extractedJobIdFromUrl);
 
-            // If we are on a job page, immediately try to extract title without waiting for full refresh cycle
-            // This makes it more responsive for title display
             setTimeout(async () => {
                 try {
                     const tabs = await chrome.tabs.query({ url: currentTab.url, currentWindow: false });
@@ -391,7 +389,7 @@ function showToast(message) {
 
                         if (result) {
                             jobTitleDisplay.value = result;
-                            jobTitleSection.style.display = 'block'; // Make it visible
+                            jobTitleSection.style.display = 'block'; 
                         } else {
                             jobTitleDisplay.value = "Title not found";
                             jobTitleSection.style.display = 'block';
@@ -402,7 +400,7 @@ function showToast(message) {
                     jobTitleDisplay.value = "Error extracting title";
                     jobTitleSection.style.display = 'block';
                 }
-            }, 100); // Small delay to allow page to settle
+            }, 100); 
         }
 
         const annotationMatch = currentTab.url.match(annotationUrlRegex);
@@ -446,7 +444,6 @@ function showToast(message) {
 
                 if (jobData.length === 0) {
                     showToast("No job data found on this Dashboard page.");
-                    // Preserve docInput below. Clear other fields.
                     jobTypeLabel.textContent = "—";
                     odsCodeLabel.textContent = "—";
                     practiceInput.value = "";
@@ -459,25 +456,22 @@ function showToast(message) {
             } catch (err) {
                 console.error("Error fetching data from dashboard:", err);
                 showToast("Failed to fetch data from dashboard.");
-                // Preserve docInput below. Clear other fields.
                 jobTypeLabel.textContent = "—";
                 odsCodeLabel.textContent = "—";
                 practiceInput.value = "";
             }
         } else {
-            // --- If NOT a dashboard URL (e.g., on a specific job page or annotation page, or generic page) ---
             console.log("DEBUG: Not a Dashboard URL. Adjusting panel based on current page context.");
             
             jobData = []; 
             uniquePractices = []; 
-            autocompleteResultsContainer.innerHTML = ""; 
-            practiceAutocompleteResultsContainer.innerHTML = "";
+            // innerHTML = "" calls removed from here, as they are managed by filter/display functions
+            // autocompleteResultsContainer.innerHTML = ""; 
+            // practiceAutocompleteResultsContainer.innerHTML = "";
 
-            // Clear only fields that are not derived from the current page's specific context
             jobTypeLabel.textContent = "—";
             odsCodeLabel.textContent = "—";
             practiceInput.value = "";
-            // Job Title section visibility is managed above if it's a job page.
         }
 
         // --- Final step: Populate inputs based on extracted IDs or user input ---
@@ -485,11 +479,11 @@ function showToast(message) {
         // Set Job ID if extracted from a specific job page URL
         if (extractedJobIdFromUrl) {
             jobIdInput.value = extractedJobIdFromUrl;
-            jobIdAutocompleteResultsContainer.innerHTML = ""; // No suggestions needed when on a specific job page
-        } else if (!currentTab.url.startsWith(dashboardUrlPrefix)) {
-            // If not a job page AND not a dashboard, clear Job ID
+            jobIdAutocompleteResultsContainer.innerHTML = ""; 
+        } 
+        else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) {
             jobIdInput.value = "";
-            jobIdAutocompleteResultsContainer.innerHTML = "";
+            jobIdAutocompleteResultsContainer.innerHTML = ""; 
         }
         // If it IS a dashboard, jobIdInput and suggestions are handled by the dashboard fetching block.
 
@@ -503,15 +497,25 @@ function showToast(message) {
             docInput.value = userTypedDocId;
             docInput.dispatchEvent(new Event('input')); 
         }
-        else if (!currentTab.url.startsWith(dashboardUrlPrefix)) { // Only clear if not a dashboard and no other ID source
+        else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) { 
             docInput.value = "";
         }
-        // If it is a dashboard, docInput value is driven by select suggestion or typed value (which triggers jobData match).
+        
+        // Show Document Actions section if a valid 6-digit Document ID is present
+        const currentDocIdInInput = docInput.value.trim();
+        if (currentDocIdInInput && /^\d{6}$/.test(currentDocIdInInput)) {
+            documentActionsSection.style.display = 'block';
+        } else {
+            documentActionsSection.style.display = 'none';
+        }
     }
 
     // --- Initial Load and Periodic Refresh Setup ---
-    fetchAndPopulateData();
-    refreshIntervalId = setInterval(fetchAndPopulateData, 2000);
+    // Add a delay to the initial fetchAndPopulateData call
+    setTimeout(() => {
+        fetchAndPopulateData();
+        refreshIntervalId = setInterval(fetchAndPopulateData, 5000); // Changed to 5 seconds
+    }, 500); // 500ms delay
 
     // Clear interval when panel closes to prevent memory leaks
     window.addEventListener('beforeunload', () => {
@@ -521,29 +525,26 @@ function showToast(message) {
     // --- Event Listeners for Custom Autocomplete Inputs ---
 
     docInput.addEventListener("input", filterAndDisplaySuggestions);
-    docInput.addEventListener("click", (e) => {
-        e.stopPropagation();
-        filterAndDisplaySuggestions();
-    });
+    docInput.addEventListener("focus", filterAndDisplaySuggestions); // Show on focus
+    docInput.addEventListener("blur", hideSuggestions); // Hide on blur (with timeout)
+    
     docInput.addEventListener("keydown", (e) => {
         let items = autocompleteResultsContainer.querySelectorAll(".autocomplete-item");
         if (items.length === 0) return;
 
         if (e.key === "ArrowDown") {
-            currentActive++;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            docActive = addActive(docActive, items);
+            items[docActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "ArrowUp") {
-            currentActive--;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            docActive = addActive(docActive, items);
+            items[docActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "Enter") {
             e.preventDefault();
-            if (currentActive > -1) {
-                if (items[currentActive]) {
-                    selectSuggestion(items[currentActive]);
+            if (docActive > -1) {
+                if (items[docActive]) {
+                    selectSuggestion(items[docActive]);
                 }
             } else if (docInput.value.trim() !== "") {
                 const typedId = getNumericDocIdFromInput(docInput.value);
@@ -562,39 +563,30 @@ function showToast(message) {
     // Job ID Input Event Listeners
     jobIdInput.addEventListener("click", (e) => {
         e.stopPropagation();
-        filterAndDisplayJobIdSuggestions(); // Show suggestions on click
+        filterAndDisplayJobIdSuggestions();
     });
+    jobIdInput.addEventListener("focus", filterAndDisplayJobIdSuggestions); // Show on focus
+    jobIdInput.addEventListener("blur", hideSuggestions); // Hide on blur (with timeout)
 
     jobIdInput.addEventListener("keydown", (e) => {
         let items = jobIdAutocompleteResultsContainer.querySelectorAll(".autocomplete-item");
         if (items.length === 0) return;
 
         if (e.key === "ArrowDown") {
-            currentActive++;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            jobIdActive = addActive(jobIdActive, items);
+            items[jobIdActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "ArrowUp") {
-            currentActive--;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            jobIdActive = addActive(jobIdActive, items);
+            items[jobIdActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "Enter") {
             e.preventDefault();
-            if (currentActive > -1) {
-                if (items[currentActive]) {
-                    selectJobIdSuggestion(items[currentActive]);
+            if (jobIdActive > -1) {
+                if (items[jobIdActive]) {
+                    selectJobIdSuggestion(items[jobIdActive]);
                 }
             }
-            hideSuggestions(); // Hide after selection or attempted selection
-        }
-    });
-
-    // Modify global mousedown listener to also hide jobId suggestions
-    document.addEventListener("mousedown", (e) => {
-        if (!autocompleteResultsContainer.contains(e.target) && !docInput.contains(e.target) &&
-            !practiceAutocompleteResultsContainer.contains(e.target) && !practiceInput.contains(e.target) &&
-            !jobIdAutocompleteResultsContainer.contains(e.target) && !jobIdInput.contains(e.target)) { // NEW condition
             hideSuggestions();
         }
     });
@@ -604,25 +596,26 @@ function showToast(message) {
         e.stopPropagation();
         filterAndDisplayPracticeSuggestions();
     });
+    practiceInput.addEventListener("focus", filterAndDisplayPracticeSuggestions); // Show on focus
+    practiceInput.addEventListener("blur", hideSuggestions); // Hide on blur (with timeout)
+
     practiceInput.addEventListener("keydown", (e) => {
         let items = practiceAutocompleteResultsContainer.querySelectorAll(".autocomplete-item");
         if (items.length === 0) return;
 
         if (e.key === "ArrowDown") {
-            currentActive++;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            practiceActive = addActive(practiceActive, items);
+            items[practiceActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "ArrowUp") {
-            currentActive--;
-            addActive(items);
-            items[currentActive].scrollIntoView({ block: "nearest" });
+            practiceActive = addActive(practiceActive, items);
+            items[practiceActive].scrollIntoView({ block: "nearest" });
             e.preventDefault();
         } else if (e.key === "Enter") {
             e.preventDefault();
-            if (currentActive > -1) {
-                if (items[currentActive]) {
-                    selectPracticeSuggestion(items[currentActive]);
+            if (practiceActive > -1) {
+                if (items[practiceActive]) {
+                    selectPracticeSuggestion(items[practiceActive]);
                 }
             } else if (practiceInput.value.trim() !== "") {
                 const typedPracticeName = practiceInput.value.trim();
@@ -637,11 +630,11 @@ function showToast(message) {
         }
     });
 
-    
-
+    // Global mousedown listener to hide all autocompletes
     document.addEventListener("mousedown", (e) => {
         if (!autocompleteResultsContainer.contains(e.target) && !docInput.contains(e.target) &&
-            !practiceAutocompleteResultsContainer.contains(e.target) && !practiceInput.contains(e.target)) {
+            !practiceAutocompleteResultsContainer.contains(e.target) && !practiceInput.contains(e.target) &&
+            !jobIdAutocompleteResultsContainer.contains(e.target) && !jobIdInput.contains(e.target)) {
             hideSuggestions();
         }
     });
@@ -664,7 +657,22 @@ function showToast(message) {
         practiceInput.value = "";
       }
       filterAndDisplayJobIdSuggestions();
+
+      // Show/hide Document Actions based on docInput value
+      if (numericDocId && /^\d{6}$/.test(numericDocId)) {
+          documentActionsSection.style.display = 'block';
+      } else {
+          documentActionsSection.style.display = 'none';
+      }
     });
+
+    // NEW: Clear Document ID button functionality
+    clearDocIdBtn.onclick = () => {
+        docInput.value = ""; // Clear the input field
+        docInput.dispatchEvent(new Event('input')); // Trigger input event to clear dependent fields
+        showToast("Document ID cleared.");
+        docInput.focus(); // Optional: put focus back on the input
+    };
 
     copyDocBtn.onclick = () => {
       const docIdFullString = docInput.value.trim();
@@ -832,8 +840,9 @@ function showToast(message) {
     copyJobTitle.onclick = () => {
       const titleText = jobTitleDisplay.value;
       if (titleText && titleText !== "Title not found" && titleText !== "Error extracting title") {
-        navigator.clipboard.writeText(`edited_file_name = "${titleText}"`);
-        showToast(`Copied: edited_file_name = "${titleText}"`);
+        const sanitizedTitleText = titleText.replace(/[^\x00-\x7F]+/g, ''); 
+        navigator.clipboard.writeText(`edited_file_name = "${sanitizedTitleText}"`);
+        showToast(`Copied: edited_file_name = "${sanitizedTitleText}"`);
       } else {
         showToast("No valid job title to copy.");
       }
