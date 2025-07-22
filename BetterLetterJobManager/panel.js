@@ -1,3 +1,4 @@
+// BetterLetterJobManager/panel.js (COMPLETE AND FINALIZED VERSION - Mailroom Details Integration)
 
 chrome.action.setBadgeText({ text: "Job Panel" });
 
@@ -34,7 +35,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         copyPracticeNameBtn,
         copyJobPageUrlBtn,
         jobIdAutocompleteResultsContainer,
-        clearDocIdBtn
+        clearDocIdBtn,
+        // NEW: Mailroom Details Section elements
+        mailroomDetailsSection,
+        mailroomOriginalName, // NEW
+        mailroomNhsNo,
+        mailroomPatientName,
+        mailroomReason,
+        mailroomRejectedByOn,
+        mailroomStatus,
+        mailroomJobId, // NEW
+        mailroomInferredType, // NEW
+        copyMailroomDetailsBtn
     ] = [
         document.getElementById("documentDropdown"),
         document.getElementById("autocompleteResults"),
@@ -60,7 +72,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         document.getElementById("copyPracticeName"),
         document.getElementById("copyJobPageUrl"),
         document.getElementById("jobIdAutocompleteResults"),
-        document.getElementById("clearDocId")
+        document.getElementById("clearDocId"),
+        // NEW: Get Mailroom Details elements
+        document.getElementById("mailroomDetailsSection"),
+        document.getElementById("mailroom-original-name"),
+        document.getElementById("mailroom-nhs-no"),
+        document.getElementById("mailroom-patient-name"),
+        document.getElementById("mailroom-reason"),
+        document.getElementById("mailroom-rejected-by-on"),
+        document.getElementById("mailroom-status"),
+        document.getElementById("mailroom-job-id"),
+        document.getElementById("mailroom-inferred-type"),
+        document.getElementById("copyMailroomDetails")
     ];
 
     // Helper functions (moved inside DOMContentLoaded for correct scope)
@@ -72,11 +95,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         jobTitleSection.style.display = 'none';
         practiceInput.value = "";
         jobIdAutocompleteResultsContainer.innerHTML = "";
-        documentActionsSection.style.display = 'none';
+        documentActionsSection.style.display = 'none'; // Hide Document Actions section
+        // Clear Mailroom Details
+        mailroomOriginalName.textContent = "—"; 
+        mailroomNhsNo.textContent = "—";
+        mailroomPatientName.textContent = "—";
+        mailroomReason.textContent = "—";
+        mailroomRejectedByOn.textContent = "—";
+        mailroomStatus.textContent = "—";
+        mailroomJobId.textContent = "—"; 
+        mailroomInferredType.textContent = "—"; 
+        mailroomDetailsSection.style.display = 'none';
     }
 
+    // FIX: Updated regex for Document ID to allow any number of digits (\d+)
     function getNumericDocIdFromInput(inputString) {
-        const match = inputString.trim().match(/^\d+/);
+        const match = inputString.trim().match(/^\d+$/); // Changed from ^\d{6}$ to ^\d+$
         return match ? match[0] : null;
     }
 
@@ -101,14 +135,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     let practiceActive = -1;
     let jobIdActive = -1;
 
-    // Helper for adding/removing active class
+    // Helper for adding/removing active class (takes active index and items)
     function addActive(activeIdx, items) {
         if (!items) return -1;
         removeActive(items);
         if (activeIdx >= items.length) activeIdx = 0;
         if (activeIdx < 0) activeIdx = (items.length - 1);
         items[activeIdx].classList.add("active");
-        return activeIdx;
+        return activeIdx; // Return updated active index
     }
 
     function removeActive(items) {
@@ -117,7 +151,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
-    // NEW: Centralized hide suggestions function
+    // Centralized hide suggestions function
     function hideSuggestions() {
         setTimeout(() => {
             autocompleteResultsContainer.style.display = 'none';
@@ -131,7 +165,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const searchTerm = docInput.value.trim().toLowerCase();
         autocompleteResultsContainer.innerHTML = '';
         autocompleteResultsContainer.style.display = 'none';
-        docActive = -1;
+        docActive = -1; // Reset active index for this autocomplete
 
         const isInputFocused = (document.activeElement === docInput);
 
@@ -179,7 +213,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         docInput.value = selectedDocId;
         autocompleteResultsContainer.style.display = 'none';
         docInput.dispatchEvent(new Event('input'));
-        docActive = -1;
+        docActive = -1; // Reset active index after selection
     }
 
     // Functions for custom Practice Name autocomplete
@@ -187,7 +221,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const searchTerm = practiceInput.value.trim().toLowerCase();
         practiceAutocompleteResultsContainer.innerHTML = '';
         practiceAutocompleteResultsContainer.style.display = 'none';
-        practiceActive = -1;
+        practiceActive = -1; // Reset active index for this autocomplete
 
         const isInputFocused = (document.activeElement === practiceInput);
 
@@ -238,7 +272,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         practiceInput.value = selectedPracticeName;
         odsCodeLabel.textContent = selectedOdsCode;
         practiceAutocompleteResultsContainer.style.display = 'none';
-        practiceActive = -1;
+        practiceActive = -1; // Reset active index after selection
     }
 
     // Functions for custom Job ID autocomplete
@@ -254,7 +288,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         jobIdAutocompleteResultsContainer.innerHTML = '';
         jobIdAutocompleteResultsContainer.style.display = 'none';
-        jobIdActive = -1;
+        jobIdActive = -1; // Reset active index for this autocomplete
 
         const isInputFocused = (document.activeElement === jobIdInput);
 
@@ -287,7 +321,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const selectedJobId = item.dataset.jobId;
         jobIdInput.value = selectedJobId;
         jobIdAutocompleteResultsContainer.style.display = 'none';
-        jobIdActive = -1;
+        jobIdActive = -1; // Reset active index after selection
     }
 
 
@@ -306,14 +340,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         // Define URL regexes
         const dashboardUrlPrefix = "https://app.betterletter.ai/admin_panel/bots/dashboard";
-        const annotationUrlRegex = /^https:\/\/app\.betterletter\.ai\/mailroom\/annotations\/(\d+)/; 
+        const annotationUrlRegex = /^https:\/\/app\.betterletter.ai\/mailroom\/annotations\/(\d+)/; 
         const jobPageUrlRegex = /^https:\/\/app\.betterletter.ai\/admin_panel\/bots\/jobs\/([a-f0-9-]+)\/?/; 
         const mailroomUrlPrefix = "https://app.betterletter.ai/mailroom/"; 
 
         // Reset Job Title section's visibility initially, it will be set to 'block' if relevant.
         jobTitleDisplay.value = "";
         jobTitleSection.style.display = 'none';
-        documentActionsSection.style.display = 'none';
+        documentActionsSection.style.display = 'none'; // Hide Document Actions section by default
+        mailroomDetailsSection.style.display = 'none'; // Hide Mailroom Details section by default
 
         if (!targetTabId) {
             showToast("No active tab context. Please ensure a tab is active.");
@@ -342,16 +377,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (clickedMailroomDocData) {
             console.log("DEBUG: Using data from clicked Mailroom Document:", clickedMailroomDocData);
             docInput.value = clickedMailroomDocData.documentId || "";
-            jobIdInput.value = clickedMailroomDocData.jobId || "";
-            jobTypeLabel.textContent = clickedMailroomDocData.jobType || "—";
-            practiceInput.value = clickedMailroomDocData.practiceName || "";
-            odsCodeLabel.textContent = clickedMailroomDocData.odsCode || "—";
+            // Populate Mailroom specific details
+            mailroomOriginalName.textContent = clickedMailroomDocData.originalNameContent || "—";
+            mailroomNhsNo.textContent = clickedMailroomDocData.nhsNo || "—";
+            mailroomPatientName.textContent = clickedMailroomDocData.patientName || "—";
+            mailroomReason.textContent = clickedMailroomDocData.reason || "—";
+            mailroomRejectedByOn.textContent = clickedMailroomDocData.rejectedByOn || "—";
+            mailroomStatus.textContent = clickedMailroomDocData.status || "—";
+            mailroomJobId.textContent = clickedMailroomDocData.jobId || "—"; // Extracted UUID if available
+            mailroomInferredType.textContent = clickedMailroomDocData.inferredJobType || "—"; // Inferred type
+
+            mailroomDetailsSection.style.display = 'block'; // Show Mailroom Details section
 
             // Clear the stored data immediately after using it
             await chrome.storage.local.remove("clickedMailroomDocData");
             
             // Ensure Document Actions are shown if ID is valid
-            if (docInput.value && /^\d{6}$/.test(docInput.value)) {
+            if (docInput.value && /^\d+$/.test(docInput.value)) { // FIX: Changed regex to \d+
                 documentActionsSection.style.display = 'block';
             }
             // No need to fetch from dashboard or parse other URLs if we got data from a click
@@ -373,6 +415,12 @@ document.addEventListener("DOMContentLoaded", async () => {
                             target: { tabId: tabId },
                             func: () => {
                                 const pageContent = document.body.textContent;
+
+                                console.log("JOB PAGE SCRIPT DEBUG: ---- START (Simple String Search) ----");
+                                console.log("JOB PAGE SCRIPT DEBUG: Document Type:", document.contentType);
+                                console.log("JOB PAGE SCRIPT DEBUG: Page content snippet (first 500 chars from body):", pageContent.substring(0, 500));
+                                console.log("JOB PAGE SCRIPT DEBUG: Page content length (from body):", pageContent.length);
+
                                 let extractedTitle = null;
                                 const tagStart = '<Title>';
                                 const tagEnd = '</Title>';
@@ -396,7 +444,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                         }
                     }
                 } catch (e) {
-                    console.error("Error extracting job title on refresh:", e);
+                    console.error("Error extracting job title:", e);
                     jobTitleDisplay.value = "Error extracting title";
                     jobTitleSection.style.display = 'block';
                 }
@@ -503,7 +551,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         
         // Show Document Actions section if a valid 6-digit Document ID is present
         const currentDocIdInInput = docInput.value.trim();
-        if (currentDocIdInInput && /^\d{6}$/.test(currentDocIdInInput)) {
+        if (currentDocIdInInput && /^\d+$/.test(currentDocIdInInput)) { // FIX: Changed regex to \d+
             documentActionsSection.style.display = 'block';
         } else {
             documentActionsSection.style.display = 'none';
@@ -524,7 +572,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Event Listeners for Custom Autocomplete Inputs ---
 
-    docInput.addEventListener("input", filterAndDisplaySuggestions);
+    docInput.addEventListener("input", () => {
+      const docIdFullString = docInput.value;
+      const numericDocId = getNumericDocIdFromInput(docIdFullString);
+
+      const match = jobData.find(j => j.documentId === numericDocId);
+      if (match) {
+        jobIdInput.value = match.jobId;
+        jobTypeLabel.textContent = match.jobType;
+        practiceInput.value = match.practiceName;
+        odsCodeLabel.textContent = match.odsCode;
+      } else {
+        clearDependentFields();
+        practiceInput.value = "";
+      }
+      filterAndDisplayJobIdSuggestions();
+
+      // Show/hide Document Actions based on docInput value
+      if (numericDocId && /^\d+$/.test(numericDocId)) { // FIX: Changed regex to \d+
+          documentActionsSection.style.display = 'block';
+      } else {
+          documentActionsSection.style.display = 'none';
+      }
+    });
+
     docInput.addEventListener("focus", filterAndDisplaySuggestions); // Show on focus
     docInput.addEventListener("blur", hideSuggestions); // Hide on blur (with timeout)
     
@@ -642,30 +713,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Existing Action Button Event Listeners ---
 
-    docInput.addEventListener("input", () => {
-      const docIdFullString = docInput.value;
-      const numericDocId = getNumericDocIdFromInput(docIdFullString);
-
-      const match = jobData.find(j => j.documentId === numericDocId);
-      if (match) {
-        jobIdInput.value = match.jobId;
-        jobTypeLabel.textContent = match.jobType;
-        practiceInput.value = match.practiceName;
-        odsCodeLabel.textContent = match.odsCode;
-      } else {
-        clearDependentFields();
-        practiceInput.value = "";
-      }
-      filterAndDisplayJobIdSuggestions();
-
-      // Show/hide Document Actions based on docInput value
-      if (numericDocId && /^\d{6}$/.test(numericDocId)) {
-          documentActionsSection.style.display = 'block';
-      } else {
-          documentActionsSection.style.display = 'none';
-      }
-    });
-
     // NEW: Clear Document ID button functionality
     clearDocIdBtn.onclick = () => {
         docInput.value = ""; // Clear the input field
@@ -709,7 +756,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const docIdFullString = docInput.value.trim();
       const numericDocId = getNumericDocIdFromInput(docIdFullString);
       if (!numericDocId) return showToast("No Document ID");
-      if (!/^\d{6}$/.test(numericDocId)) return showToast("Invalid Document ID");
+      if (!/^\d+$/.test(numericDocId)) return showToast("Invalid Document ID"); // FIX: Changed regex to \d+
       const url = `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${numericDocId}&state=available`;
       
       navigator.clipboard.writeText(url).then(() => {

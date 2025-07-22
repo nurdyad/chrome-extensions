@@ -8,6 +8,7 @@ let currentSelectedOdsCode = null;
 let practiceNavigatorView = null;
 let emailFormatterView = null;
 let passwordManagerView = null; // New global for password manager view
+let topUtilityButtons = null; // Reference to the top button row
 
 // Global variables for status and CDB display
 let statusDisplayEl = null;
@@ -25,14 +26,19 @@ function setContextualButtonsState(enable) {
 function showView(viewId) {
   practiceNavigatorView.style.display = 'none';
   emailFormatterView.style.display = 'none';
-  passwordManagerView.style.display = 'none'; // Hide password manager view
-
+  passwordManagerView.style.display = 'none';
+  
+  // Control visibility of the top utility buttons
   if (viewId === 'practiceNavigatorView') {
     practiceNavigatorView.style.display = 'block';
+    topUtilityButtons.style.display = 'flex'; // Show top buttons
   } else if (viewId === 'emailFormatterView') {
     emailFormatterView.style.display = 'block';
-  } else if (viewId === 'passwordManagerView') { // Show password manager view
+    topUtilityButtons.style.display = 'none'; // Hide top buttons
+  } else if (viewId === 'passwordManagerView') {
     passwordManagerView.style.display = 'block';
+    topUtilityButtons.style.display = 'none'; // Hide top buttons
+    
     // Clear password list and status message when showing the view
     document.getElementById("password-list").innerHTML = '<li class="no-passwords">Click \'Show Passwords\' to see fields from the active BetterLetter page.</li>';
     document.getElementById("status-message-password").textContent = "";
@@ -46,7 +52,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Assign view containers
   practiceNavigatorView = document.getElementById('practiceNavigatorView');
   emailFormatterView = document.getElementById('emailFormatterView');
-  passwordManagerView = document.getElementById('passwordManagerView'); // Assign password manager view
+  passwordManagerView = document.getElementById('passwordManagerView');
+  topUtilityButtons = document.getElementById('topUtilityButtons'); // Get reference to the top button row
 
   // Initially show the main navigator view
   showView('practiceNavigatorView');
@@ -135,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById("passwordToggleBtn").addEventListener("click", () => showView('passwordManagerView'));
   document.getElementById("backToNavigatorBtnPassword").addEventListener("click", () => showView('practiceNavigatorView')); // Back button for password manager
 
-  // Password Manager specific buttons (still listen for clicks, but trigger via a unified function)
+  // Password Manager specific buttons
   document.getElementById("show-passwords").addEventListener("click", showBLPasswords);
   document.getElementById("generate-passwords").addEventListener("click", generateBLPasswords);
 
@@ -623,17 +630,17 @@ async function triggerPasswordManagerFunctionality() {
   showPasswordStatus("Attempting to connect...", "loading");
 
   try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      // Find the active tab in the main browser window (not the extension popup)
+      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
 
-      console.log(`%c[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`, 'color: gray;');
+      console.log(`%c[BL Nav - Password] Active tab URL (from main window): ${tab ? tab.url : 'N/A'}`, 'color: gray;');
 
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
-          showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
+          showPasswordError("Please open a BetterLetter Mailroom practice settings page first in the main browser window.");
           return;
       }
 
-      // First, try to execute the content script. This serves as a manual injection attempt.
-      // If content.js is already running, this will effectively do nothing (or re-run it depending on logic).
+      // First, try to execute the content script.
       try {
           await chrome.scripting.executeScript({
               target: { tabId: tab.id },
@@ -657,9 +664,9 @@ async function triggerPasswordManagerFunctionality() {
 
 async function showBLPasswords() {
   try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      // Find the active tab in the main browser window again for this specific action
+      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
 
-      // The URL check is repeated here as a fallback, though triggerPasswordManagerFunctionality also checks.
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
@@ -671,11 +678,8 @@ async function showBLPasswords() {
 
       let response;
       try {
-        // Attempt to send message to content script
-        // Add a timeout to sendMessage to catch unresponsive content scripts
         response = await chrome.tabs.sendMessage(tab.id, { action: "getPasswords" });
       } catch (e) {
-        // This catch specifically handles errors during sendMessage, e.g., no listener, disconnected port.
         showPasswordError("Could not communicate with password tools on this page. Try refreshing the BetterLetter page.");
         console.error(`%c[BL Nav - Password] Error during sendMessage (getPasswords): ${e.message}`, 'color: red;', e);
         return;
@@ -704,7 +708,8 @@ async function showBLPasswords() {
 
 async function generateBLPasswords() {
   try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      // Find the active tab in the main browser window again
+      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
 
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first to generate passwords.");

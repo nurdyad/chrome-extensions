@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Jobs Dashboard Manager",
-  "version": "1.9",
-  "description": "Streamlines job and practice information from the BetterLetter admin panel.",
+  "version": "1.13",
+  "description": "Streamlines job and practice information from the BetterLetter admin panel, and integrates with Mailroom documents pages (Rejected, Preparing).",
   "permissions": ["scripting", "activeTab", "tabs", "storage"],
   "host_permissions": [
     "https://app.betterletter.ai/*"
@@ -21,9 +21,9 @@
     {
       "matches": [
         "https://app.betterletter.ai/mailroom/rejected*",
-        "https://app.betterletter.ai/mailroom/preparing*"
+        "https://app.betterletter.ai/mailroom/preparing*" 
       ],
-      "js": ["mailroom_page_integrator.js"]
+      "js": ["mailroom_page_integrator.js"] 
     }
   ],
   "icons": {

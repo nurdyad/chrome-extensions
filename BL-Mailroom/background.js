@@ -16,11 +16,12 @@ let practiceCache = {};
 
 // Constants for cache management and periodic refresh intervals.
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds for local storage cache expiry.
-const REALTIME_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds for periodic background refresh.
+const REALTIME_REFRESH_INTERVAL = 10 * 1000; // 10 seconds in milliseconds for periodic background refresh.
 const cdbCache = {}; // ODS => CDB value (This in-memory cache will store scraped CDBs)
 
 // Global variable to store the ID of the floating window, to prevent multiple instances.
 let floatingWindowId = null;
+let scrapingTabId = null; // Single hidden tab for scraping
 
 
 // --- HELPER FUNCTIONS (DEFINED AT TOP-LEVEL SCOPE FOR ACCESSIBILITY) ---
@@ -343,12 +344,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Set up a periodic refresh interval for the practice list.
   // Using `globalThis` to prevent multiple intervals if the service worker restarts.
   // This ensures `REALTIME_REFRESH_INTERVAL` is defined before `setInterval` is called.
-  if (!globalThis.refreshIntervalId) { 
-    globalThis.refreshIntervalId = setInterval(() => {
-      console.log('[BL Nav - Background] Performing periodic practice list refresh...');
-      fetchAndCachePracticeList('periodic refresh').catch(e => console.error("[BL Nav - Background] Periodic refresh failed:", e));
-    }, REALTIME_REFRESH_INTERVAL);
-  }
+  chrome.alarms.create('practiceCacheRefresh', { periodInMinutes: 0.17 }); // ~10 seconds
 });
 
 /**
