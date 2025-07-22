@@ -379,8 +379,8 @@ chrome.action.onClicked.addListener(async () => {
   const popup = await chrome.windows.create({
     url: 'floating_window.html',
     type: 'popup',
-    width: 350,
-    height: 550,
+    width: 320,
+    height: 620,
     focused: true,
     top: currentWindow.top + 50,
     left: currentWindow.left + 50

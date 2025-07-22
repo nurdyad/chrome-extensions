@@ -5,13 +5,13 @@
   <title>Practice Navigator</title>
   <style>
     body {
-      width: 100%; /* Make body fill its parent (the window) */
-      padding: 15px;
-      font-family: Arial, sans-serif;
-      background: #f8f9fa;
-      margin: 0;
-      box-sizing: border-box; /* Include padding in the 100% width */
-    }
+    width: auto; /* Let content dictate width, or fill window */
+    padding: 8px; /* Reduced padding for less marginal whitespace */
+    font-family: Arial, sans-serif;
+    background: #f8f9fa;
+    margin: 0;
+    box-sizing: border-box;
+  }
     h1 {
       font-size: 1rem;
       text-align: center;
@@ -26,7 +26,7 @@
     }
     .btn {
       padding: 8px;
-      flex: 1; /* Make buttons expand to fill space */
+      flex: 1;
       font-size: 13px;
       background-color: #3498db;
       color: white;
@@ -48,7 +48,7 @@
     #usersBtn:hover:not(:disabled) {
       background-color: #27ae60;
     }
-    /* Mailroom Buttons Styling */
+    /* New Mailroom Buttons Styling */
     #preparingBtn {
       background-color: #f39c12;
     }
@@ -61,7 +61,7 @@
     #rejectedBtn:hover:not(:disabled) {
       background-color: #c0392b;
     }
-    /* CDB Search Button Styling */
+    /* New CDB Search Button Styling */
     #searchCdbBtn {
         background-color: #007bff; /* Blue */
     }
@@ -69,34 +69,47 @@
         background-color: #0056b3; /* Darker Blue */
     }
 
-    /* Top Utility Buttons Row - Adjusted for full width */
-    #topUtilityButtons {
-        display: flex;
-        justify-content: center; /* Center content within the row */
-        gap: 6px; /* Consistent gap with other btn-rows */
-        margin-bottom: 15px;
-    }
-    /* Buttons within this row will now inherit .btn's flex: 1 */
-    #createPracticeTopBtn {
-        background-color: #3498db; /* Consistent with default blue */
-    }
-    #createPracticeTopBtn:hover {
-        background-color: #2980b9;
-    }
-    #emailFormatterToggleBtn {
-        background-color: #9b59b6; /* Purple */
-    }
-    #emailFormatterToggleBtn:hover {
-        background-color: #8e44ad;
+    /* Styles for the new global navigation buttons */
+    .global-nav-buttons-row {
+      display: flex;
+      justify-content: space-around;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #ddd; /* A line for tabs to sit on */
     }
 
-    /* Password Manager Toggle Button Style (now in old Create Practice spot) */
-    #passwordToggleBtn {
-        background-color: #6495ED; /* Cornflower Blue */
+    .global-nav-buttons-row .btn {
+      flex: 1;
+      padding: 10px 8px;
+      font-size: 13px;
+      background-color: #f0f0f0; /* Lighter background for inactive tabs */
+      color: #555; /* Darker text for inactive tabs */
+      border: none; /* Remove button border */
+      border-bottom: 2px solid transparent; /* Prepare for active tab border */
+      border-radius: 0; /* Square corners for tab look */
+      cursor: pointer;
+      transition: all 0.2s ease; /* Smooth transition for active state */
+      text-align: center;
+      margin: 0 1px; /* Small gap between tabs */
+      margin-bottom: -1px; /* Overlap bottom border with container's border */
     }
-    #passwordToggleBtn:hover {
-        background-color: #4169E1; /* Royal Blue */
+
+    .global-nav-buttons-row .btn:hover {
+      background-color: #e0e0e0; /* Hover effect for tabs */
     }
+
+    /* Active Tab Styling */
+    .global-nav-buttons-row .btn.active-tab {
+      background-color: #fff; /* White background for active tab */
+      color: #333; /* Darker text for active tab */
+      border-bottom: 2px solid #3498db; /* Blue active indicator */
+      font-weight: bold; /* Make text bolder */
+      z-index: 1; /* Ensure active tab is on top if using subtle shadows */
+    }
+
+    /* Specific colors for active global nav buttons (overrides default background) */
+    #navigatorGlobalToggleBtn.active-tab { color: #3498db; border-bottom-color: #3498db;}
+    #passwordGlobalToggleBtn.active-tab { color: #6495ED; border-bottom-color: #6495ED;}
+    #emailFormatterGlobalToggleBtn.active-tab { color: #9b59b6; border-bottom-color: #9b59b6;}
 
 
     input, select {
@@ -183,59 +196,71 @@
         display: none; /* Hidden by default */
     }
 
-    /* Styles for Email Formatter (from styles.css) */
-    .email-formatter-container {
-        position: relative; /* Needed for absolute positioning of back button */
-        padding-top: 40px; /* Space for back button */
-    }
-    .email-formatter-container textarea {
-      width: 100%;
-      height: 100px;
-      margin-bottom: 10px;
-      box-sizing: border-box; /* Ensure padding is included in the width */
-    }
-    .email-formatter-container button {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 10px;
-      background-color: #4285f4; /* Blue color from provided styles.css */
+    /* Styles for Email Formatter */
+.email-formatter-container textarea {
+  width: 100%;
+  height: 100px;
+  margin-bottom: 10px;
+  box-sizing: border-box; /* Ensure padding is included in the width */
+}
+/* Apply styles directly to the specific buttons in Email Formatter (convert/copy) */
+#convertEmailBtn, #copyEmailBtn {
+  width: 100%; /* Keep them full width */
+  padding: 10px;
+  margin-bottom: 10px;
+  background-color: #4CAF50; /* Distinct green */
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+#convertEmailBtn:hover, #copyEmailBtn:hover {
+    background-color: #45a049; /* Darker green on hover */
+}
+
+    /* New style for back to navigator button positioning */
+    .back-to-nav-btn {
+      position: absolute;
+      top: 10px; /* Slightly closer to the top */
+      right: 10px; /* Slightly closer to the right */
+      background-color: #6c757d;
       color: white;
       border: none;
+      border-radius: 3px; /* Slightly rounded corners */
       cursor: pointer;
-      border-radius: 4px; /* Align with existing button styles */
-      transition: background-color 0.2s ease;
+      padding: 6px 10px; /* More compact */
+      font-size: 16px; /* Larger font for the arrow icon */
+      z-index: 10;
+      width: auto; /* Allow content to dictate width */
+      flex: none; /* Override flex properties from .btn */
+      line-height: 1; /* Ensures vertical centering for the arrow */
+      text-align: center;
     }
-    .email-formatter-container button:hover {
-        background-color: #3b74d9; /* Darker blue on hover */
-    }
-    /* Specific styles for Email Formatter buttons to make them look distinct */
-    #convertEmailBtn, #copyEmailBtn {
-      background-color: #4CAF50; /* A distinct green */
-    }
-    #convertEmailBtn:hover, #copyEmailBtn:hover {
-        background-color: #45a049; /* Darker green on hover */
-    }
-    /* Back button positioning for Email Formatter */
-    #backToNavigatorBtn {
-      background-color: #6c757d; /* Gray for back button */
-      position: absolute; /* Position relative to .email-formatter-container */
-      top: 5px;
-      right: 5px;
-      width: auto; /* Don't stretch */
-      padding: 5px 10px; /* Smaller padding */
-      font-size: 0.8em;
-      margin-bottom: 0; /* No bottom margin */
-    }
-    #backToNavigatorBtn:hover {
+    .back-to-nav-btn:hover {
         background-color: #5a6268;
     }
+
+    /* Adjust padding for containers where back button is placed */
+    .email-formatter-container, .password-manager-container {
+        position: relative;
+        padding-top: 40px; /* Adjusted to make space for the button */
+    }
+
+    /* Adjust header/h1 in specific views to account for new button */
+    .email-formatter-container h1,
+    .password-manager-container .header {
+        margin-top: 0; /* Ensure no extra margin pushing content down */
+        margin-bottom: 20px;
+        padding-top: 0; /* Ensure no extra padding pushing content down */
+    }
+
 
     /* Styles for Password Manager (from provided styles.css) - scoped to .password-manager-container */
     .password-manager-container {
         font-family: 'Segoe UI', system-ui, sans-serif;
         color: #212529;
-        position: relative; /* Needed for absolute positioning of back button */
-        padding-top: 40px; /* Space for back button */
+        /* Padding and background set by common body style, might need adjustment */
     }
     .password-manager-container .header {
         text-align: center;
@@ -369,21 +394,6 @@
         color: #6c757d;
         font-size: 0.7rem; /* Adjusted */
     }
-    /* Back button positioning for Password Manager */
-    #backToNavigatorBtnPassword {
-      background-color: #6c757d; /* Gray for back button */
-      position: absolute; /* Position relative to .password-manager-container */
-      top: 5px;
-      right: 5px;
-      width: auto; /* Don't stretch */
-      padding: 5px 10px; /* Smaller padding */
-      font-size: 0.8em;
-      margin-bottom: 0; /* No bottom margin */
-    }
-    #backToNavigatorBtnPassword:hover {
-        background-color: #5a6268;
-    }
-
     /* Scrollbar styling for password-list */
     .password-manager-container #password-list::-webkit-scrollbar {
         width: 5px;
@@ -402,9 +412,10 @@
   </style>
 </head>
 <body>
-  <div id="topUtilityButtons" class="btn-row">
-    <button id="createPracticeTopBtn" class="btn">Create Practice</button>
-    <button id="emailFormatterToggleBtn" class="btn">Email Formatter</button>
+  <div class="btn-row global-nav-buttons-row">
+    <button id="navigatorGlobalToggleBtn" class="btn">Navigator</button>
+    <button id="passwordGlobalToggleBtn" class="btn">Password</button>
+    <button id="emailFormatterGlobalToggleBtn" class="btn">Email Formatter</button>
   </div>
 
   <div id="practiceNavigatorView">
@@ -419,15 +430,14 @@
 
     <label for="settingType">Setting Type</label>
     <select id="settingType">
-      <option value="basic">Basic</option>
+      <option value="" selected disabled hidden>Select Setting Type</option> <option value="basic">Basic</option>
       <option value="service">Service</option>
       <option value="workflows">Workflows</option>
       <option value="ehr_settings">EHR Settings</option>
     </select>
 
-    <div class="btn-row">
-      <button id="openSettingsBtn" class="btn">Open Settings</button>
-      <button id="passwordToggleBtn" class="btn">Password</button> 
+    <div class="btn-row" style="margin-top: 12px;">
+        <button id="createPracticeAdminBtn" class="btn">Create Practice</button>
     </div>
 
     <div class="btn-row">
@@ -447,20 +457,18 @@
   </div>
 
   <div id="emailFormatterView" class="email-formatter-container" style="display: none;">
-    <h1>Email Formatter</h1>
+    <button id="backToNavigatorBtn" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
     <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
     <button id="convertEmailBtn">Convert</button>
     <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
     <button id="copyEmailBtn">Copy</button>
-    <button id="backToNavigatorBtn" class="btn">Back to Navigator</button>
   </div>
 
   <div id="passwordManagerView" class="password-manager-container" style="display: none;">
+    <button id="backToNavigatorBtnPassword" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
     <div class="header">
-        <h1>BetterLetter Password Tools</h1>
-        <p>Enhanced password management</p>
-    </div>
-    
+        </div>
+
     <div class="btn-container">
         <button id="show-passwords" class="btn-password">👁 Show Passwords</button>
         <button id="generate-passwords" class="btn-password btn-secondary-password">🔄 Generate All</button>
@@ -471,7 +479,7 @@
     <div class="section-password">
         <div class="section-title-password">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 0 0 1 3 3m3 0a6 6 0 0 1 -7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25z" />
             </svg>
             <span>Password Fields on Page</span>
         </div>
@@ -479,7 +487,6 @@
             <li class="no-passwords">Click 'Show Passwords' to see fields from the active BetterLetter page.</li>
         </ul>
     </div>
-    <button id="backToNavigatorBtnPassword" class="btn">Back to Navigator</button>
     
     <footer>
         <p>BetterLetter Mailroom Extension v1.3</p>

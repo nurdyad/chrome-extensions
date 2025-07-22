@@ -8,12 +8,12 @@ let currentSelectedOdsCode = null;
 let practiceNavigatorView = null;
 let emailFormatterView = null;
 let passwordManagerView = null; // New global for password manager view
-let topUtilityButtons = null; // Reference to the top button row
 
 // Global variables for status and CDB display
 let statusDisplayEl = null;
 let statusEl = null;
 let cdbSearchResultEl = null;
+let settingTypeEl = null; // Reference to the settingType select element
 
 // Helper to enable/disable contextual buttons
 function setContextualButtonsState(enable) {
@@ -22,28 +22,29 @@ function setContextualButtonsState(enable) {
   document.getElementById('rejectedBtn').disabled = !enable;
 }
 
-// Function to switch between views
+// Function to switch between views and manage active tab styling
 function showView(viewId) {
   practiceNavigatorView.style.display = 'none';
   emailFormatterView.style.display = 'none';
   passwordManagerView.style.display = 'none';
-  
-  // Control visibility of the top utility buttons
+
+  // Remove active-tab class from all global nav buttons
+  const globalNavButtons = document.querySelectorAll('.global-nav-buttons-row .btn');
+  globalNavButtons.forEach(button => button.classList.remove('active-tab'));
+
+  // Show the requested view
   if (viewId === 'practiceNavigatorView') {
     practiceNavigatorView.style.display = 'block';
-    topUtilityButtons.style.display = 'flex'; // Show top buttons
+    document.getElementById('navigatorGlobalToggleBtn').classList.add('active-tab');
   } else if (viewId === 'emailFormatterView') {
     emailFormatterView.style.display = 'block';
-    topUtilityButtons.style.display = 'none'; // Hide top buttons
+    document.getElementById('emailFormatterGlobalToggleBtn').classList.add('active-tab');
   } else if (viewId === 'passwordManagerView') {
     passwordManagerView.style.display = 'block';
-    topUtilityButtons.style.display = 'none'; // Hide top buttons
-    
+    document.getElementById('passwordGlobalToggleBtn').classList.add('active-tab');
     // Clear password list and status message when showing the view
     document.getElementById("password-list").innerHTML = '<li class="no-passwords">Click \'Show Passwords\' to see fields from the active BetterLetter page.</li>';
     document.getElementById("status-message-password").textContent = "";
-
-    // IMPORTANT: Automatically try to inject and run getPasswords when password view is opened
     triggerPasswordManagerFunctionality();
   }
 }
@@ -52,10 +53,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Assign view containers
   practiceNavigatorView = document.getElementById('practiceNavigatorView');
   emailFormatterView = document.getElementById('emailFormatterView');
-  passwordManagerView = document.getElementById('passwordManagerView');
-  topUtilityButtons = document.getElementById('topUtilityButtons'); // Get reference to the top button row
+  passwordManagerView = document.getElementById('passwordManagerView'); // Assign password manager view
+  settingTypeEl = document.getElementById('settingType'); // Assign setting type select element
 
-  // Initially show the main navigator view
+  // Initially show the main navigator view (and set its tab as active)
   showView('practiceNavigatorView');
 
   setContextualButtonsState(false);
@@ -77,7 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
       cachedPractices = response.practiceCache;
       console.log(`%c[BL Nav - Popup] Practice suggestions loaded from background. Cache size: ${Object.keys(cachedPractices).length}`, 'color: blue;');
-      updateContextualButtonsOnInput(false); 
+      updateContextualButtonsOnInput(false);
       showStatus('Practice cache loaded.', 'success');
       
       if (practiceInputEl.value.trim() !== '') {
@@ -133,22 +134,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set up event listeners for the Email Formatter elements
   document.getElementById("convertEmailBtn").addEventListener("click", convertEmails);
   document.getElementById("copyEmailBtn").addEventListener("click", copyEmails);
-  document.getElementById("backToNavigatorBtn").addEventListener("click", () => showView('practiceNavigatorView'));
-  
-  // Email Formatter Toggle Button (now at top)
-  document.getElementById("emailFormatterToggleBtn").addEventListener("click", () => showView('emailFormatterView'));
-
-  // Password Manager Toggle Button (now in old Create Practice spot)
-  document.getElementById("passwordToggleBtn").addEventListener("click", () => showView('passwordManagerView'));
+  // Using the new class for back buttons
+  document.getElementById("backToNavigatorBtn").addEventListener("click", () => showView('practiceNavigatorView')); 
   document.getElementById("backToNavigatorBtnPassword").addEventListener("click", () => showView('practiceNavigatorView')); // Back button for password manager
+  
+  // NEW GLOBAL TOGGLE BUTTONS
+  document.getElementById("navigatorGlobalToggleBtn").addEventListener("click", () => showView('practiceNavigatorView'));
+  document.getElementById("emailFormatterGlobalToggleBtn").addEventListener("click", () => showView('emailFormatterView'));
+  document.getElementById("passwordGlobalToggleBtn").addEventListener("click", () => showView('passwordManagerView'));
 
-  // Password Manager specific buttons
+  // Create Practice button (now located within practiceNavigatorView)
+  document.getElementById('createPracticeAdminBtn').addEventListener('click', () => { // Renamed ID
+    chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices/new' });
+  });
+
+  // Password Manager specific buttons (still listen for clicks, but trigger via a unified function)
   document.getElementById("show-passwords").addEventListener("click", showBLPasswords);
   document.getElementById("generate-passwords").addEventListener("click", generateBLPasswords);
 
-  // Create Practice button (now at top)
-  document.getElementById('createPracticeTopBtn').addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices/new' });
+  // NEW: Listen for changes on the Setting Type dropdown
+  settingTypeEl.addEventListener('change', function() {
+    const selectedSettingType = this.value;
+    if (currentSelectedOdsCode && selectedSettingType !== "") { // Only navigate if practice selected AND a valid setting type is chosen
+      triggerOpenPracticePage(practiceInputEl.value, selectedSettingType);
+    } else if (currentSelectedOdsCode && selectedSettingType === "") {
+      showStatus('Please select a valid setting type.', 'error');
+    } else {
+      showStatus('Please select a practice first.', 'error');
+    }
   });
 });
 
@@ -166,8 +179,6 @@ document.getElementById('usersBtn').addEventListener('click', () => {
     showStatus('Please select a valid practice first to view users.', 'error');
   }
 });
-
-// Original Create Practice button is now gone, replaced by passwordToggleBtn
 
 document.getElementById('preparingBtn').addEventListener('click', () => {
   if (currentSelectedOdsCode) {
@@ -282,38 +293,43 @@ document.getElementById('searchCdbBtn').addEventListener('click', async () => {
 // --- END NEW: CDB Search Logic ---
 
 
-document.getElementById('openSettingsBtn').addEventListener('click', async () => {
-  const rawInput = document.getElementById('practiceInput').value.trim();
-  const cleanInput = rawInput.replace(/\s*\([A-Z]\d{5}\)\s*$/, '').trim(); 
-  const settingType = document.getElementById('settingType').value;
-  if (statusEl) {
-    showStatus('Searching for practice...', 'loading');
-  }
+// Removed document.getElementById('openSettingsBtn').addEventListener('click', ...);
 
-  if (!cleanInput) {
-    showStatus('Please enter a practice name or ODS code', 'error');
-    return;
-  }
-
-  try {
-    const response = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({
-        action: 'openPractice',
-        input: rawInput,
-        settingType
-      }, resolve);
-    });
-
-    if (response && response.error) {
-      showStatus(`Error: ${response.error}`, 'error');
-    } else {
-      showStatus('Settings opened successfully!', 'success');
-      if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
+/**
+ * Helper function to trigger the openPractice action.
+ * @param {string} rawInput - The raw input from the practice search field.
+ * @param {string} settingType - The selected setting type from the dropdown.
+ */
+async function triggerOpenPracticePage(rawInput, settingType) {
+    if (statusEl) {
+        showStatus('Opening settings...', 'loading');
     }
-  } catch (err) {
-    showStatus(`Error: ${err.message}`, 'error');
-  }
-});
+
+    if (!rawInput) {
+        showStatus('Practice name or ODS code is missing.', 'error');
+        return;
+    }
+
+    try {
+        const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+                action: 'openPractice',
+                input: rawInput,
+                settingType
+            }, resolve);
+        });
+
+        if (response && response.error) {
+            showStatus(`Error: ${response.error}`, 'error');
+        } else {
+            showStatus('Settings opened successfully!', 'success');
+            if (statusEl) setTimeout(() => statusEl.style.display = 'none', 2000);
+        }
+    } catch (err) {
+        showStatus(`Error: ${err.message}`, 'error');
+    }
+}
+
 
 function showStatus(message, type) {
   if (statusEl) {
@@ -343,11 +359,11 @@ async function updateContextualButtonsOnInput(triggerStatus = true) {
       const keyLower = key ? key.toLowerCase().trim() : '';
 
       if (
-        dataNameLower === inputValue.toLowerCase() ||
-        dataOdsLower === inputValue.toLowerCase() ||
+        dataNameLower === inputValue.toLowerCase() || 
+        dataOdsLower === inputValue.toLowerCase() || 
         keyLower === inputValue.toLowerCase() ||
-        (dataNameLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3) ||
-        (dataOdsLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3)
+        (dataNameLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3) || // Only partial match if significant input
+        (dataOdsLower.includes(inputValue.toLowerCase()) && inputValue.length >= 3)    // Only partial match if significant input
       ) {
         foundOds = data.ods;
         break;
@@ -374,7 +390,7 @@ practiceInputEl.addEventListener('input', () => {
   const cachedPracticeDisplayNames = Object.keys(cachedPractices);
 
   if (!query) {
-    const practicesToShow = cachedPracticeDisplayNames; 
+    const practicesToShow = cachedPracticeDisplayNames;
     
     suggestionsList.innerHTML = '';
     practicesToShow.forEach(name => {
@@ -384,6 +400,12 @@ practiceInputEl.addEventListener('input', () => {
         practiceInputEl.value = name;
         suggestionsList.style.display = 'none';
         updateContextualButtonsOnInput(true);
+
+        // Trigger openPracticePage when a suggestion is clicked and a practice is selected,
+        // but only if a valid setting type is already selected (not the blank default).
+        if (currentSelectedOdsCode && settingTypeEl.value !== "") {
+            triggerOpenPracticePage(practiceInputEl.value, settingTypeEl.value);
+        }
       });
       suggestionsList.appendChild(li);
     });
@@ -411,12 +433,11 @@ practiceInputEl.addEventListener('input', () => {
       practiceInputEl.value = name;
       suggestionsList.style.display = 'none';
       updateContextualButtonsOnInput(true);
-      if (name.toLowerCase().includes('add new practice')) {
-        document.getElementById('settingType').style.display = 'none';
-        document.getElementById('openSettingsBtn').style.display = 'none';
-      } else {
-        document.getElementById('settingType').style.display = 'block';
-        document.getElementById('openSettingsBtn').style.display = 'inline-block';
+
+      // Trigger openPracticePage when a suggestion is clicked and a practice is selected,
+      // but only if a valid setting type is already selected (not the blank default).
+      if (currentSelectedOdsCode && settingTypeEl.value !== "") {
+          triggerOpenPracticePage(practiceInputEl.value, settingTypeEl.value);
       }
     });
 
@@ -545,33 +566,33 @@ cdbSearchInputEl.addEventListener('keydown', (e) => {
         }
     });
 
-    switch (e.key) {
-        case 'ArrowDown':
-            e.preventDefault();
-            currentIndex = (currentIndex + 1) % items.length;
-            break;
-        case 'ArrowUp':
-            e.preventDefault();
-            currentIndex = (currentIndex - 1 + items.length) % items.length;
-            break;
-        case 'Enter':
-            e.preventDefault();
-            if (currentIndex >= 0 && items[currentIndex]) {
-                items[currentIndex].click();
-            }
-            return;
-        case 'Escape':
-            e.preventDefault();
-            cdbSuggestionsList.style.display = 'none';
-            return;
-        default:
-            return;
-    }
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      currentIndex = (currentIndex + 1) % items.length;
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      currentIndex = (currentIndex - 1 + items.length) % items.length;
+      break;
+    case 'Enter':
+      e.preventDefault();
+      if (currentIndex >= 0 && items[currentIndex]) {
+        items[currentIndex].click();
+      }
+      return;
+    case 'Escape':
+      e.preventDefault();
+      cdbSuggestionsList.style.display = 'none';
+      return;
+    default:
+      return;
+  }
 
-    if (currentIndex >= 0 && items[currentIndex]) {
-        items[currentIndex].classList.add('highlighted');
-        items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
+  if (currentIndex >= 0 && items[currentIndex]) {
+      items[currentIndex].classList.add('highlighted');
+      items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
 });
 
 // --- END NEW: CDB Auto-suggestion Logic ---
@@ -630,17 +651,17 @@ async function triggerPasswordManagerFunctionality() {
   showPasswordStatus("Attempting to connect...", "loading");
 
   try {
-      // Find the active tab in the main browser window (not the extension popup)
-      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      console.log(`%c[BL Nav - Password] Active tab URL (from main window): ${tab ? tab.url : 'N/A'}`, 'color: gray;');
+      console.log(`%c[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`, 'color: gray;');
 
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
-          showPasswordError("Please open a BetterLetter Mailroom practice settings page first in the main browser window.");
+          showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
       }
 
-      // First, try to execute the content script.
+      // First, try to execute the content script. This serves as a manual injection attempt.
+      // If content.js is already running, this will effectively do nothing (or re-run it depending on logic).
       try {
           await chrome.scripting.executeScript({
               target: { tabId: tab.id },
@@ -664,9 +685,9 @@ async function triggerPasswordManagerFunctionality() {
 
 async function showBLPasswords() {
   try {
-      // Find the active tab in the main browser window again for this specific action
-      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
+      // The URL check is repeated here as a fallback, though triggerPasswordManagerFunctionality also checks.
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
@@ -678,6 +699,8 @@ async function showBLPasswords() {
 
       let response;
       try {
+        // Attempt to send message to content script
+        // Add a timeout to sendMessage to catch unresponsive content scripts
         response = await chrome.tabs.sendMessage(tab.id, { action: "getPasswords" });
       } catch (e) {
         showPasswordError("Could not communicate with password tools on this page. Try refreshing the BetterLetter page.");
@@ -708,8 +731,7 @@ async function showBLPasswords() {
 
 async function generateBLPasswords() {
   try {
-      // Find the active tab in the main browser window again
-      const [tab] = await chrome.tabs.query({ active: true, windowType: 'normal', lastFocusedWindow: true });
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first to generate passwords.");
