@@ -140,9 +140,7 @@ function showToast(message) {
   }, 2000);
 }
 
-// --- Floating Panel Creation (for on-page buttons) ---
-// This floating panel will still appear directly on the web page, 
-// as its logic is self-contained in content.js
+// --- Floating Panel Creation ---
 
 function createFloatingPanel() {
   if (floatingPanel) return;
@@ -334,7 +332,23 @@ const debouncedUpdatePosition = () => {
 window.addEventListener('scroll', debouncedUpdatePosition, true);
 window.addEventListener('resize', debouncedUpdatePosition);
 
-// --- Popup Communication (for messages from the extension popup) ---
+// --- MutationObserver ---
+
+const observer = new MutationObserver((mutationsList) => {
+  if (currentInput && !document.body.contains(currentInput)) {
+    hideFloatingControls();
+  }
+  mutationsList.forEach(m => {
+    m.addedNodes.forEach(node => {
+      if (node.tagName === "INPUT" && node.type === "password") {
+        showFloatingControls(node);
+      }
+    });
+  });
+});
+observer.observe(document.body, { childList: true, subtree: true });
+
+// --- Popup Communication ---
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getPasswords") {
@@ -344,7 +358,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       id: input.id || input.name || `(Field ${Array.from(document.querySelectorAll('input')).indexOf(input) + 1})`
     }));
     sendResponse({ passwords });
-    return true; // Indicate that sendResponse will be called asynchronously
+    return true;
   }
 
   if (request.action === "generatePasswords") {
@@ -358,7 +372,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       triggerInputEvents(input);
     });
     sendResponse({ status: "done" });
-    return true; // Indicate that sendResponse will be called asynchronously
+    return true;
   }
 });
 

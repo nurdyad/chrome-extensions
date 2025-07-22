@@ -256,26 +256,25 @@
     }
 
 
-    /* Styles for Password Manager (from provided styles.css) - scoped to .password-manager-container */
+    /* Styles for Password Manager (from provided popup.html/styles.css from original password tool) */
     .password-manager-container {
         font-family: 'Segoe UI', system-ui, sans-serif;
         color: #212529;
-        /* Padding and background set by common body style, might need adjustment */
     }
     .password-manager-container .header {
         text-align: center;
-        margin-bottom: 15px; /* Reduced from 20px for panel integration */
-        padding-bottom: 10px; /* Reduced from 15px */
+        margin-bottom: 15px;
+        padding-bottom: 10px;
         border-bottom: 1px solid #dee2e6;
     }
     .password-manager-container .header h1 {
-        font-size: 1.1rem; /* Adjusted for panel size */
+        font-size: 1.1rem;
         font-weight: 700;
         color: #0d6efd;
-        margin-bottom: 2px; /* Adjusted */
+        margin-bottom: 2px;
     }
     .password-manager-container .header p {
-        font-size: 0.75rem; /* Adjusted */
+        font-size: 0.75rem;
         color: #6c757d;
     }
     .password-manager-container .btn-container {
@@ -283,9 +282,9 @@
         gap: 8px;
         flex-wrap: wrap;
         justify-content: space-between;
-        margin-bottom: 10px; /* Added margin-bottom */
+        margin-bottom: 10px;
     }
-    .password-manager-container .btn-password { /* Renamed from .btn to .btn-password to avoid conflict */
+    .password-manager-container .btn-password {
         flex: 1 1 48%;
         display: flex;
         align-items: center;
@@ -293,12 +292,12 @@
         gap: 8px;
         width: 100%;
         padding: 8px;
-        margin-bottom: 10px; /* Adjusted from 12px */
+        margin-bottom: 10px;
         background: #0d6efd;
         color: white;
         border: none;
         border-radius: 6px;
-        font-size: 0.8rem; /* Adjusted */
+        font-size: 0.8rem;
         font-weight: 600;
         cursor: pointer;
         transition: all 0.2s;
@@ -307,13 +306,13 @@
     }
     .password-manager-container .btn-password:hover {
         background: #0b5ed7;
-        transform: translateY(-1px); /* Less aggressive transform */
+        transform: translateY(-1px);
         box-shadow: 0 5px 7px rgba(13, 110, 253, 0.25);
     }
     .password-manager-container .btn-password:active {
         transform: translateY(0);
     }
-    .password-manager-container .btn-secondary-password { /* Renamed from .btn-secondary */
+    .password-manager-container .btn-secondary-password {
         background: #6c757d;
         box-shadow: 0 4px 6px rgba(108, 117, 125, 0.2);
     }
@@ -321,36 +320,36 @@
         background: #5c636a;
         box-shadow: 0 5px 7px rgba(108, 117, 125, 0.25);
     }
-    .password-manager-container .section-password { /* Renamed from .section */
+    .password-manager-container .section-password {
         background: white;
-        border-radius: 8px; /* Adjusted */
-        padding: 15px; /* Adjusted */
-        margin: 15px 0; /* Adjusted */
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); /* Adjusted */
+        border-radius: 8px;
+        padding: 15px;
+        margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         border: 1px solid #e9ecef;
     }
-    .password-manager-container .section-title-password { /* Renamed from .section-title */
+    .password-manager-container .section-title-password {
         display: flex;
         align-items: center;
-        gap: 8px; /* Adjusted */
-        font-size: 0.9rem; /* Adjusted */
+        gap: 8px;
+        font-size: 0.9rem;
         font-weight: 600;
-        margin-bottom: 12px; /* Adjusted */
+        margin-bottom: 12px;
         color: #212529;
     }
     .password-manager-container .section-title-password svg {
         flex-shrink: 0;
-        width: 18px; /* Adjusted */
-        height: 18px; /* Adjusted */
+        width: 18px;
+        height: 18px;
     }
     .password-manager-container #password-list {
         list-style: none;
-        max-height: 180px; /* Adjusted for panel size */
+        max-height: 180px;
         overflow-y: auto;
         padding-right: 5px;
     }
     .password-manager-container #password-list li {
-        padding: 10px 0; /* Adjusted */
+        padding: 10px 0;
         border-bottom: 1px solid #e9ecef;
     }
     .password-manager-container #password-list li:last-child {
@@ -358,41 +357,41 @@
     }
     .password-manager-container .pw-label {
         display: block;
-        font-size: 0.8rem; /* Adjusted */
+        font-size: 0.8rem;
         color: #6c757d;
-        margin-bottom: 2px; /* Adjusted */
+        margin-bottom: 2px;
     }
     .password-manager-container .pw-value {
         display: block;
         background: #f8f9fa;
-        padding: 6px 10px; /* Adjusted */
-        border-radius: 4px; /* Adjusted */
+        padding: 6px 10px;
+        border-radius: 4px;
         font-family: 'Courier New', monospace;
         word-break: break-all;
         border: 1px solid #e9ecef;
-        font-size: 0.85rem; /* Adjusted */
+        font-size: 0.85rem;
     }
-    .password-manager-container .error-message-password { /* Renamed from .error-message */
+    .password-manager-container .error-message-password {
         color: #dc3545;
         font-weight: 500;
         text-align: center;
-        padding: 8px 0; /* Adjusted */
-        font-size: 0.85rem; /* Adjusted */
+        padding: 8px 0;
+        font-size: 0.85rem;
     }
-    .password-manager-container #status-message-password { /* Renamed from #status-message */
+    .password-manager-container #status-message-password {
         text-align: center;
-        margin: 8px 0; /* Adjusted */
+        margin: 8px 0;
         font-weight: 500;
-        font-size: 0.85rem; /* Adjusted */
+        font-size: 0.85rem;
         min-height: 20px;
     }
     .password-manager-container footer {
         text-align: center;
-        margin-top: 15px; /* Adjusted */
-        padding-top: 15px; /* Adjusted */
+        margin-top: 15px;
+        padding-top: 15px;
         border-top: 1px solid #e9ecef;
         color: #6c757d;
-        font-size: 0.7rem; /* Adjusted */
+        font-size: 0.7rem;
     }
     /* Scrollbar styling for password-list */
     .password-manager-container #password-list::-webkit-scrollbar {
@@ -467,8 +466,10 @@
   <div id="passwordManagerView" class="password-manager-container" style="display: none;">
     <button id="backToNavigatorBtnPassword" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
     <div class="header">
-        </div>
-
+        <h1>BetterLetter Password Tools</h1>
+        <p>Enhanced password management</p>
+    </div>
+    
     <div class="btn-container">
         <button id="show-passwords" class="btn-password">👁 Show Passwords</button>
         <button id="generate-passwords" class="btn-password btn-secondary-password">🔄 Generate All</button>
@@ -479,7 +480,11 @@
     <div class="section-password">
         <div class="section-title-password">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 0 0 1 3 3m3 0a6 6 0 0 1 -7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25z" />
+                <path stroke-linecap="round" stroke-linejoin="round"
+                      d="M15.75 5.25 a 3 3 0 0 1 3 3 m 3 0 a 6 6 0 0 1 -7.029 5.912
+                        c -.563 -.097 -1.159 .026 -1.563 .43 L10.5 17.25 H8.25 v2.25 H6 v2.25
+                        H2.25 v -2.818 c 0 -.597 .237 -1.17 .659 -1.591 l 6.499 -6.499
+                        c .404 -.404 .527 -1 .43 -1.563 A 6 6 0 1 1 21.75 8.25 z"/>
             </svg>
             <span>Password Fields on Page</span>
         </div>
