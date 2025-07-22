@@ -718,14 +718,11 @@ async function openPracticePage(practiceId, settingType) {
     throw new Error(`Failed to load target setting tab (${settingType}).`);
   }
 
-  // --- RE-INTRODUCING: Small delay only if a new tab was just created,
-  //     AFTER the target element is found, but BEFORE clicking.
-  //     This gives the SPA a moment to make the element truly interactive.
-  if (newTabCreated) {
-      console.log(`%c[BL Nav - BG] New tab was created, adding small post-load delay before click for tab interactivity.`, 'color: purple;');
-      await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
-  }
-  // --- END RE-INTRODUCING ---
+  // Add a small delay to ensure the UI is fully interactive before clicking the tab.
+  // This delay applies to both new and existing tabs to ensure consistent behavior.
+  console.log(`%c[BL Nav - BG] Adding a small pre-click delay for UI interactivity.`, 'color: purple;');
+  await new Promise(resolve => setTimeout(resolve, 500)); // Increased to 500ms for robustness.
+
 
   // Now that we've waited for the specific element, attempt to click it.
   await clickSettingsTab(practiceTab.id, settingType);
