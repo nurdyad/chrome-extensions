@@ -312,6 +312,40 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
      cacheTimestamp: Date.now(),
    });
 
+   // --- NEW: Start a background process to scrape missing CDBs after initial fetch ---
+   console.log('%c[BL Nav - Background] Initiating background scrape for missing CDBs...', 'color: #9932CC;');
+   for (const key in cacheMap) {
+       const p = cacheMap[key];
+       if (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error') {
+           // Run scrape asynchronously in the background. Do not await here to avoid blocking
+           // the main fetchAndCachePracticeList, but add a small delay between each.
+           // Errors are handled within scrapePracticeCDB.
+           scrapePracticeCDB(p.ods)
+               .then(scrapedCDB => {
+                   if (scrapedCDB && scrapedCDB !== 'N/A' && scrapedCDB !== 'Error') {
+                       // Update the in-memory cache directly and persist if successful
+                       if (practiceCache[key]) { // Ensure the entry still exists
+                           practiceCache[key].cdb = scrapedCDB;
+                           chrome.storage.local.set({ practiceCache: practiceCache });
+                           cdbCache[p.ods] = scrapedCDB; // Also update in-memory cdbCache
+                           console.log(`%c[BL Nav - Background] Successfully scraped and cached CDB for ${p.ods}: ${scrapedCDB}`, 'color: #32CD32;');
+                       }
+                   }
+               })
+               .catch(error => {
+                   console.warn(`%c[BL Nav - Background] Failed background CDB scrape for ${p.ods}: ${error.message}`, 'color: orange;');
+                   if (practiceCache[key]) {
+                       practiceCache[key].cdb = 'Error'; // Mark as error to avoid re-attempting immediately
+                       chrome.storage.local.set({ practiceCache: practiceCache });
+                   }
+               });
+           // Add a small delay between each background scrape to be gentle on the browser/server
+           await new Promise(resolve => setTimeout(resolve, 50)); // 50ms delay
+       }
+   }
+   console.log('%c[BL Nav - Background] Background CDB scraping initiated for missing entries.', 'color: #9932CC;');
+   // --- END NEW ---
+
    return practicesArray; // Return the fetched array, useful for on-demand lookups.
  } catch (error) {
    // Log and propagate any errors during the fetch process.
@@ -324,7 +358,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
      try {
        await chrome.tabs.remove(tabIdToClose);
      } catch (e) {
-       console.warn(`[BL Nav - Background] Could not close tab ${tabIdToClose}: ${e.message}`);
+       console.warn(`[BL Nav - Background] Could not close temporary CDB scrape tab ${tabIdToClose}: ${e.message}`);
      }
    }
  }
@@ -491,7 +525,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             // Return status data if the practice entry is now complete.
-            if (practiceEntry && practiceEntry.ehrType !== undefined && practiceEntry.collectionQuota !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.serviceLevel !== undefined) {
+            if (practiceEntry && practiceEntry.ehrType !== undefined && practiceEntry.collectionQuota !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.serviceLevel !== undefined) {
                 console.log(`%c[BL Nav - Background] Found complete status data for ODS ${practiceOds}:`, 'color: green;', practiceEntry);
                 return { 
                     success: true,
@@ -555,7 +589,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             }
                         } catch (scrapeError) {
                             console.warn(`%c[BL Nav - Background] Could not scrape CDB for ${p.name} (${p.ods}) during search: ${scrapeError.message}`, 'color: orange;');
-                            // Mark as error in cache to avoid re-scraping immediately for this practice
+                            // Mark as error in cache to avoid re-attempting immediately for this practice
                             if (p.cdb === undefined || p.cdb === 'N/A') { // Only mark if not already a valid CDB
                                 p.cdb = 'Error';
                                 await chrome.storage.local.set({ practiceCache: practiceCache });
@@ -770,7 +804,7 @@ async function scrapePracticeCDB(odsCode) {
                     return true;
                 }
                 console.error('%c[BL Nav - Injected] EHR Settings tab not found for CDB scrape.', 'color: red;');
-                return false;
+                return 'N/A'; // Indicate failure
             }
         });
         
@@ -808,7 +842,8 @@ async function scrapePracticeCDB(odsCode) {
 
     } catch (error) {
         console.error(`%c[BL Nav - Background] ERROR: Failed to scrape CDB for ${odsCode}: ${error.message}`, 'color: red; font-weight: bold;', error);
-        throw error;
+        // Do not rethrow error here. Let the calling function (getPracticeStatus or searchCDB) handle the 'Error' status.
+        return 'Error'; // Return 'Error' to indicate scrape failure for this specific ODS
     } finally {
         if (tempTabId !== null) {
             try {

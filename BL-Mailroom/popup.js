@@ -344,7 +344,7 @@ function showStatus(message, type) {
 const practiceInputEl = document.getElementById('practiceInput');
 const suggestionsList = document.getElementById('suggestions');
 const cdbSearchInputEl = document.getElementById('cdbSearchInput');
-const cdbSuggestionsList = document.getElementById('cdbSuggestions');
+const cdbSuggestionsList = document.getElementById('cdbSuggestions'); // Added for CDB suggestions
 
 let cachedPractices = {};
 
@@ -510,11 +510,12 @@ practiceInputEl.addEventListener('keydown', (e) => {
 cdbSearchInputEl.addEventListener('input', () => {
     const query = cdbSearchInputEl.value.toLowerCase().trim();
     
+    // Filter cached practices that have a valid CDB and match the query
     const practicesWithValidCDB = Object.values(cachedPractices).filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error');
 
     const matches = query
         ? practicesWithValidCDB.filter(p => p.cdb.toLowerCase().includes(query))
-        : practicesWithValidCDB;
+        : practicesWithValidCDB; // If query is empty, show all available CDBs
 
     const displayMatches = matches
         .map(p => ({
@@ -523,7 +524,7 @@ cdbSearchInputEl.addEventListener('input', () => {
             cdb: p.cdb,
             name: p.name
         }))
-        .slice(0, 8);
+        .slice(0, 8); // Limit suggestions to a reasonable number
 
     cdbSuggestionsList.innerHTML = '';
     if (displayMatches.length === 0) {
@@ -536,10 +537,10 @@ cdbSearchInputEl.addEventListener('input', () => {
         li.textContent = match.displayName;
         li.addEventListener('click', () => {
             cdbSearchInputEl.value = match.cdb;
-            practiceInputEl.value = `${match.name} (${match.ods})`;
-            currentSelectedOdsCode = match.ods;
+            practiceInputEl.value = `${match.name} (${match.ods})`; // Populate main practice input
+            currentSelectedOdsCode = match.ods; // Set current selected ODS
             cdbSuggestionsList.style.display = 'none';
-            updateContextualButtonsOnInput(true);
+            updateContextualButtonsOnInput(true); // Update buttons and trigger status display
         });
         cdbSuggestionsList.appendChild(li);
     });
@@ -548,11 +549,11 @@ cdbSearchInputEl.addEventListener('input', () => {
 });
 
 cdbSearchInputEl.addEventListener('focus', () => {
+    // When CDB input is focused, show all known CDBs if empty
     if (cdbSearchInputEl.value.trim() === '') {
         cdbSearchInputEl.dispatchEvent(new Event('input'));
     }
 });
-
 
 cdbSearchInputEl.addEventListener('keydown', (e) => {
     const items = cdbSuggestionsList.querySelectorAll('li');
@@ -594,7 +595,6 @@ cdbSearchInputEl.addEventListener('keydown', (e) => {
       items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 });
-
 // --- END NEW: CDB Auto-suggestion Logic ---
 
 // --- Email Formatter Logic (Copied from provided popup.js) ---
@@ -655,7 +655,7 @@ async function triggerPasswordManagerFunctionality() {
 
       console.log(`%c[BL Nav - Password] Active tab URL: ${tab ? tab.url : 'N/A'}`, 'color: gray;');
 
-      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+      if (!tab || !tab.url || !tab.url.includes("https://app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
       }
@@ -688,7 +688,7 @@ async function showBLPasswords() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       // The URL check is repeated here as a fallback, though triggerPasswordManagerFunctionality also checks.
-      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+      if (!tab || !tab.url || !tab.url.includes("https://app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first.");
           return;
       }
@@ -733,7 +733,7 @@ async function generateBLPasswords() {
   try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab || !tab.url || !tab.url.includes("app.betterletter.ai/admin_panel/practices/")) {
+      if (!tab || !tab.url || !tab.url.includes("https://app.betterletter.ai/admin_panel/practices/")) {
           showPasswordError("Please open a BetterLetter Mailroom practice settings page first to generate passwords.");
           return;
       }
