@@ -5,12 +5,12 @@
   <title>Practice Navigator</title>
   <style>
     body {
-      width: 320px;
+      width: 100%; /* Make body fill its parent (the window) */
       padding: 15px;
       font-family: Arial, sans-serif;
       background: #f8f9fa;
       margin: 0;
-      box-sizing: border-box;
+      box-sizing: border-box; /* Include padding in the 100% width */
     }
     h1 {
       font-size: 1rem;
@@ -26,7 +26,7 @@
     }
     .btn {
       padding: 8px;
-      flex: 1;
+      flex: 1; /* Make buttons expand to fill space */
       font-size: 13px;
       background-color: #3498db;
       color: white;
@@ -48,7 +48,7 @@
     #usersBtn:hover:not(:disabled) {
       background-color: #27ae60;
     }
-    /* New Mailroom Buttons Styling */
+    /* Mailroom Buttons Styling */
     #preparingBtn {
       background-color: #f39c12;
     }
@@ -61,7 +61,7 @@
     #rejectedBtn:hover:not(:disabled) {
       background-color: #c0392b;
     }
-    /* New CDB Search Button Styling */
+    /* CDB Search Button Styling */
     #searchCdbBtn {
         background-color: #007bff; /* Blue */
     }
@@ -69,31 +69,29 @@
         background-color: #0056b3; /* Darker Blue */
     }
 
-    /* New Create Practice Button at top */
+    /* Top Utility Buttons Row - Adjusted for full width */
+    #topUtilityButtons {
+        display: flex;
+        justify-content: center; /* Center content within the row */
+        gap: 6px; /* Consistent gap with other btn-rows */
+        margin-bottom: 15px;
+    }
+    /* Buttons within this row will now inherit .btn's flex: 1 */
     #createPracticeTopBtn {
-        background-color: #3498db; /* Blue, consistent with default */
-        flex: none;
-        width: auto;
-        padding: 8px 15px;
-        margin-right: 6px;
+        background-color: #3498db; /* Consistent with default blue */
     }
     #createPracticeTopBtn:hover {
         background-color: #2980b9;
     }
-
-    /* Email Formatter Toggle Button Style */
     #emailFormatterToggleBtn {
         background-color: #9b59b6; /* Purple */
-        flex: none; /* Don't expand like other buttons in btn-row */
-        width: auto; /* Allow content to dictate width */
-        padding: 8px 15px; /* More horizontal padding */
     }
     #emailFormatterToggleBtn:hover {
-        background-color: #8e44ad; /* Darker Purple */
+        background-color: #8e44ad;
     }
 
     /* Password Manager Toggle Button Style (now in old Create Practice spot) */
-    #passwordToggleBtn { /* Renamed from #passwordManagerToggleBtn */
+    #passwordToggleBtn {
         background-color: #6495ED; /* Cornflower Blue */
     }
     #passwordToggleBtn:hover {
@@ -186,6 +184,10 @@
     }
 
     /* Styles for Email Formatter (from styles.css) */
+    .email-formatter-container {
+        position: relative; /* Needed for absolute positioning of back button */
+        padding-top: 40px; /* Space for back button */
+    }
     .email-formatter-container textarea {
       width: 100%;
       height: 100px;
@@ -213,18 +215,27 @@
     #convertEmailBtn:hover, #copyEmailBtn:hover {
         background-color: #45a049; /* Darker green on hover */
     }
-    #backToNavigatorBtn, #backToNavigatorBtnPassword { /* Added #backToNavigatorBtnPassword */
+    /* Back button positioning for Email Formatter */
+    #backToNavigatorBtn {
       background-color: #6c757d; /* Gray for back button */
+      position: absolute; /* Position relative to .email-formatter-container */
+      top: 5px;
+      right: 5px;
+      width: auto; /* Don't stretch */
+      padding: 5px 10px; /* Smaller padding */
+      font-size: 0.8em;
+      margin-bottom: 0; /* No bottom margin */
     }
-    #backToNavigatorBtn:hover, #backToNavigatorBtnPassword:hover { /* Added #backToNavigatorBtnPassword */
-        background-color: #5a6268; /* Darker Gray */
+    #backToNavigatorBtn:hover {
+        background-color: #5a6268;
     }
 
     /* Styles for Password Manager (from provided styles.css) - scoped to .password-manager-container */
     .password-manager-container {
         font-family: 'Segoe UI', system-ui, sans-serif;
         color: #212529;
-        /* Padding and background set by common body style, might need adjustment */
+        position: relative; /* Needed for absolute positioning of back button */
+        padding-top: 40px; /* Space for back button */
     }
     .password-manager-container .header {
         text-align: center;
@@ -358,6 +369,21 @@
         color: #6c757d;
         font-size: 0.7rem; /* Adjusted */
     }
+    /* Back button positioning for Password Manager */
+    #backToNavigatorBtnPassword {
+      background-color: #6c757d; /* Gray for back button */
+      position: absolute; /* Position relative to .password-manager-container */
+      top: 5px;
+      right: 5px;
+      width: auto; /* Don't stretch */
+      padding: 5px 10px; /* Smaller padding */
+      font-size: 0.8em;
+      margin-bottom: 0; /* No bottom margin */
+    }
+    #backToNavigatorBtnPassword:hover {
+        background-color: #5a6268;
+    }
+
     /* Scrollbar styling for password-list */
     .password-manager-container #password-list::-webkit-scrollbar {
         width: 5px;
@@ -376,14 +402,12 @@
   </style>
 </head>
 <body>
-  <div class="btn-row" style="margin-bottom: 15px; justify-content: flex-start; gap: 10px;">
+  <div id="topUtilityButtons" class="btn-row">
     <button id="createPracticeTopBtn" class="btn">Create Practice</button>
     <button id="emailFormatterToggleBtn" class="btn">Email Formatter</button>
   </div>
 
   <div id="practiceNavigatorView">
-    <h1>Practice Navigator</h1>
-
     <div class="btn-row">
       <button id="practicesBtn" class="btn">Practices</button>
       <button id="usersBtn" class="btn">Users</button>

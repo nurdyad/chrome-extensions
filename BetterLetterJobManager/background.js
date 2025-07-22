@@ -1,5 +1,20 @@
+// Listener for messages from content scripts (e.g., mailroom_page_integrator.js)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log("Background: Received message:", message.type, message); // Debug
+    // Listener for data from mailroom_page_integrator.js
+    if (message.type === 'mailroom_doc_clicked' && message.data) {
+        console.log("Background: Processing mailroom_doc_clicked message. Data received:", message.data); // Debug
+        chrome.storage.local.set({ clickedMailroomDocData: message.data }).then(() => {
+            console.log("Background: Stored clickedMailroomDocData successfully."); // Debug
+        }).catch(err => {
+            console.error("Background: Error storing clickedMailroomDocData:", err); // Debug
+        });
+        sendResponse({ status: 'Data received and stored in background' }); // Send response back to content script
+        return true; // Indicate asynchronous response
+    }
+    return false; 
+});
 
-// Listener for when the extension icon is clicked
 chrome.action.onClicked.addListener(async (tab) => {
     const dashboardUrl = "https://app.betterletter.ai/admin_panel/bots/dashboard";
     let targetTabForData = tab.id;
@@ -56,19 +71,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (changeInfo.url) {
         await chrome.storage.local.set({ targetTabId: tabId });
     }
-});
-
-// NEW: Listener for messages from mailroom_page_integrator.js
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // Listener for data from mailroom_page_integrator.js
-    if (message.type === 'mailroom_doc_clicked' && message.data) {
-        // Store the received data in storage so panel.js can access it
-        chrome.storage.local.set({ clickedMailroomDocData: message.data }).then(() => {
-            console.log("Received mailroom_doc_clicked data:", message.data);
-        }).catch(err => {
-            console.error("Error storing mailroom_doc_clicked data:", err);
-        });
-        return true; // Indicate asynchronous response
-    }
-    // If there were other message types, they would be handled by 'else if' or separate listeners here.
 });

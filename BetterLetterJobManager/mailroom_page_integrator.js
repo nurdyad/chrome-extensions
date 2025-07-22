@@ -1,78 +1,160 @@
 
+console.log("Mailroom Integrator: Script loaded.");
+
 // Function to extract data from a table row on Mailroom pages (Rejected, Preparing, etc.)
 function extractDataFromMailroomRow(row) {
+    console.log("Mailroom Integrator: Processing row:", row);
     const cells = row.querySelectorAll('td');
-    // Basic check for minimum number of cells
-    if (cells.length < 6) { 
+    console.log(`Mailroom Integrator: Row has ${cells.length} cells.`);
+
+    // Based on the latest screenshot, expecting 7 columns (0-6)
+    if (cells.length < 7) { 
+        console.log("Mailroom Integrator: Row has too few cells (<7), skipping.", row);
         return null;
     }
 
-    const originalNameLink = cells[0]?.querySelector('a'); // Document ID is typically in the first column's link
-    // Regex to extract ID from URL like /123456.pdf or from text 123456.pdf
-    const documentIdMatch = originalNameLink?.href.match(/\/(\d+)\.pdf$/) || originalNameLink?.textContent.match(/^(\d{6})\.pdf$/); 
-
-    const documentId = documentIdMatch ? documentIdMatch[1] : null;
-    const jobType = cells[1]?.innerText.trim(); // Assuming Job Type is in the second column
-    const practiceCell = cells[2]?.innerText.trim(); // Assuming Practice is in the third column
-    const [practiceName, odsCode] = practiceCell ? practiceCell.split('\n').map(t => t.trim()) : ['', ''];
-    const jobId = cells[3]?.innerText.trim(); // Assuming Job ID is in the fourth column
-
-    if (documentId && /^\d{6}$/.test(documentId)) { // Ensure it's a valid 6-digit ID
-        return { documentId, jobType, practiceName, odsCode, jobId };
+    // --- Column 0: Document ID (from span) ---
+    const docIdSpan = cells[0]?.querySelector('div > span.grow-0.overflow-x-clip'); 
+    const documentId = docIdSpan ? docIdSpan.textContent.trim() : null;
+    console.log("Mailroom Integrator: Extracted Document ID:", documentId);
+    if (!documentId || !/^\d+$/.test(documentId)) { // Allow any number of digits
+        console.log("Mailroom Integrator: Document ID not found or invalid format.", documentId);
+        return null;
     }
-    return null;
+
+    const originalNameContent = cells[0]?.innerText.trim(); // Full text of the first column
+    
+    // --- Column 1: Status (e.g., "Patient not matched", "Missing NHS No.") ---
+    const statusContent = cells[1]?.innerText.trim();
+    console.log("Mailroom Integrator: Extracted Status Content (col 1):", statusContent);
+
+    // --- Column 2: Time Spent (e.g., "Paused") ---
+    const timeSpent = cells[2]?.innerText.trim();
+    console.log("Mailroom Integrator: Extracted Time Spent (col 2):", timeSpent);
+
+    // --- Column 3: Document Name (contains UUID in title attribute) ---
+    const docNameTd = cells[3]; // This td contains the link with the UUID filename
+    const jobIdMatch = docNameTd?.title.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+    const jobId = jobIdMatch ? jobIdMatch[1] : null;
+    console.log("Mailroom Integrator: Extracted Job ID (UUID from col 3 title):", jobId);
+
+    // --- Column 4: Expected Return Date ---
+    const expectedReturnDate = cells[4]?.innerText.trim();
+    console.log("Mailroom Integrator: Extracted Expected Return Date (col 4):", expectedReturnDate);
+
+    // --- Column 5: Practice Name (from its title attribute if available, or innerText) ---
+    const practiceTd = cells[5];
+    const practiceName = practiceTd?.title || practiceTd?.innerText.trim(); // Get from title attribute first
+    const odsCode = null; // ODS Code is not available in this table view
+    console.log("Mailroom Integrator: Extracted Practice Name (col 5):", practiceName);
+
+    // --- Column 6: Urgent Status (not needed for panel fields, but for completeness) ---
+    const urgentStatus = cells[6]?.querySelector('[data-test-id="urgent"]')?.innerText.trim(); 
+    console.log("Mailroom Integrator: Extracted Urgent Status (col 6):", urgentStatus);
+
+
+    // --- Inferring fields that are not direct columns or need special handling ---
+    // NHS No., Patient Name, Reason, Rejected By / On are NOT in these columns in this table view.
+    // They are in the 'Rejected' table, but not 'Preparing' based on your previous screenshots.
+    const nhsNo = null;
+    const patientName = null;
+    const reason = null;
+    const rejectedByOn = null;
+    
+    let inferredJobType = null;
+    if (originalNameContent && originalNameContent.toLowerCase().includes("clinical letter")) inferredJobType = "Clinical letter";
+    else if (originalNameContent && originalNameContent.toLowerCase().includes("document")) inferredJobType = "Document";
+
+    console.log("Mailroom Integrator: Final extracted data for row.");
+    return { 
+        documentId, 
+        originalNameContent, 
+        nhsNo, 
+        patientName, 
+        practiceName, 
+        odsCode, 
+        reason, 
+        rejectedByOn, 
+        status: statusContent, // From Column 1
+        jobId, 
+        inferredJobType 
+    };
 }
 
-// Function to add click listeners to Document ID links on Mailroom pages
+// Function to add double-click listeners to Document ID elements on Mailroom pages
 function addMailroomDocIdListeners() {
-    // Target table rows on Mailroom pages
-    // This selector should be robust enough for similar table structures
-    const tableRows = document.querySelectorAll('table.table tbody tr'); 
+    console.log("Mailroom Integrator: Running addMailroomDocIdListeners.");
+    const tableRows = document.querySelectorAll('#documents-table-body tr'); 
+    console.log(`Mailroom Integrator: Found ${tableRows.length} table rows with #documents-table-body tr.`);
 
     tableRows.forEach(row => {
-        // Prevent processing the same row multiple times
         if (row.dataset.processedByMailroomExt) {
             return;
         }
-        row.dataset.processedByMailroomExt = 'true'; // Mark as processed
+        row.dataset.processedByMailroomExt = 'true';
 
-        const originalNameLink = row.querySelector('td:first-child a'); // The link in the first column
+        const docIdElement = row.querySelector('td:first-child div > span.grow-0.overflow-x-clip');
 
-        if (originalNameLink) {
+        if (docIdElement) {
             const rowData = extractDataFromMailroomRow(row);
             if (rowData) {
-                // Store data directly on the link's dataset for easy access in the click handler
-                originalNameLink.dataset.documentId = rowData.documentId;
-                originalNameLink.dataset.jobType = rowData.jobType;
-                originalNameLink.dataset.practiceName = rowData.practiceName;
-                originalNameLink.dataset.odsCode = rowData.odsCode;
-                originalNameLink.dataset.jobId = rowData.jobId;
+                // Store all extracted data in the dataset
+                docIdElement.dataset.documentId = rowData.documentId;
+                docIdElement.dataset.originalNameContent = rowData.originalNameContent; 
+                docIdElement.dataset.nhsNo = rowData.nhsNo;
+                docIdElement.dataset.patientName = rowData.patientName;
+                docIdElement.dataset.practiceName = rowData.practiceName;
+                docIdElement.dataset.odsCode = rowData.odsCode;
+                docIdElement.dataset.reason = rowData.reason;
+                docIdElement.dataset.rejectedByOn = rowData.rejectedByOn;
+                docIdElement.dataset.status = rowData.status;
+                docIdElement.dataset.jobId = rowData.jobId; 
+                docIdElement.dataset.inferredJobType = rowData.inferredJobType; 
 
-                // Add a click listener to the link
-                originalNameLink.addEventListener('click', (e) => {
-                    // Send message to background script with the extracted data
+                docIdElement.addEventListener('dblclick', (e) => { 
+                    e.preventDefault(); 
+                    e.stopPropagation(); 
+
+                    console.log("Mailroom Integrator: Document ID DOUBLE-CLICKED! Sending message to background.", e.currentTarget.dataset);
                     chrome.runtime.sendMessage({
-                        type: 'mailroom_doc_clicked', // NEW message type
+                        type: 'mailroom_doc_clicked',
                         data: {
                             documentId: e.currentTarget.dataset.documentId,
-                            jobType: e.currentTarget.dataset.jobType,
+                            originalNameContent: e.currentTarget.dataset.originalNameContent, 
+                            nhsNo: e.currentTarget.dataset.nhsNo,
+                            patientName: e.currentTarget.dataset.patientName,
                             practiceName: e.currentTarget.dataset.practiceName,
                             odsCode: e.currentTarget.dataset.odsCode,
-                            jobId: e.currentTarget.dataset.jobId
+                            reason: e.currentTarget.dataset.reason,
+                            rejectedByOn: e.currentTarget.dataset.rejectedByOn,
+                            status: e.currentTarget.dataset.status,
+                            jobId: e.currentTarget.dataset.jobId, 
+                            inferredJobType: e.currentTarget.dataset.inferredJobType 
                         }
+                    }).then(response => {
+                        console.log('Mailroom Integrator: Message sent response from background:', response);
                     }).catch(error => {
-                        console.error('Error sending mailroom_doc_clicked message:', error);
+                        console.error('Mailroom Integrator: Error sending message:', error);
                     });
-                    // Allow default navigation to happen after sending message
                 });
+            } else {
+                console.log("Mailroom Integrator: Row data extraction failed for element, no listener added for:", docIdElement);
             }
+        } else {
+            console.log("Mailroom Integrator: No Document ID span found in row (td:first-child div > span.grow-0.overflow-x-clip):", row);
         }
     });
 }
 
-// Observe DOM changes (e.g., pagination, new rows loading)
-const observer = new MutationObserver(addMailroomDocIdListeners);
+const observer = new MutationObserver((mutationsList, observer) => {
+    clearTimeout(window._mailroomObserverTimeout);
+    window._mailroomObserverTimeout = setTimeout(() => {
+        addMailroomDocIdListeners();
+    }, 500);
+});
+
 observer.observe(document.body, { childList: true, subtree: true });
 
-// Run once on initial page load
-addMailroomDocIdListeners();
+setTimeout(() => {
+    addMailroomDocIdListeners();
+}, 1000); 
