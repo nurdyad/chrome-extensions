@@ -413,7 +413,6 @@
 <body>
   <div class="btn-row global-nav-buttons-row">
     <button id="navigatorGlobalToggleBtn" class="btn">Navigator</button>
-    <button id="passwordGlobalToggleBtn" class="btn">Password</button>
     <button id="emailFormatterGlobalToggleBtn" class="btn">Email Formatter</button>
   </div>
 
@@ -427,7 +426,10 @@
     <input id="practiceInput" placeholder="e.g. Ashfield or H81017" autocomplete="off"/>
     <ul id="suggestions"></ul>
 
-    <label for="settingType">Setting Type</label>
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+      <label for="settingType" style="margin-bottom: 0;">Setting Type</label>
+      <button id="resetSettingsBtn" class="btn" style="width: auto; padding: 4px 8px; font-size: 10px; background-color: #6c757d; color: white; border-radius: 3px; flex: none;">Reset</button>
+    </div>
     <select id="settingType">
       <option value="" selected disabled hidden>Select Setting Type</option> <option value="basic">Basic</option>
       <option value="service">Service</option>
@@ -461,41 +463,6 @@
     <button id="convertEmailBtn">Convert</button>
     <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
     <button id="copyEmailBtn">Copy</button>
-  </div>
-
-  <div id="passwordManagerView" class="password-manager-container" style="display: none;">
-    <button id="backToNavigatorBtnPassword" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
-    <div class="header">
-        <h1>BetterLetter Password Tools</h1>
-        <p>Enhanced password management</p>
-    </div>
-    
-    <div class="btn-container">
-        <button id="show-passwords" class="btn-password">👁 Show Passwords</button>
-        <button id="generate-passwords" class="btn-password btn-secondary-password">🔄 Generate All</button>
-    </div>  
-    
-    <div id="status-message-password"></div>
-    
-    <div class="section-password">
-        <div class="section-title-password">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round"
-                      d="M15.75 5.25 a 3 3 0 0 1 3 3 m 3 0 a 6 6 0 0 1 -7.029 5.912
-                        c -.563 -.097 -1.159 .026 -1.563 .43 L10.5 17.25 H8.25 v2.25 H6 v2.25
-                        H2.25 v -2.818 c 0 -.597 .237 -1.17 .659 -1.591 l 6.499 -6.499
-                        c .404 -.404 .527 -1 .43 -1.563 A 6 6 0 1 1 21.75 8.25 z"/>
-            </svg>
-            <span>Password Fields on Page</span>
-        </div>
-        <ul id="password-list">
-            <li class="no-passwords">Click 'Show Passwords' to see fields from the active BetterLetter page.</li>
-        </ul>
-    </div>
-    
-    <footer>
-        <p>BetterLetter Mailroom Extension v1.3</p>
-    </footer>
   </div>
 
   <script src="popup.js"></script>
