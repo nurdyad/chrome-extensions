@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "BetterLetter All-in-One",
+  "version": "1.0.0",
+  "description": "Combines BetterLetter Mailroom document processing, Jobs Dashboard management, Practice Navigation, and Password Tools into a single extension.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "scripting",
+    "clipboardWrite",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://app.betterletter.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.betterletter.ai/admin_panel/mailroom*",
+        "https://app.betterletter.ai/mailroom/rejected*",
+        "https://app.betterletter.ai/mailroom/preparing*"
+      ],
+      "js": ["mailroom_page_integrator.js"]
+    },
+    {
+      "matches": ["https://app.betterletter.ai/admin_panel/bots/dashboard*", "https://app.betterletter.ai/admin_panel/mailroom*"],
+      "js": ["password_content.js"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
