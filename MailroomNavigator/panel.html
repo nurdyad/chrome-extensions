@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BetterLetter All-in-One</title>
+  <style>
+    /* Merged Styles from BetterLetterJobManager/panel.html and BL-Mailroom/floating_window.html, and BL-Mailroom/styles.css */
+
+    body {
+      font-family: Arial, sans-serif;
+      padding: 8px; /* Reduced padding for less marginal whitespace, from floating_window.html */
+      width: auto; /* Let content dictate width, or fill window, from floating_window.html */
+      background-color: #f8f9fa; /* From floating_window.html */
+      color: #333;
+      margin: 0; /* From floating_window.html */
+      box-sizing: border-box; /* From floating_window.html */
+    }
+
+    h1 {
+      font-size: 1rem; /* From floating_window.html */
+      text-align: center;
+      margin-bottom: 10px;
+      color: #333;
+    }
+
+    .section-container { /* From BetterLetterJobManager/panel.html */
+      background-color: #fff;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      position: relative;
+    }
+
+    h3 { /* From BetterLetterJobManager/panel.html */
+      margin-top: 0;
+      margin-bottom: 8px;
+      color: #00BFFF;
+      font-size: 1.1em;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 3px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px; /* Combined margin from both */
+      font-weight: bold; /* From BetterLetterJobManager/panel.html */
+      color: #555; /* From BetterLetterJobManager/panel.html */
+      font-size: 0.9em; /* From floating_window.html */
+    }
+
+    input[type="text"], input[list], select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px; /* From floating_window.html, slightly more than panel.html */
+      border: 1px solid #ccc; /* From floating_window.html */
+      border-radius: 4px; /* From floating_window.html */
+      box-sizing: border-box;
+      font-size: 0.9em; /* From BetterLetterJobManager/panel.html */
+      background-color: #fcfcfc; /* From BetterLetterJobManager/panel.html */
+    }
+    input[readonly] { /* From BetterLetterJobManager/panel.html */
+      background-color: #e9ecef;
+      cursor: default;
+    }
+
+    /* Unified button styles */
+    .btn { /* From floating_window.html */
+      padding: 8px;
+      flex: 1;
+      font-size: 13px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.2s ease, opacity 0.2s ease;
+    }
+    .btn:hover:not(:disabled) { /* From floating_window.html */
+      background-color: #2980b9;
+    }
+    .btn:disabled { /* From floating_window.html */
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* Specific button overrides / additional styles from BetterLetterJobManager */
+    button { /* This applies to buttons not using .btn class, like small-button in JobManager's panel */
+      background-color: #00BFFF; /* Main color from BetterLetterJobManager */
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.95em;
+      transition: background-color 0.2s ease;
+      width: 100%;
+      margin-top: 3px;
+    }
+    button:hover { /* Hover for non-.btn buttons */
+      background-color: #009ACD;
+    }
+
+
+    /* Button grid for BetterLetterJobManager actions */
+    .button-grid { /* From BetterLetterJobManager/panel.html */
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+      gap: 10px;
+      margin-top: 5px;
+    }
+    .button-grid button { /* Specific adjustments for buttons in grid */
+      padding: 8px;
+      font-size: 0.8em;
+    }
+
+    /* Info rows from BetterLetterJobManager/panel.html */
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 6px 0;
+      border-bottom: 1px dashed #eee;
+      font-size: 0.9em;
+      color: #444;
+    }
+    .info-row:last-of-type {
+      border-bottom: none;
+      margin-bottom: 8px;
+    }
+    .info-value {
+      font-weight: bold;
+      color: #444;
+      text-align: right;
+    }
+
+    /* Input with button for BetterLetterJobManager */
+    .input-with-button {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 8px;
+    }
+    .input-with-button .info-input {
+      flex-grow: 1;
+      margin-bottom: 0;
+    }
+    .input-with-button .small-button {
+      width: auto;
+      flex-shrink: 0;
+      padding: 8px;
+      font-size: 0.85em;
+      margin-top: 0;
+    }
+
+    /* Autocomplete styling for BetterLetterJobManager */
+    .custom-autocomplete-results {
+      position: absolute;
+      top: 100%;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1002;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      display: none;
+      margin-top: -5px;
+      width: calc(100% - 20px); /* Adjust based on padding of section-container */
+      left: 10px; /* Align with input */
+    }
+    .custom-autocomplete-results .autocomplete-item {
+      padding: 10px;
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+      font-size: 0.9em;
+      color: #333;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .custom-autocomplete-results .autocomplete-item:last-child {
+      border-bottom: none;
+    }
+    .custom-autocomplete-results .autocomplete-item:hover,
+    .custom-autocomplete-results .autocomplete-item.active {
+      background-color: #f0f0f0;
+      color: #00BFFF;
+    }
+
+    /* Practice input grid from BetterLetterJobManager */
+    .practice-input-grid {
+      display: grid;
+      grid-template-columns: 3fr 1fr 1fr;
+      gap: 5px;
+    }
+    .practice-input-grid input {
+      margin-bottom: 0 !important;
+    }
+    .practice-input-grid button {
+      margin-top: 0 !important;
+    }
+
+    /* Toast notification from BetterLetterJobManager */
+    #toast {
+      display: none;
+      position: fixed;
+      bottom: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #323232;
+      color: white;
+      padding: 10px 15px;
+      border-radius: 4px;
+      font-size: 14px;
+      z-index: 1000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      white-space: nowrap;
+    }
+
+    /* Job Title section from BetterLetterJobManager */
+    #jobTitleSection {
+      margin-top: 10px !important;
+      padding-top: 8px !important;
+      border-top: 1px dashed #eee;
+    }
+
+    /* General button row from floating_window.html */
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      justify-content: center;
+    }
+    #usersBtn { background-color: #2ecc71; } /* Specific button colors */
+    #usersBtn:hover:not(:disabled) { background-color: #27ae60; }
+    #preparingBtn { background-color: #f39c12; }
+    #preparingBtn:hover:not(:disabled) { background-color: #e67e22; }
+    #rejectedBtn { background-color: #e74c3c; }
+    #rejectedBtn:hover:not(:disabled) { background-color: #c0392b; }
+    #searchCdbBtn { background-color: #007bff; }
+    #searchCdbBtn:hover:not(:disabled) { background-color: #0056b3; }
+
+    /* Global navigation tabs */
+    .global-nav-buttons-row {
+      display: flex;
+      justify-content: space-around;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #ddd;
+    }
+    .global-nav-buttons-row .btn {
+      flex: 1;
+      padding: 10px 8px;
+      font-size: 13px;
+      background-color: #f0f0f0;
+      color: #555;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+      margin: 0 1px;
+      margin-bottom: -1px;
+    }
+    .global-nav-buttons-row .btn:hover {
+      background-color: #e0e0e0;
+    }
+    .global-nav-buttons-row .btn.active-tab {
+      background-color: #fff;
+      color: #333;
+      border-bottom: 2px solid #3498db;
+      font-weight: bold;
+      z-index: 1;
+    }
+    /* Specific colors for active global nav buttons (overrides default background) */
+    #navigatorGlobalToggleBtn.active-tab { color: #3498db; border-bottom-color: #3498db;}
+    #jobManagerGlobalToggleBtn.active-tab { color: #00BFFF; border-bottom-color: #00BFFF;} /* Changed to reflect JID color */
+    #emailFormatterGlobalToggleBtn.active-tab { color: #9b59b6; border-bottom-color: #9b59b6;}
+
+    /* Suggestions list from floating_window.html */
+    #suggestions, #cdbSuggestions {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid #ccc;
+      max-height: 140px;
+      overflow-y: auto;
+      display: none;
+      background: white;
+      position: absolute;
+      width: calc(100% - 16px); /* Adjusted to match body padding */
+      z-index: 1000;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      border-radius: 4px;
+      left: 8px; /* Align with body padding */
+    }
+    #suggestions li, #cdbSuggestions li {
+      padding: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.1s ease;
+    }
+    #suggestions li:hover, #suggestions li.highlighted,
+    #cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
+      background-color: #e9e9e9;
+    }
+
+    /* Status display from floating_window.html */
+    #status {
+      margin-top: 10px;
+      padding: 6px;
+      text-align: center;
+      border-radius: 4px;
+      display: none;
+      font-size: 0.9em;
+    }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+    .loading { background: #cce5ff; color: #004085; }
+
+    /* Status Display Area and CDB Search Result */
+    #statusDisplay, #cdbSearchResult {
+        margin-top: 10px;
+        padding: 8px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background-color: #f0f0f0;
+        text-align: left;
+        font-size: 0.9em;
+        color: #333;
+        display: none;
+    }
+
+    /* Email Formatter styles */
+    .email-formatter-container textarea {
+      width: 100%;
+      height: 100px;
+      margin-bottom: 10px;
+      box-sizing: border-box;
+    }
+    #convertEmailBtn, #copyEmailBtn {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+    #convertEmailBtn:hover, #copyEmailBtn:hover {
+        background-color: #45a049;
+    }
+
+    /* Back to Navigator button positioning for sub-views */
+    .back-to-nav-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background-color: #6c757d;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 16px;
+      z-index: 10;
+      width: auto;
+      flex: none;
+      line-height: 1;
+      text-align: center;
+    }
+    .back-to-nav-btn:hover {
+        background-color: #5a6268;
+    }
+    .email-formatter-container, .job-manager-container { /* Renamed for clarity */
+        position: relative;
+        padding-top: 40px;
+    }
+    .email-formatter-container h1,
+    .job-manager-container h1 { /* Renamed for clarity */
+        margin-top: 0;
+        margin-bottom: 20px;
+        padding-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="btn-row global-nav-buttons-row">
+    <button id="navigatorGlobalToggleBtn" class="btn">Navigator</button>
+    <button id="jobManagerGlobalToggleBtn" class="btn">Job Panel</button>
+    <button id="emailFormatterGlobalToggleBtn" class="btn">Email Formatter</button>
+  </div>
+
+  <div id="practiceNavigatorView">
+    <h1>Practice Navigator</h1>
+    <div class="btn-row">
+      <button id="practicesBtn" class="btn">Practices</button>
+      <button id="usersBtn" class="btn">Users</button>
+    </div>
+
+    <label for="practiceInput">Practice Name or ODS</label>
+    <input id="practiceInput" placeholder="e.g. Ashfield or H81017" autocomplete="off"/>
+    <ul id="suggestions"></ul>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+      <label for="settingType" style="margin-bottom: 0;">Setting Type</label>
+      <button id="resetSettingsBtn" class="btn" style="width: auto; padding: 4px 8px; font-size: 10px; background-color: #6c757d; color: white; border-radius: 3px; flex: none;">Reset</button>
+    </div>
+    <select id="settingType">
+      <option value="" selected disabled hidden>Select Setting Type</option>
+      <option value="basic">Basic</option>
+      <option value="service">Service</option>
+      <option value="workflows">Workflows</option>
+      <option value="ehr_settings">EHR Settings</option>
+    </select>
+
+    <div class="btn-row" style="margin-top: 12px;">
+        <button id="createPracticeAdminBtn" class="btn">Create New Practice</button>
+    </div>
+
+    <div class="btn-row">
+      <button id="preparingBtn" class="btn">Preparing</button>
+      <button id="rejectedBtn" class="btn">Rejected</button>
+    </div>
+
+    <label for="cdbSearchInput">Search by Practice CDB</label>
+    <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off"/>
+    <ul id="cdbSuggestions"></ul>
+    <div class="btn-row">
+      <button id="searchCdbBtn" class="btn">Search CDB</button>
+    </div>
+    <div id="cdbSearchResult"></div>
+    <div id="status"></div>
+    <div id="statusDisplay"></div>
+  </div>
+
+  <div id="jobManagerView" class="job-manager-container" style="display: none;">
+    <h1>Job Panel</h1>
+    <button id="backToNavigatorBtnJobPanel" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
+
+    <div id="documentSelectionSection" class="section-container">
+      <h3>Document Selection</h3>
+      <label for="documentDropdown">Document ID:</label>
+      <div class="input-with-button">
+        <input id="documentDropdown" placeholder="Enter or select document ID" autocomplete="off">
+        <button id="copySelectedDocId" class="small-button">&#x1F4CB;</button>
+        <button id="clearDocId" class="small-button">Clear</button>
+        <div id="autocompleteResults" class="custom-autocomplete-results"></div>
+      </div>
+    </div>
+
+    <div id="mailroomDetailsSection" class="section-container" style="display: none;">
+      <h3>Mailroom Details</h3>
+      <div class="info-row">
+        <span>Original Name:</span>
+        <span id="mailroom-original-name" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>NHS No.:</span>
+        <span id="mailroom-nhs-no" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Patient Name:</span>
+        <span id="mailroom-patient-name" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Reason:</span>
+        <span id="mailroom-reason" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Rejected By / On:</span>
+        <span id="mailroom-rejected-by-on" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Status:</span>
+        <span id="mailroom-status" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Job ID (Mailroom):</span>
+        <span id="mailroom-job-id" class="info-value">—</span>
+      </div>
+      <div class="info-row">
+        <span>Inferred Type:</span>
+        <span id="mailroom-inferred-type" class="info-value">—</span>
+      </div>
+      <button id="copyMailroomDetails" class="small-button">Copy All Mailroom Details</button>
+    </div>
+
+    <div id="documentActionsSection" style="display: none;">
+      <div class="section-container">
+        <h3>Document Actions</h3>
+        <div class="button-grid">
+          <button id="openDocumentStatus">Status</button>
+          <button id="openObanJob">Oban</button>
+          <button id="openAnnotation">Annotation</button>
+          <button id="openEventLog">Evt Log</button>
+          <button id="openLetterAdmin">L. Admin</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-container">
+      <h3>Practice Details (from Job Data)</h3>
+      <label for="practiceDropdown">Practice Name:</label>
+      <div class="input-with-button practice-input-grid">
+        <input id="practiceDropdown" placeholder="Enter or select practice" autocomplete="off">
+        <button id="openPractice" class="small-button">Open</button>
+        <button id="copyPracticeName" class="small-button">&#x1F4CB;</button>
+        <div id="practiceAutocompleteResults" class="custom-autocomplete-results"></div>
+      </div>
+
+      <div class="info-row" style="margin-top: 10px; border-bottom: none;">
+        <span>ODS Code:</span>
+        <span id="ods-code" class="info-value">—</span>
+      </div>
+    </div>
+
+    <div class="section-container">
+      <h3>Job Details</h3>
+      <div class="info-row">
+        <span>Job Type:</span>
+        <span id="job-type-label" class="info-value">—</div>
+      <label for="job-id">Job ID:</label>
+      <div class="autocomplete-wrapper">
+        <div class="input-with-button">
+          <input type="text" id="job-id" readonly class="info-input">
+          <button id="copy-job-id" class="small-button">&#x1F4CB;</button>
+        </div>
+        <div id="jobIdAutocompleteResults" class="custom-autocomplete-results"></div>
+      </div>
+      <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+        <button id="openJobDirect" class="small-button" style="flex: 1;">Open Job Page</button>
+        <button id="copyJobPageUrl" class="small-button" style="flex: 1;">&#x1F4CB; URL</button>
+      </div>
+
+      <div id="jobTitleSection" style="display: none;">
+        <label for="jobTitleDisplay">Job Title:</label>
+        <div class="input-with-button">
+          <input type="text" id="jobTitleDisplay" readonly class="info-input">
+          <button id="copyJobTitle" class="small-button">&#x1F4CB;</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+
+
+  <div id="emailFormatterView" class="email-formatter-container" style="display: none;">
+    <h1>Email Formatter</h1>
+    <button id="backToNavigatorBtnEmail" class="btn back-to-nav-btn" title="Back to Navigator">&#x2190;</button>
+    <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
+    <button id="convertEmailBtn">Convert</button>
+    <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
+    <button id="copyEmailBtn">Copy</button>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
