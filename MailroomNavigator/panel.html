@@ -194,6 +194,7 @@
 
     .input-with-button input {
       flex-grow: 1;
+      height: 36px;
       margin-bottom: 0 !important;
     }
 
@@ -252,6 +253,22 @@
       transform: translateY(-2px);
       box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
     }
+
+    select#settingType {
+      width: calc(100% - 40px); /* Adjust width if needed to align with search button */
+      height: 36px;
+      padding: 8px 10px;
+      font-size: 0.9em;
+      font-family: inherit;
+      border: 1px solid var(--dark-gray);
+      border-radius: 4px; /* Match your input fields */
+      background-color: white;
+      box-sizing: border-box;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+    }
+
 
     #jobTitleSection {
       margin-top: 12px !important;
@@ -612,7 +629,7 @@
     
     <!-- Practice Input Section with Buttons -->
     <div style="margin-bottom: 15px;">
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
         <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Practice Name or ODS</label>
         <button id="createPracticeAdminBtn" class="btn btn-sm">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -630,13 +647,19 @@
           </svg>
           Users
         </button>
-      </div>
-      <div class="input-with-button">
-        <input id="practiceInput" placeholder="e.g. Ashfield or H81017" autocomplete="off">
         <button id="practicesBtn" class="btn btn-sm">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="input-with-button">
+        <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
+        <button id="resetSettingsBtn" class="btn btn-sm">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
+            <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
           </svg>
         </button>
       </div>
@@ -646,34 +669,29 @@
 
     <!-- Setting Type Section with Reset Button -->
     <div style="margin-bottom: 15px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-        <label for="settingType" style="margin-bottom: 0;">Setting Type</label>
-        <button id="resetSettingsBtn" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
-            <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
-          </svg>
-        </button>
+      <label for="settingType">Setting Type</label>
+      <div class="input-with-button">
+        <select id="settingType">
+          <option value="" selected disabled hidden>Select Setting Type</option>
+          <option value="basic">Basic</option>
+          <option value="service">Service</option>
+          <option value="workflows">Workflows</option>
+          <option value="ehr_settings">EHR Settings</option>
+        </select>
       </div>
-      <select id="settingType" style="width: 100%;">
-        <option value="" selected disabled hidden>Select Setting Type</option>
-        <option value="basic">Basic</option>
-        <option value="service">Service</option>
-        <option value="workflows">Workflows</option>
-        <option value="ehr_settings">EHR Settings</option>
-      </select>
     </div>
+
 
     <!-- Status Buttons Row -->
     <div class="btn-row">
-      <button id="preparingBtn" class="btn" disabled>
+      <button id="preparingBtn" class="btn btn-sm" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 16 14"></polyline>
         </svg>
         Preparing
       </button>
-      <button id="rejectedBtn" class="btn" disabled>
+      <button id="rejectedBtn" class="btn btn-sm" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>
