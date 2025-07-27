@@ -1,5 +1,5 @@
 /**
- * Merged panel.js
+ * panel.js
  *
  * This script runs in the context of the unified panel.html popup.
  * It combines functionalities from BL-Mailroom's popup.js and BetterLetterJobManager's panel.js.
@@ -121,6 +121,7 @@ function showToast(message) {
 
 function setContextualButtonsState(enable) {
   document.getElementById('usersBtn').disabled = !enable;
+  document.getElementById('collectionBtn').disabled = !enable;
   document.getElementById('preparingBtn').disabled = !enable;
   document.getElementById('rejectedBtn').disabled = !enable;
 }
@@ -973,6 +974,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('practicesBtn').addEventListener('click', () => {
         chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices' });
     });
+    
+    // Add the click listener for the new Import button
+    document.getElementById('collectionBtn').addEventListener('click', () => {
+    if (currentSelectedOdsCode) {
+        const url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=docman_import+emis_prepare&practice_ids=${currentSelectedOdsCode}&status=paused`;
+        chrome.tabs.create({ url });
+    } else {
+        showToast('Please select a valid practice first.');
+    }
+    });
 
     document.getElementById('usersBtn').addEventListener('click', () => {
         if (currentSelectedOdsCode) {
@@ -1175,10 +1186,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Email Formatter Event Listeners
     convertEmailBtn.addEventListener("click", convertEmails);
     copyEmailBtn.addEventListener("click", copyEmails);
-    document.getElementById("backToNavigatorBtnEmail").addEventListener("click", () => showView('practiceNavigatorView'));
 
     // Job Manager Event Listeners
-    document.getElementById("backToNavigatorBtnJobPanel").addEventListener("click", () => showView('practiceNavigatorView'));
 
     clearDocIdBtn.onclick = () => {
         docInput.value = "";
