@@ -119,11 +119,19 @@ function showToast(message) {
     setTimeout(() => toastEl.style.display = "none", 2000);
 }
 
-function setContextualButtonsState(enable) {
+// Contextual Buttons State For Practice Navigator
+function setNavigatorButtonsState(enable) {
   document.getElementById('usersBtn').disabled = !enable;
   document.getElementById('collectionBtn').disabled = !enable;
   document.getElementById('preparingBtn').disabled = !enable;
   document.getElementById('rejectedBtn').disabled = !enable;
+}
+
+// Contextual Buttons StateFor Job Panel
+function setJobPanelButtonsState(enable) {
+  document.getElementById('docmanJobsBtn').disabled = !enable;
+  document.getElementById('emisJobsBtn').disabled = !enable;
+  document.getElementById('docmanValidateBtn').disabled = !enable;
 }
 
 function showView(viewId) {
@@ -140,25 +148,21 @@ function showView(viewId) {
     if (viewId === 'practiceNavigatorView') {
         practiceNavigatorView.style.display = 'block';
         document.getElementById('navigatorGlobalToggleBtn').classList.add('active-tab');
-        if (refreshIntervalId) {
-            clearInterval(refreshIntervalId);
+        if (refreshIntervalId) { // If the refresh interval is running...
+            clearInterval(refreshIntervalId); // ...stop it.
             refreshIntervalId = null;
         }
         updateContextualButtonsOnInput(false);
     } else if (viewId === 'jobManagerView') {
         jobManagerView.style.display = 'block';
         document.getElementById('jobManagerGlobalToggleBtn').classList.add('active-tab');
-        if (!refreshIntervalId) {
-            setTimeout(() => {
-                fetchAndPopulateData();
-                refreshIntervalId = setInterval(fetchAndPopulateData, 5000);
-            }, 100);
-        }
+        // Now, it only fetches data once when you switch to the tab.
+        fetchAndPopulateData();
     } else if (viewId === 'emailFormatterView') {
         emailFormatterView.style.display = 'block';
         document.getElementById('emailFormatterGlobalToggleBtn').classList.add('active-tab');
-        if (refreshIntervalId) {
-            clearInterval(refreshIntervalId);
+        if (refreshIntervalId) { // If the refresh interval is running...
+            clearInterval(refreshIntervalId); // ...stop it.
             refreshIntervalId = null;
         }
     }
@@ -298,13 +302,13 @@ async function updateContextualButtonsOnInput(triggerStatus = true) {
 
   if (foundOds) {
     currentSelectedOdsCode = foundOds;
-    setContextualButtonsState(true);
+    setNavigatorButtonsState(true); 
     if (triggerStatus) {
         displayPracticeStatus();
     }
   } else {
     currentSelectedOdsCode = null;
-    setContextualButtonsState(false);
+    setNavigatorButtonsState(false);
     if (statusDisplayEl) statusDisplayEl.style.display = 'none';
     if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
   }
@@ -722,14 +726,19 @@ function filterAndDisplayPracticeSuggestions() {
         resultsContainer.style.display = 'none';
         practiceActive = -1;
 
+        const allPractices = Object.values(cachedPractices).map(p => ({
+            practiceName: p.name,
+            odsCode: p.ods
+        }));
+
         let filteredData;
         if (searchTerm) {
-            filteredData = uniquePractices.filter(p => 
+            filteredData = allPractices.filter(p => 
                 (p.practiceName?.toLowerCase().includes(searchTerm) || 
                  p.odsCode?.toLowerCase().includes(searchTerm))
             );
         } else {
-            filteredData = [...uniquePractices];
+            filteredData = allPractices;
         }
 
         if (filteredData.length === 0) {
@@ -773,13 +782,16 @@ function filterAndDisplayPracticeSuggestions() {
 }
 
 function selectPracticeSuggestion(practice) {
-    const practiceInput = document.getElementById('practiceDropdown');
-    const odsCodeElement = document.getElementById('ods-code');
-    
-    if (practiceInput) practiceInput.value = practice.practiceName;
-    if (odsCodeElement) odsCodeElement.textContent = practice.odsCode;
-    
-    filterAndDisplayJobIdSuggestions();
+    // Check which view is active to update the correct elements
+    if (jobManagerView.style.display === 'block') {
+        practiceInputJobManager.value = practice.practiceName;
+        odsCodeLabel.textContent = practice.odsCode;
+        setJobPanelButtonsState(true); // Enable Job Panel buttons
+    } else {
+        practiceInputEl.value = `${practice.practiceName} (${practice.odsCode})`;
+        currentSelectedOdsCode = practice.odsCode;
+        setNavigatorButtonsState(true); // Enable Navigator buttons
+    }
 }
 
 function filterAndDisplayJobIdSuggestions() {
@@ -863,7 +875,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     documentSelectionSection = document.getElementById("documentSelectionSection");
     documentActionsSection = document.getElementById("documentActionsSection");
     practiceInputJobManager = document.getElementById("practiceDropdown");
-    practiceAutocompleteResultsContainer = document.getElementById("practiceAutocompleteResults");
+    practiceAutocompleteResultsContainer = document.getElementById("practiceAutocompleteResultsContainer");
     jobTitleSection = document.getElementById("jobTitleSection");
     jobTitleDisplay = document.getElementById("jobTitleDisplay");
     copyJobTitle = document.getElementById("copyJobTitle");
@@ -898,7 +910,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById("emailFormatterGlobalToggleBtn").addEventListener("click", () => showView('emailFormatterView'));
 
     // Practice Navigator Event Listeners
-    setContextualButtonsState(false);
+    setNavigatorButtonsState(false);
 
     if (resetSettingsBtn) {
         resetSettingsBtn.addEventListener('click', () => {
@@ -1196,6 +1208,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         docInput.focus();
     };
 
+    // --- Add listeners for Bot Jobs Buttons ---
+    document.getElementById('docmanJobsBtn').addEventListener('click', () => {
+        const odsCode = odsCodeLabel.textContent.trim();
+        if (odsCode && odsCode !== '—') {
+            const url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=generate_output+docman_upload+docman_file+docman_review+docman_delete_original&status=paused&practice_ids=${odsCode}`;
+            chrome.tabs.create({ url });
+        } else {
+            showToast('Please select a practice first.');
+        }
+    });
+
+    document.getElementById('emisJobsBtn').addEventListener('click', () => {
+        const odsCode = odsCodeLabel.textContent.trim();
+        if (odsCode && odsCode !== '—') {
+            const url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=emis_coding+emis_prepare+emis_delete_originals+emis_api_consultation&status=paused&practice_ids=${odsCode}`;
+            chrome.tabs.create({ url });
+        } else {
+            showToast('Please select a practice first.');
+        }
+    });
+
+    document.getElementById('docmanValidateBtn').addEventListener('click', () => {
+        showToast('Docman Validate function is not yet implemented.');
+    });
+
     copyDocBtn.onclick = () => {
       const docIdFullString = docInput.value.trim();
       const numericDocId = getNumericDocIdFromInput(docIdFullString);
@@ -1429,7 +1466,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     practiceInputJobManager.addEventListener("input", debouncedFilterAndDisplayPracticeSuggestions);
-    practiceInputJobManager.addEventListener("click", (e) => { e.stopPropagation(); filterAndDisplayPracticeSuggestions(); });
     practiceInputJobManager.addEventListener("focus", filterAndDisplayPracticeSuggestions);
     practiceInputJobManager.addEventListener("blur", hideSuggestions);
     practiceInputJobManager.addEventListener("keydown", (e) => {
@@ -1439,16 +1475,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         else if (e.key === "ArrowUp") { practiceActive = addActive(practiceActive, items); items[practiceActive].scrollIntoView({ block: "nearest" }); e.preventDefault(); }
         else if (e.key === "Enter") {
             e.preventDefault();
-            if (practiceActive > -1 && items[practiceActive]) { selectPracticeSuggestion(items[practiceActive]); }
-            else if (practiceInputJobManager.value.trim() !== "") {
-                const typedPracticeName = practiceInputJobManager.value.trim();
-                const match = uniquePractices.find(p => p.practiceName === typedPracticeName);
-                if (match) { odsCodeLabel.textContent = match.odsCode; }
-                hideSuggestions();
-            } else { hideSuggestions(); }
+            if (practiceActive > -1 && items[practiceActive]) {
+                const practiceName = items[practiceActive].dataset.practiceName;
+                const odsCode = items[practiceActive].dataset.odsCode;
+                selectPracticeSuggestion({ practiceName, odsCode });
+            }
+            hideSuggestions();
         }
     });
-
+    
     // Global mousedown listener to hide all autocompletes
     document.addEventListener("mousedown", (e) => {
         const isNavigatorAutocomplete = (suggestionsList && suggestionsList.contains(e.target) || e.target === practiceInputEl || cdbSuggestionsList && cdbSuggestionsList.contains(e.target) || e.target === cdbSearchInputEl);
