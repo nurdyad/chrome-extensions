@@ -5,6 +5,36 @@
  * It combines functionalities from BL-Mailroom's popup.js and BetterLetterJobManager's panel.js.
  */
 
+/**********************
+ * UTILITY FUNCTIONS
+ **********************/
+
+function debounce(func, timeout = 300) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { func.apply(this, args); }, timeout);
+  };
+}
+
+function safeSetInnerHTML(element, content) {
+  if (element && element.innerHTML !== undefined) {
+    element.innerHTML = content;
+  } else {
+    console.warn('Attempted to set innerHTML on missing element:', element?.id);
+  }
+}
+
+function toggleLoadingState(element, isLoading) {
+  if (!element) return;
+  element.classList.toggle('loading-state', isLoading);
+}
+
+// Debounced functions
+const debouncedFilterAndDisplaySuggestions = debounce(filterAndDisplaySuggestions, 300);
+const debouncedFilterAndDisplayPracticeSuggestions = debounce(filterAndDisplayPracticeSuggestions, 300);
+const debouncedFilterAndDisplayJobIdSuggestions = debounce(filterAndDisplayJobIdSuggestions, 300);
+
 // --- Global State Variables ---
 let currentSelectedOdsCode = null;
 let cachedPractices = {}; // For Practice Navigator
@@ -14,7 +44,7 @@ let uniquePractices = []; // For Job Manager
 // UI View Elements
 let practiceNavigatorView = null;
 let emailFormatterView = null;
-let jobManagerView = null; // New view for Job Panel
+let jobManagerView = null;
 
 // Practice Navigator Specific Elements
 let statusDisplayEl = null;
@@ -44,7 +74,7 @@ let copyJobBtn = null;
 let openJobBtn = null;
 let documentSelectionSection = null;
 let documentActionsSection = null;
-let practiceInputJobManager = null; // Renamed to avoid conflict with Navigator's practiceInput
+let practiceInputJobManager = null;
 let practiceAutocompleteResultsContainer = null;
 let jobTitleSection = null;
 let jobTitleDisplay = null;
@@ -71,15 +101,14 @@ let convertEmailBtn = null;
 let copyEmailBtn = null;
 
 // Global UI / Utility
-let toastEl = null; // Unified toast element
-let refreshIntervalId = null; // For Job Manager data refresh
-let docActive = -1; // Autocomplete active index for Document ID
-let practiceActive = -1; // Autocomplete active index for Practice Name (Job Manager)
-let jobIdActive = -1; // Autocomplete active index for Job ID
+let toastEl = null;
+let refreshIntervalId = null;
+let docActive = -1;
+let practiceActive = -1;
+let jobIdActive = -1;
 
-// --- Helper Functions (Unified and Adapted) ---
+// --- Helper Functions ---
 
-// Unified Toast Notification (from Job Manager, as it's more complete)
 function showToast(message) {
     if (!toastEl) {
         console.warn("Toast element not found in DOM.");
@@ -90,14 +119,12 @@ function showToast(message) {
     setTimeout(() => toastEl.style.display = "none", 2000);
 }
 
-// Helper to enable/disable contextual buttons for Practice Navigator
 function setContextualButtonsState(enable) {
   document.getElementById('usersBtn').disabled = !enable;
   document.getElementById('preparingBtn').disabled = !enable;
   document.getElementById('rejectedBtn').disabled = !enable;
 }
 
-// Function to switch between views and manage active tab styling
 function showView(viewId) {
     // Hide all main views
     practiceNavigatorView.style.display = 'none';
@@ -108,49 +135,43 @@ function showView(viewId) {
     const globalNavButtons = document.querySelectorAll('.global-nav-buttons-row .btn');
     globalNavButtons.forEach(button => button.classList.remove('active-tab'));
 
-    // Show the requested view and set its button as active
+    // Show the requested view
     if (viewId === 'practiceNavigatorView') {
         practiceNavigatorView.style.display = 'block';
         document.getElementById('navigatorGlobalToggleBtn').classList.add('active-tab');
-        // Clear Job Manager interval if switching away
         if (refreshIntervalId) {
             clearInterval(refreshIntervalId);
             refreshIntervalId = null;
         }
-        // Immediately fetch data for navigator when shown
         updateContextualButtonsOnInput(false);
     } else if (viewId === 'jobManagerView') {
         jobManagerView.style.display = 'block';
         document.getElementById('jobManagerGlobalToggleBtn').classList.add('active-tab');
-        // Start Job Manager data refresh when shown
         if (!refreshIntervalId) {
             setTimeout(() => {
                 fetchAndPopulateData();
                 refreshIntervalId = setInterval(fetchAndPopulateData, 5000);
-            }, 100); // Small delay to ensure view is visible
+            }, 100);
         }
     } else if (viewId === 'emailFormatterView') {
         emailFormatterView.style.display = 'block';
         document.getElementById('emailFormatterGlobalToggleBtn').classList.add('active-tab');
-        // Clear Job Manager interval if switching away
         if (refreshIntervalId) {
             clearInterval(refreshIntervalId);
             refreshIntervalId = null;
         }
     }
-    // Clear any active autocomplete suggestions when switching views
+    
     hideSuggestions();
-    // Hide status/CDB search results when switching views
     if (statusDisplayEl) statusDisplayEl.style.display = 'none';
     if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
     if (statusEl) statusEl.style.display = 'none';
 }
 
-// Helper for adding/removing active class for autocompletes
 function addActive(activeIdx, items) {
     if (!items || items.length === 0) return -1;
     removeActive(items);
-    activeIdx = (activeIdx + items.length) % items.length; // Ensure index wraps around
+    activeIdx = (activeIdx + items.length) % items.length;
     items[activeIdx].classList.add("active");
     return activeIdx;
 }
@@ -161,21 +182,19 @@ function removeActive(items) {
     }
 }
 
-// Centralized hide suggestions function (from both, consolidated)
 function hideSuggestions() {
     setTimeout(() => {
         if (autocompleteResultsContainer) autocompleteResultsContainer.style.display = 'none';
         if (practiceAutocompleteResultsContainer) practiceAutocompleteResultsContainer.style.display = 'none';
         if (jobIdAutocompleteResultsContainer) jobIdAutocompleteResultsContainer.style.display = 'none';
-        if (suggestionsList) suggestionsList.style.display = 'none'; // For Practice Navigator
-        if (cdbSuggestionsList) cdbSuggestionsList.style.display = 'none'; // For Practice Navigator CDB
+        if (suggestionsList) suggestionsList.style.display = 'none';
+        if (cdbSuggestionsList) cdbSuggestionsList.style.display = 'none';
         docActive = -1;
         practiceActive = -1;
         jobIdActive = -1;
     }, 100);
 }
 
-// From BetterLetterJobManager: Helper to clear dependent fields in Job Panel
 function clearDependentFields() {
     jobIdInput.value = "";
     jobTypeLabel.textContent = "—";
@@ -196,19 +215,16 @@ function clearDependentFields() {
     mailroomDetailsSection.style.display = 'none';
 }
 
-// From BetterLetterJobManager: Helper to extract numeric Document ID
 function getNumericDocIdFromInput(inputString) {
     const match = inputString.trim().match(/^\d+$/);
     return match ? match[0] : null;
 }
 
-// From BetterLetterJobManager: Helper to get ODS code from practice name (Job Manager context)
 function getOdsCodeFromPracticeName(practiceName) {
     const found = uniquePractices.find(p => p.practiceName === practiceName);
     return found ? found.odsCode : null;
 }
 
-// From BetterLetterJobManager: Helper to open tab with timeout
 function openTabWithTimeout(url) {
     chrome.tabs.create({ url }).catch(err => {
         console.error("Failed to open tab:", err);
@@ -216,7 +232,6 @@ function openTabWithTimeout(url) {
     });
 }
 
-// From BL-Mailroom: Helper to show status messages in Practice Navigator
 function showStatus(message, type) {
   if (statusEl) {
     statusEl.textContent = message;
@@ -227,7 +242,6 @@ function showStatus(message, type) {
   }
 }
 
-// From BL-Mailroom: Helper to trigger practice page opening
 async function triggerOpenPracticePage(rawInput, settingType) {
     if (statusEl) {
         showStatus('Opening settings...', 'loading');
@@ -258,7 +272,6 @@ async function triggerOpenPracticePage(rawInput, settingType) {
     }
 }
 
-// From BL-Mailroom: Function to update buttons based on practice input (Practice Navigator)
 async function updateContextualButtonsOnInput(triggerStatus = true) {
   const inputValue = practiceInputEl.value.trim();
   let foundOds = null;
@@ -296,7 +309,6 @@ async function updateContextualButtonsOnInput(triggerStatus = true) {
   }
 }
 
-// From BL-Mailroom: Function to display practice status (Practice Navigator)
 async function displayPracticeStatus() {
     if (statusDisplayEl) statusDisplayEl.style.display = 'none';
     if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
@@ -338,7 +350,6 @@ async function displayPracticeStatus() {
     }
 }
 
-// From BL-Mailroom: Email Formatter logic
 function extractNameFromEmail(email) {
     const localPart = email.split("@")[0];
     const cleaned = localPart.replace(/[._]/g, " ");
@@ -377,203 +388,257 @@ function copyEmails() {
     showToast("Email list copied!");
 }
 
-// --- Job Manager Specific Functions (Adapted) ---
+// --- Job Manager Functions ---
 
-// Main data fetching and UI population function for Job Manager
 async function fetchAndPopulateData() {
-    const { targetTabId } = await chrome.storage.local.get("targetTabId");
-    const { clickedMailroomDocData } = await chrome.storage.local.get("clickedMailroomDocData");
+    const elements = {
+        jobTypeLabel: document.getElementById('jobTypeLabel'),
+        odsCodeLabel: document.getElementById('ods-code'),
+        practiceInputJobManager: document.getElementById('practiceDropdown'),
+        jobIdInput: document.getElementById('job-id'),
+        jobTitleDisplay: document.getElementById('jobTitleDisplay'),
+        docInput: document.getElementById('documentDropdown'),
+        docAutocompleteResults: document.getElementById('autocompleteResults'),
+        jobIdAutocompleteResults: document.getElementById('jobIdAutocompleteResultsContainer'),
+        mailroomOriginalName: document.getElementById('mailroom-original-name'),
+        mailroomNhsNo: document.getElementById('mailroom-nhs-no'),
+        mailroomPatientName: document.getElementById('mailroom-patient-name'),
+        mailroomReason: document.getElementById('mailroom-reason'),
+        mailroomRejectedByOn: document.getElementById('mailroom-rejected-by-on'),
+        mailroomStatus: document.getElementById('mailroom-status'),
+        mailroomJobId: document.getElementById('mailroom-job-id'),
+        mailroomInferredType: document.getElementById('mailroom-inferred-type'),
+        documentActionsSection: document.getElementById('documentActionsSection'),
+        mailroomDetailsSection: document.getElementById('mailroomDetailsSection'),
+        jobTitleSection: document.getElementById('jobTitleSection')
+    };
 
-    let currentTab;
-    let extractedDocIdFromUrl = null;
-    let extractedJobIdFromUrl = null;
+    const resetUI = () => {
+        const textElements = [
+            elements.jobTypeLabel,
+            elements.odsCodeLabel,
+            elements.mailroomOriginalName,
+            elements.mailroomNhsNo,
+            elements.mailroomPatientName,
+            elements.mailroomReason,
+            elements.mailroomRejectedByOn,
+            elements.mailroomStatus,
+            elements.mailroomJobId,
+            elements.mailroomInferredType
+        ];
+        
+        textElements.forEach(el => {
+            if (el) el.textContent = '—';
+        });
 
-    const userTypedDocId = docInput.value;
-
-    const dashboardUrlPrefix = "https://app.betterletter.ai/admin_panel/bots/dashboard";
-    const annotationUrlRegex = /^https:\/\/app\.betterletter.ai\/mailroom\/annotations\/(\d+)/;
-    const jobPageUrlRegex = /^https:\/\/app\.betterletter.ai\/admin_panel\/bots\/jobs\/([a-f0-9-]+)\/?/;
-    const mailroomUrlPrefix = "https://app.betterletter.ai/mailroom/";
-
-    jobTitleDisplay.value = "";
-    jobTitleSection.style.display = 'none';
-    documentActionsSection.style.display = 'none';
-    mailroomDetailsSection.style.display = 'none';
-
-    if (!targetTabId) {
-        showToast("No active tab context. Please ensure a tab is active.");
-        clearDependentFields();
-        docInput.value = userTypedDocId;
-        return;
-    }
+        if (elements.jobTitleDisplay) elements.jobTitleDisplay.value = '';
+        if (elements.practiceInputJobManager) elements.practiceInputJobManager.value = '';
+        if (elements.jobIdInput) elements.jobIdInput.value = '';
+        
+        if (elements.documentActionsSection) elements.documentActionsSection.style.display = 'none';
+        if (elements.mailroomDetailsSection) elements.mailroomDetailsSection.style.display = 'none';
+        if (elements.jobTitleSection) elements.jobTitleSection.style.display = 'none';
+    };
 
     try {
-        currentTab = await chrome.tabs.get(targetTabId);
-    } catch (e) {
-        showToast("Target tab no longer exists or is inaccessible.");
-        clearDependentFields();
-        docInput.value = userTypedDocId;
-        return;
-    }
+        const { targetTabId } = await chrome.storage.local.get("targetTabId") || {};
+        const { clickedMailroomDocData } = await chrome.storage.local.get("clickedMailroomDocData") || {};
+        
+        const dashboardUrlPrefix = "https://app.betterletter.ai/admin_panel/bots/dashboard";
+        const annotationUrlRegex = /^https:\/\/app\.betterletter\.ai\/mailroom\/annotations\/(\d+)/;
+        const jobPageUrlRegex = /^https:\/\/app\.betterletter\.ai\/admin_panel\/bots\/jobs\/([a-f0-9-]+)\/?/;
+        const mailroomUrlPrefix = "https://app.betterletter.ai/mailroom/";
 
-    if (!currentTab.url) {
-        showToast("Cannot read URL from the active tab.");
-        clearDependentFields();
-        docInput.value = userTypedDocId;
-        return;
-    }
+        const userTypedDocId = elements.docInput?.value || '';
+        
+        resetUI();
 
-    if (clickedMailroomDocData) {
-        console.log("DEBUG: Using data from clicked Mailroom Document:", clickedMailroomDocData);
-        docInput.value = clickedMailroomDocData.documentId || "";
-        mailroomOriginalName.textContent = clickedMailroomDocData.originalNameContent || "—";
-        mailroomNhsNo.textContent = clickedMailroomDocData.nhsNo || "—";
-        mailroomPatientName.textContent = clickedMailroomDocData.patientName || "—";
-        mailroomReason.textContent = clickedMailroomDocData.reason || "—";
-        mailroomRejectedByOn.textContent = clickedMailroomDocData.rejectedByOn || "—";
-        mailroomStatus.textContent = clickedMailroomDocData.status || "—";
-        mailroomJobId.textContent = clickedMailroomDocData.jobId || "—";
-        mailroomInferredType.textContent = clickedMailroomDocData.inferredJobType || "—";
-
-        mailroomDetailsSection.style.display = 'block';
-        await chrome.storage.local.remove("clickedMailroomDocData");
-
-        if (docInput.value && /^\d+$/.test(docInput.value)) {
-            documentActionsSection.style.display = 'block';
+        if (!targetTabId) {
+            showToast("No active tab context. Please ensure a tab is active.");
+            if (elements.docInput) elements.docInput.value = userTypedDocId;
+            return;
         }
-        return;
-    }
 
-    const jobPageMatch = currentTab.url.match(jobPageUrlRegex);
-    if (jobPageMatch && jobPageMatch[1]) {
-        extractedJobIdFromUrl = jobPageMatch[1];
-        setTimeout(async () => {
-            try {
-                const tabs = await chrome.tabs.query({ url: currentTab.url, currentWindow: false });
-                if (tabs.length > 0 && tabs[0].id) {
-                    const tabId = tabs[0].id;
-                    const [{ result }] = await chrome.scripting.executeScript({
-                        target: { tabId: tabId },
-                        func: () => {
-                            const pageContent = document.body.textContent;
-                            let extractedTitle = null;
-                            const tagStart = '<Title>';
-                            const tagEnd = '</Title>';
-                            const startIndex = pageContent.indexOf(tagStart);
-                            if (startIndex !== -1) {
-                                const endIndex = pageContent.indexOf(tagEnd, startIndex + tagStart.length);
-                                if (endIndex !== -1) {
-                                    extractedTitle = pageContent.substring(startIndex + tagStart.length, endIndex).trim();
+        let currentTab;
+        try {
+            currentTab = await chrome.tabs.get(targetTabId);
+            if (!currentTab?.url) {
+                showToast("Cannot read URL from the active tab.");
+                if (elements.docInput) elements.docInput.value = userTypedDocId;
+                return;
+            }
+        } catch (e) {
+            showToast("Target tab no longer exists or is inaccessible.");
+            if (elements.docInput) elements.docInput.value = userTypedDocId;
+            return;
+        }
+
+        if (clickedMailroomDocData) {
+            console.log("Using Mailroom Document data:", clickedMailroomDocData);
+            
+            if (elements.docInput) elements.docInput.value = clickedMailroomDocData.documentId || "";
+            if (elements.mailroomOriginalName) elements.mailroomOriginalName.textContent = clickedMailroomDocData.originalNameContent || "—";
+            if (elements.mailroomNhsNo) elements.mailroomNhsNo.textContent = clickedMailroomDocData.nhsNo || "—";
+            if (elements.mailroomPatientName) elements.mailroomPatientName.textContent = clickedMailroomDocData.patientName || "—";
+            if (elements.mailroomReason) elements.mailroomReason.textContent = clickedMailroomDocData.reason || "—";
+            if (elements.mailroomRejectedByOn) elements.mailroomRejectedByOn.textContent = clickedMailroomDocData.rejectedByOn || "—";
+            if (elements.mailroomStatus) elements.mailroomStatus.textContent = clickedMailroomDocData.status || "—";
+            if (elements.mailroomJobId) elements.mailroomJobId.textContent = clickedMailroomDocData.jobId || "—";
+            if (elements.mailroomInferredType) elements.mailroomInferredType.textContent = clickedMailroomDocData.inferredJobType || "—";
+
+            if (elements.mailroomDetailsSection) elements.mailroomDetailsSection.style.display = 'block';
+            await chrome.storage.local.remove("clickedMailroomDocData");
+
+            if (elements.docInput?.value && /^\d+$/.test(elements.docInput.value)) {
+                if (elements.documentActionsSection) elements.documentActionsSection.style.display = 'block';
+            }
+            return;
+        }
+
+        const jobPageMatch = currentTab.url.match(jobPageUrlRegex);
+        let extractedJobIdFromUrl = null;
+        
+        if (jobPageMatch?.[1]) {
+            extractedJobIdFromUrl = jobPageMatch[1];
+            
+            setTimeout(async () => {
+                try {
+                    const tabs = await chrome.tabs.query({ url: currentTab.url, currentWindow: false });
+                    if (tabs.length > 0 && tabs[0].id) {
+                        const [{ result }] = await chrome.scripting.executeScript({
+                            target: { tabId: tabs[0].id },
+                            func: () => {
+                                const pageContent = document.body.textContent;
+                                const tagStart = '<Title>';
+                                const tagEnd = '</Title>';
+                                const startIndex = pageContent.indexOf(tagStart);
+                                if (startIndex !== -1) {
+                                    const endIndex = pageContent.indexOf(tagEnd, startIndex + tagStart.length);
+                                    if (endIndex !== -1) {
+                                        return pageContent.substring(
+                                            startIndex + tagStart.length, 
+                                            endIndex
+                                        ).trim();
+                                    }
                                 }
+                                return null;
                             }
-                            return extractedTitle;
+                        });
+                        
+                        if (elements.jobTitleDisplay) {
+                            elements.jobTitleDisplay.value = result || "Title not found";
+                            if (elements.jobTitleSection) elements.jobTitleSection.style.display = 'block';
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error extracting job title:", e);
+                    if (elements.jobTitleDisplay) {
+                        elements.jobTitleDisplay.value = "Error extracting title";
+                        if (elements.jobTitleSection) elements.jobTitleSection.style.display = 'block';
+                    }
+                }
+            }, 100);
+        }
+
+        const annotationMatch = currentTab.url.match(annotationUrlRegex);
+        const extractedDocIdFromUrl = annotationMatch?.[1] || null;
+
+        if (currentTab.url.startsWith(dashboardUrlPrefix)) {
+            try {
+                const [{ result }] = await chrome.scripting.executeScript({
+                    target: { tabId: targetTabId },
+                    func: () => {
+                        const tableRows = document.querySelectorAll("table tbody tr");
+                        if (!tableRows || tableRows.length === 0) return [];
+                        return Array.from(tableRows).map(row => {
+                            const cells = row.querySelectorAll("td");
+                            return {
+                                documentId: cells[1]?.querySelector("a")?.textContent.trim(),
+                                jobType: cells[2]?.innerText.trim(),
+                                practiceName: cells[3]?.innerText.split("\n")[0]?.trim(),
+                                odsCode: cells[3]?.innerText.split("\n")[1]?.trim(),
+                                jobId: cells[4]?.querySelector("a")?.textContent.trim()
+                            };
+                        }).filter(job => job.documentId && job.jobType);
+                    }
+                });
+
+                if (result?.length > 0) {
+                    jobData = result;
+                    uniquePractices = [];
+                    const practiceMap = new Map();
+
+                    jobData.forEach(job => {
+                        if (job.practiceName && job.odsCode) {
+                            practiceMap.set(job.practiceName, job.odsCode);
                         }
                     });
-                    if (result) {
-                        jobTitleDisplay.value = result;
-                        jobTitleSection.style.display = 'block';
-                    } else {
-                        jobTitleDisplay.value = "Title not found";
-                        jobTitleSection.style.display = 'block';
-                    }
+
+                    uniquePractices = Array.from(practiceMap, ([name, code]) => ({ practiceName: name, odsCode: code }));
+
+                    if (elements.jobTypeLabel) elements.jobTypeLabel.textContent = jobData[0].jobType || "—";
+                    if (elements.odsCodeLabel) elements.odsCodeLabel.textContent = jobData[0].odsCode || "—";
+                    if (elements.practiceInputJobManager) elements.practiceInputJobManager.value = "";
+
+                    filterAndDisplaySuggestions();
+                    filterAndDisplayPracticeSuggestions();
+                    filterAndDisplayJobIdSuggestions();
+                } else {
+                    showToast("No job data found on this Dashboard page.");
+                    if (elements.jobTypeLabel) elements.jobTypeLabel.textContent = "—";
+                    if (elements.odsCodeLabel) elements.odsCodeLabel.textContent = "—";
+                    if (elements.practiceInputJobManager) elements.practiceInputJobManager.value = "";
                 }
-            } catch (e) {
-                console.error("Error extracting job title:", e);
-                jobTitleDisplay.value = "Error extracting title";
-                jobTitleSection.style.display = 'block';
+            } catch (err) {
+                console.error("Error fetching dashboard data:", err);
+                showToast("Failed to fetch data from dashboard.");
+                if (elements.jobTypeLabel) elements.jobTypeLabel.textContent = "—";
+                if (elements.odsCodeLabel) elements.odsCodeLabel.textContent = "—";
+                if (elements.practiceInputJobManager) elements.practiceInputJobManager.value = "";
             }
-        }, 100);
-    }
-
-    const annotationMatch = currentTab.url.match(annotationUrlRegex);
-    if (annotationMatch && annotationMatch[1]) {
-        extractedDocIdFromUrl = annotationMatch[1];
-    }
-
-    if (currentTab.url.startsWith(dashboardUrlPrefix)) {
-        try {
-            const [{ result }] = await chrome.scripting.executeScript({
-                target: { tabId: targetTabId },
-                func: () => {
-                    const tableRows = document.querySelectorAll("table tbody tr");
-                    if (!tableRows || tableRows.length === 0) {
-                        return [];
-                    }
-                    return Array.from(tableRows).map(row => {
-                        const cells = row.querySelectorAll("td");
-                        const documentId = cells[1]?.querySelector("a")?.textContent.trim();
-                        const jobType = cells[2]?.innerText.trim();
-                        const practiceCell = cells[3]?.innerText.trim();
-                        const [practiceName, odsCode] = practiceCell ? practiceCell.split("\n").map(t => t.trim()) : ["", ""];
-                        const jobId = cells[4]?.querySelector("a")?.textContent.trim();
-                        return { documentId, jobType, jobId, practiceName, odsCode };
-                    }).filter(Boolean);
-                }
-            });
-
-            jobData = result;
-
-            const practicesMap = new Map();
-            jobData.forEach(job => {
-                if (job.practiceName && job.odsCode) {
-                    practicesMap.set(job.practiceName, job.odsCode);
-                }
-            });
-            uniquePractices = Array.from(practicesMap, ([practiceName, odsCode]) => ({ practiceName, odsCode }));
-
-            if (jobData.length === 0) {
-                showToast("No job data found on this Dashboard page.");
-                jobTypeLabel.textContent = "—";
-                odsCodeLabel.textContent = "—";
-                practiceInputJobManager.value = "";
-            }
-
-            filterAndDisplaySuggestions();
-            filterAndDisplayPracticeSuggestions();
-            filterAndDisplayJobIdSuggestions();
-
-        } catch (err) {
-            console.error("Error fetching data from dashboard:", err);
-            showToast("Failed to fetch data from dashboard.");
-            jobTypeLabel.textContent = "—";
-            odsCodeLabel.textContent = "—";
-            practiceInputJobManager.value = "";
+        } else {
+            jobData = [];
+            uniquePractices = [];
+            if (elements.jobTypeLabel) elements.jobTypeLabel.textContent = "—";
+            if (elements.odsCodeLabel) elements.odsCodeLabel.textContent = "—";
+            if (elements.practiceInputJobManager) elements.practiceInputJobManager.value = "";
         }
-    } else {
-        jobData = [];
-        uniquePractices = [];
-        jobTypeLabel.textContent = "—";
-        odsCodeLabel.textContent = "—";
-        practiceInputJobManager.value = "";
-    }
 
-    if (extractedJobIdFromUrl) {
-        jobIdInput.value = extractedJobIdFromUrl;
-        jobIdAutocompleteResultsContainer.innerHTML = "";
-    } else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) {
-        jobIdInput.value = "";
-        jobIdAutocompleteResultsContainer.innerHTML = "";
-    }
+        if (extractedJobIdFromUrl) {
+            if (elements.jobIdInput) elements.jobIdInput.value = extractedJobIdFromUrl;
+            if (elements.jobIdAutocompleteResults) elements.jobIdAutocompleteResults.innerHTML = "";
+        } else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) {
+            if (elements.jobIdInput) elements.jobIdInput.value = "";
+            if (elements.jobIdAutocompleteResults) elements.jobIdAutocompleteResults.innerHTML = "";
+        }
 
-    if (extractedDocIdFromUrl) {
-        docInput.value = extractedDocIdFromUrl;
-        docInput.dispatchEvent(new Event('input'));
-    } else if (userTypedDocId) {
-        docInput.value = userTypedDocId;
-        docInput.dispatchEvent(new Event('input'));
-    } else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) {
-        docInput.value = "";
-    }
+        if (extractedDocIdFromUrl) {
+            if (elements.docInput) {
+                elements.docInput.value = extractedDocIdFromUrl;
+                elements.docInput.dispatchEvent(new Event('input'));
+            }
+        } else if (userTypedDocId) {
+            if (elements.docInput) {
+                elements.docInput.value = userTypedDocId;
+                elements.docInput.dispatchEvent(new Event('input'));
+            }
+        } else if (!currentTab.url.startsWith(dashboardUrlPrefix) && !currentTab.url.startsWith(mailroomUrlPrefix)) {
+            if (elements.docInput) elements.docInput.value = "";
+        }
 
-    const currentDocIdInInput = docInput.value.trim();
-    if (currentDocIdInInput && /^\d+$/.test(currentDocIdInInput)) {
-        documentActionsSection.style.display = 'block';
-    } else {
-        documentActionsSection.style.display = 'none';
+        if (elements.docInput?.value && /^\d+$/.test(elements.docInput.value)) {
+            if (elements.documentActionsSection) elements.documentActionsSection.style.display = 'block';
+        } else {
+            if (elements.documentActionsSection) elements.documentActionsSection.style.display = 'none';
+        }
+
+    } catch (err) {
+        console.error("Unexpected error in fetchAndPopulateData:", err);
+        showToast("An unexpected error occurred");
+        resetUI();
     }
 }
 
-// Functions for custom Document ID autocomplete (Job Manager)
 function filterAndDisplaySuggestions() {
     const searchTerm = docInput.value.trim().toLowerCase();
     autocompleteResultsContainer.innerHTML = '';
@@ -602,7 +667,13 @@ function filterAndDisplaySuggestions() {
         if (job.documentId) {
             const item = document.createElement('div');
             item.classList.add('autocomplete-item');
-            item.textContent = job.documentId;
+            item.innerHTML = `
+                <div class="suggestion-main">${job.documentId}</div>
+                <div class="suggestion-meta">
+                    <span>${job.jobType || 'Unknown'}</span>
+                    <span>${job.practiceName || ''}</span>
+                </div>
+            `;
             item.dataset.documentId = job.documentId;
             item.addEventListener('click', () => { selectSuggestion(item); });
             autocompleteResultsContainer.appendChild(item);
@@ -610,10 +681,10 @@ function filterAndDisplaySuggestions() {
     });
 
     if (autocompleteResultsContainer.children.length > 0 && isInputFocused) {
-        const inputRect = docInput.getBoundingClientRect();
-        autocompleteResultsContainer.style.left = `${inputRect.left}px`;
-        autocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
-        autocompleteResultsContainer.style.width = `${inputRect.width}px`;
+        autocompleteResultsContainer.style.position = 'absolute';
+        autocompleteResultsContainer.style.top = '100%';
+        autocompleteResultsContainer.style.left = '0';
+        autocompleteResultsContainer.style.width = '100%';
         autocompleteResultsContainer.style.display = 'block';
     }
 }
@@ -626,62 +697,90 @@ function selectSuggestion(item) {
     docActive = -1;
 }
 
-// Functions for custom Practice Name autocomplete (Job Manager)
 function filterAndDisplayPracticeSuggestions() {
-    const searchTerm = practiceInputJobManager.value.trim().toLowerCase();
-    practiceAutocompleteResultsContainer.innerHTML = '';
-    practiceAutocompleteResultsContainer.style.display = 'none';
-    practiceActive = -1;
-
-    const isInputFocused = (document.activeElement === practiceInputJobManager);
-
-    if (!searchTerm && (!isInputFocused || uniquePractices.length === 0)) {
+    const practiceInput = document.getElementById('practiceDropdown');
+    const resultsContainer = document.getElementById('practiceAutocompleteResultsContainer');
+    
+    if (!practiceInput || !resultsContainer) {
+        console.warn('Practice autocomplete elements not found');
         return;
     }
 
-    let filteredData = uniquePractices;
-    if (searchTerm) {
-        filteredData = uniquePractices.filter(p =>
-            (p.practiceName || '').toLowerCase().includes(searchTerm) ||
-            (p.odsCode || '').toLowerCase().includes(searchTerm)
-        );
-    }
-
-    if (filteredData.length === 0) {
+    const searchTerm = practiceInput.value.trim().toLowerCase();
+    const isInputFocused = (document.activeElement === practiceInput);
+    
+    if (!searchTerm && (!isInputFocused || !uniquePractices?.length)) {
+        safeSetInnerHTML(resultsContainer, '');
+        resultsContainer.style.display = 'none';
         return;
     }
 
-    filteredData.forEach(p => {
-        if (p.practiceName && p.odsCode) {
-            const item = document.createElement('div');
-            item.classList.add('autocomplete-item');
-            item.textContent = `${p.practiceName} (${p.odsCode})`;
-            item.dataset.practiceName = p.practiceName;
-            item.dataset.odsCode = p.odsCode;
-            item.addEventListener('click', () => { selectPracticeSuggestion(item); });
-            practiceAutocompleteResultsContainer.appendChild(item);
+    try {
+        toggleLoadingState(practiceInput, true);
+        safeSetInnerHTML(resultsContainer, '');
+        resultsContainer.style.display = 'none';
+        practiceActive = -1;
+
+        let filteredData;
+        if (searchTerm) {
+            filteredData = uniquePractices.filter(p => 
+                (p.practiceName?.toLowerCase().includes(searchTerm) || 
+                 p.odsCode?.toLowerCase().includes(searchTerm))
+            );
+        } else {
+            filteredData = [...uniquePractices];
         }
-    });
 
-    if (practiceAutocompleteResultsContainer.children.length > 0 && isInputFocused) {
-        const inputRect = practiceInputJobManager.getBoundingClientRect();
-        practiceAutocompleteResultsContainer.style.left = `${inputRect.left}px`;
-        practiceAutocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
-        practiceAutocompleteResultsContainer.style.width = `${inputRect.width}px`;
-        practiceAutocompleteResultsContainer.style.display = 'block';
+        if (filteredData.length === 0) {
+            const noResults = document.createElement('div');
+            noResults.className = 'autocomplete-item';
+            noResults.textContent = 'No matching practices found';
+            resultsContainer.appendChild(noResults);
+        } else {
+            filteredData.forEach(p => {
+                if (p.practiceName && p.odsCode) {
+                    const item = document.createElement('div');
+                    item.className = 'autocomplete-item';
+                    item.innerHTML = `
+                        <div class="suggestion-main">${p.practiceName}</div>
+                        <div class="suggestion-meta">${p.odsCode}</div>
+                    `;
+                    item.dataset.practiceName = p.practiceName;
+                    item.dataset.odsCode = p.odsCode;
+                    item.addEventListener('click', () => {
+                        selectPracticeSuggestion(p);
+                        resultsContainer.style.display = 'none';
+                    });
+                    resultsContainer.appendChild(item);
+                }
+            });
+        }
+
+        if (resultsContainer.children.length > 0 && isInputFocused) {
+            resultsContainer.style.position = 'absolute';
+            resultsContainer.style.top = '100%';
+            resultsContainer.style.left = '0';
+            resultsContainer.style.width = '100%';
+            resultsContainer.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error in practice suggestions:', error);
+        safeSetInnerHTML(resultsContainer, '');
+    } finally {
+        toggleLoadingState(practiceInput, false);
     }
 }
 
-function selectPracticeSuggestion(item) {
-    const selectedPracticeName = item.dataset.practiceName;
-    const selectedOdsCode = item.dataset.odsCode;
-    practiceInputJobManager.value = selectedPracticeName;
-    odsCodeLabel.textContent = selectedOdsCode;
-    practiceAutocompleteResultsContainer.style.display = 'none';
-    practiceActive = -1;
+function selectPracticeSuggestion(practice) {
+    const practiceInput = document.getElementById('practiceDropdown');
+    const odsCodeElement = document.getElementById('ods-code');
+    
+    if (practiceInput) practiceInput.value = practice.practiceName;
+    if (odsCodeElement) odsCodeElement.textContent = practice.odsCode;
+    
+    filterAndDisplayJobIdSuggestions();
 }
 
-// Functions for custom Job ID autocomplete (Job Manager)
 function filterAndDisplayJobIdSuggestions() {
     const currentDocId = getNumericDocIdFromInput(docInput.value);
     let relevantJobIds = [];
@@ -712,10 +811,10 @@ function filterAndDisplayJobIdSuggestions() {
     });
 
     if (jobIdAutocompleteResultsContainer.children.length > 0 && isInputFocused) {
-        const inputRect = jobIdInput.getBoundingClientRect();
-        jobIdAutocompleteResultsContainer.style.left = `${inputRect.left}px`;
-        jobIdAutocompleteResultsContainer.style.top = `${inputRect.bottom}px`;
-        jobIdAutocompleteResultsContainer.style.width = `${inputRect.width}px`;
+        jobIdAutocompleteResultsContainer.style.position = 'absolute';
+        jobIdAutocompleteResultsContainer.style.top = '100%';
+        jobIdAutocompleteResultsContainer.style.left = '0';
+        jobIdAutocompleteResultsContainer.style.width = '100%';
         jobIdAutocompleteResultsContainer.style.display = 'block';
     }
 }
@@ -727,10 +826,9 @@ function selectJobIdSuggestion(item) {
     jobIdActive = -1;
 }
 
-
 // --- Main DOM Content Loaded Listener ---
 document.addEventListener('DOMContentLoaded', async () => {
-    // --- Assign All UI Elements ---
+    // Assign all UI elements
     toastEl = document.getElementById("toast");
 
     // Practice Navigator Elements
@@ -790,16 +888,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     convertEmailBtn = document.getElementById("convertEmailBtn");
     copyEmailBtn = document.getElementById("copyEmailBtn");
 
-    // --- Initial View Setup (Defaults to Navigator) ---
-    showView('practiceNavigatorView'); // Set the initial view
+    // Initial View Setup
+    showView('practiceNavigatorView');
 
-    // --- Global Navigation Toggle Buttons ---
+    // Global Navigation Toggle Buttons
     document.getElementById("navigatorGlobalToggleBtn").addEventListener("click", () => showView('practiceNavigatorView'));
     document.getElementById("jobManagerGlobalToggleBtn").addEventListener("click", () => showView('jobManagerView'));
     document.getElementById("emailFormatterGlobalToggleBtn").addEventListener("click", () => showView('emailFormatterView'));
 
-    // --- Practice Navigator Event Listeners ---
-    setContextualButtonsState(false); // Initial state for Navigator buttons
+    // Practice Navigator Event Listeners
+    setContextualButtonsState(false);
 
     if (resetSettingsBtn) {
         resetSettingsBtn.addEventListener('click', () => {
@@ -816,7 +914,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // Initial check for cache for Practice Navigator
+    // Initial check for cache
     try {
         const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
         if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
@@ -1074,12 +1172,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (currentIndex >= 0 && items[currentIndex]) { items[currentIndex].classList.add('highlighted'); items[currentIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
     });
 
-    // --- Email Formatter Event Listeners ---
+    // Email Formatter Event Listeners
     convertEmailBtn.addEventListener("click", convertEmails);
     copyEmailBtn.addEventListener("click", copyEmails);
     document.getElementById("backToNavigatorBtnEmail").addEventListener("click", () => showView('practiceNavigatorView'));
 
-    // --- Job Manager Event Listeners ---
+    // Job Manager Event Listeners
     document.getElementById("backToNavigatorBtnJobPanel").addEventListener("click", () => showView('practiceNavigatorView'));
 
     clearDocIdBtn.onclick = () => {
@@ -1269,7 +1367,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    // --- Autocomplete Event Listeners for Job Manager ---
+    // Autocomplete Event Listeners for Job Manager
     docInput.addEventListener("input", () => {
       const docIdFullString = docInput.value;
       const numericDocId = getNumericDocIdFromInput(docIdFullString);
@@ -1277,7 +1375,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (match) {
         jobIdInput.value = match.jobId;
         jobTypeLabel.textContent = match.jobType;
-        practiceInputJobManager.value = match.practiceName; // Use Job Manager's practice input
+        practiceInputJobManager.value = match.practiceName;
         odsCodeLabel.textContent = match.odsCode;
       } else {
         clearDependentFields();
@@ -1321,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         else if (e.key === "Enter") { e.preventDefault(); if (jobIdActive > -1 && items[jobIdActive]) { selectJobIdSuggestion(items[jobIdActive]); } hideSuggestions(); }
     });
 
-    practiceInputJobManager.addEventListener("input", filterAndDisplayPracticeSuggestions);
+    practiceInputJobManager.addEventListener("input", debouncedFilterAndDisplayPracticeSuggestions);
     practiceInputJobManager.addEventListener("click", (e) => { e.stopPropagation(); filterAndDisplayPracticeSuggestions(); });
     practiceInputJobManager.addEventListener("focus", filterAndDisplayPracticeSuggestions);
     practiceInputJobManager.addEventListener("blur", hideSuggestions);
@@ -1352,11 +1450,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Clear interval when panel closes to prevent memory leaks for Job Manager's refresh
+    // Clear interval when panel closes
     window.addEventListener('beforeunload', () => {
         if (refreshIntervalId) {
             clearInterval(refreshIntervalId);
         }
     });
-
-}); // End of DOMContentLoaded
+});

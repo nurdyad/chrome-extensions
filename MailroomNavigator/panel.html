@@ -190,6 +190,7 @@
       gap: 6px;
       margin-bottom: 15px;
       align-items: center;
+      position: relative;
     }
 
     .input-with-button input {
@@ -247,6 +248,13 @@
       box-shadow: var(--box-shadow);
       border-left: 4px solid var(--primary-color);
       transition: var(--transition);
+      position: relative; /* FIX: Ensure all sections create a stacking context */
+      z-index: 1; /* FIX: Give a default stacking order */
+    }
+    
+    /* FIX: Add this new rule to raise the document selection section above others */
+    #documentSelectionSection {
+      z-index: 5;
     }
 
     .section-container:hover {
@@ -389,6 +397,52 @@
       background: #eff6ff; 
       color: #1e40af;
       border-left: 3px solid var(--info-color);
+    }
+
+    .autocomplete-item {
+      padding: 10px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--medium-gray);
+      transition: background 0.2s;
+    }
+
+    .autocomplete-item:hover {
+      background-color: var(--light-gray);
+    }
+
+    .suggestion-main {
+      font-weight: 500;
+      margin-bottom: 3px;
+    }
+
+    .suggestion-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8em;
+      color: var(--dark-gray);
+    }
+    
+    .loading-state {
+      position: relative;
+      padding-right: 30px;
+    }
+    
+    .loading-state::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(0, 0, 0, 0.1);
+      border-radius: 50%;
+      border-top-color: var(--primary-color);
+      animation: spin 1s linear infinite;
+    }
+    
+    .dropdown-stable {
+      transition: opacity 0.2s ease;
     }
 
     #statusDisplay, #cdbSearchResult {
@@ -597,7 +651,6 @@
   </style>
 </head>
 <body>
-  <!-- Global Navigation Tabs -->
   <div class="btn-row global-nav-buttons-row">
     <button id="navigatorGlobalToggleBtn" class="btn active-tab">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -623,11 +676,9 @@
     </button>
   </div>
 
-  <!-- Practice Navigator View -->
   <div id="practiceNavigatorView" class="view-transition">
     <h1>Practice Navigator</h1>
     
-    <!-- Practice Input Section with Buttons -->
     <div style="margin-bottom: 15px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
         <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Practice Name or ODS</label>
@@ -667,7 +718,6 @@
 
     <ul id="suggestions"></ul>
 
-    <!-- Setting Type Section with Reset Button -->
     <div style="margin-bottom: 15px;">
       <label for="settingType">Setting Type</label>
       <div class="input-with-button">
@@ -682,7 +732,6 @@
     </div>
 
 
-    <!-- Status Buttons Row -->
     <div class="btn-row">
       <button id="preparingBtn" class="btn btn-sm" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -700,7 +749,6 @@
       </button>
     </div>
 
-    <!-- CDB Search Section -->
     <div style="margin-bottom: 15px;">
       <label for="cdbSearchInput">Search by Practice CDB</label>
       <div class="input-with-button">
@@ -720,7 +768,6 @@
     <div id="statusDisplay"></div>
   </div>
 
-  <!-- Job Manager View -->
   <div id="jobManagerView" class="job-manager-container view-transition" style="display: none;">
     <h1>Job Panel</h1>
     <button id="backToNavigatorBtnJobPanel" class="back-to-nav-btn" title="Back to Navigator">
@@ -747,7 +794,7 @@
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
-        <div id="autocompleteResults" class="custom-autocomplete-results"></div>
+        <div id="autocompleteResults" class="custom-autocomplete-results dropdown-stable"></div>
       </div>
     </div>
 
@@ -917,7 +964,6 @@
     <div id="toast"></div>
   </div>
 
-  <!-- Email Formatter View -->
   <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
     <h1>Email Formatter</h1>
     <button id="backToNavigatorBtnEmail" class="back-to-nav-btn" title="Back to Navigator">
@@ -947,5 +993,5 @@
   </div>
 
   <script src="panel.js"></script>
-</body>
+  </body>
 </html>
