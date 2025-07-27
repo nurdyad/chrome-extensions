@@ -610,9 +610,27 @@
   <div id="practiceNavigatorView" class="view-transition">
     <h1>Practice Navigator</h1>
     
-    <!-- Practice Input Section -->
+    <!-- Practice Input Section with Buttons -->
     <div style="margin-bottom: 15px;">
-      <label for="practiceInput">Practice Name or ODS</label>
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+        <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Practice Name or ODS</label>
+        <button id="createPracticeAdminBtn" class="btn btn-sm">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New
+        </button>
+        <button id="usersBtn" class="btn btn-sm" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          Users
+        </button>
+      </div>
       <div class="input-with-button">
         <input id="practiceInput" placeholder="e.g. Ashfield or H81017" autocomplete="off">
         <button id="practicesBtn" class="btn btn-sm">
@@ -626,10 +644,10 @@
 
     <ul id="suggestions"></ul>
 
-    <!-- Setting Type Section -->
+    <!-- Setting Type Section with Reset Button -->
     <div style="margin-bottom: 15px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-        <label for="settingType">Setting Type</label>
+        <label for="settingType" style="margin-bottom: 0;">Setting Type</label>
         <button id="resetSettingsBtn" class="btn btn-sm">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
@@ -637,7 +655,7 @@
           </svg>
         </button>
       </div>
-      <select id="settingType">
+      <select id="settingType" style="width: 100%;">
         <option value="" selected disabled hidden>Select Setting Type</option>
         <option value="basic">Basic</option>
         <option value="service">Service</option>
@@ -646,26 +664,7 @@
       </select>
     </div>
 
-    <!-- Buttons Row -->
-    <div class="btn-row" style="margin-bottom: 15px;">
-      <button id="createPracticeAdminBtn" class="btn">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-        New Practice
-      </button>
-      <button id="usersBtn" class="btn" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-          <circle cx="9" cy="7" r="4"></circle>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-        </svg>
-        Users
-      </button>
-    </div>
-
+    <!-- Status Buttons Row -->
     <div class="btn-row">
       <button id="preparingBtn" class="btn" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
