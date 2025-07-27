@@ -16,6 +16,7 @@
       --warning-color: #f39c12;
       --danger-color: #e74c3c;
       --info-color: #3498db;
+      --collection-color: #9b59b6;
       --border-radius: 8px;
       --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
       --transition: all 0.3s ease;
@@ -248,11 +249,10 @@
       box-shadow: var(--box-shadow);
       border-left: 4px solid var(--primary-color);
       transition: var(--transition);
-      position: relative; /* FIX: Ensure all sections create a stacking context */
-      z-index: 1; /* FIX: Give a default stacking order */
+      position: relative;
+      z-index: 1;
     }
     
-    /* FIX: Add this new rule to raise the document selection section above others */
     #documentSelectionSection {
       z-index: 5;
     }
@@ -299,6 +299,8 @@
     #rejectedBtn:hover:not(:disabled) { background-color: #c0392b; }
     #searchCdbBtn { background-color: var(--info-color); }
     #searchCdbBtn:hover:not(:disabled) { background-color: #2980b9; }
+    #collectionBtn { background-color: var(--collection-color); }
+    #collectionBtn:hover:not(:disabled) { background-color: #8e44ad; }
 
     .global-nav-buttons-row {
       display: flex;
@@ -681,14 +683,14 @@
     
     <div style="margin-bottom: 15px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-        <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Practice Name or ODS</label>
+        <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
         <button id="createPracticeAdminBtn" class="btn btn-sm">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
           </svg>
-          New
         </button>
+
         <button id="usersBtn" class="btn btn-sm" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -696,8 +698,8 @@
             <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
             <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
           </svg>
-          Users
         </button>
+
         <button id="practicesBtn" class="btn btn-sm">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"></circle>
@@ -733,6 +735,15 @@
 
 
     <div class="btn-row">
+      <button id="collectionBtn" class="btn btn-sm" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+        Collection
+      </button>
+
       <button id="preparingBtn" class="btn btn-sm" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"></circle>
@@ -740,6 +751,7 @@
         </svg>
         Preparing
       </button>
+
       <button id="rejectedBtn" class="btn btn-sm" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -769,14 +781,7 @@
   </div>
 
   <div id="jobManagerView" class="job-manager-container view-transition" style="display: none;">
-    <h1>Job Panel</h1>
-    <button id="backToNavigatorBtnJobPanel" class="back-to-nav-btn" title="Back to Navigator">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="19" y1="12" x2="5" y2="12"></line>
-        <polyline points="12 19 5 12 12 5"></polyline>
-      </svg>
-    </button>
-
+    
     <div id="documentSelectionSection" class="section-container">
       <h3>Document Selection</h3>
       <label for="documentDropdown">Document ID:</label>
@@ -965,13 +970,7 @@
   </div>
 
   <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
-    <h1>Email Formatter</h1>
-    <button id="backToNavigatorBtnEmail" class="back-to-nav-btn" title="Back to Navigator">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="19" y1="12" x2="5" y2="12"></line>
-        <polyline points="12 19 5 12 12 5"></polyline>
-      </svg>
-    </button>
+    
     <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
     <button id="convertEmailBtn" class="btn">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -993,5 +992,5 @@
   </div>
 
   <script src="panel.js"></script>
-  </body>
+</body>
 </html>
