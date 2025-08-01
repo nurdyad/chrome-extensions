@@ -468,19 +468,47 @@
       box-sizing: border-box;
     }
 
-    #convertEmailBtn, #copyEmailBtn {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 12px;
-      background-color: var(--success-color);
-      color: white;
-      border: none;
-      border-radius: var(--border-radius);
-      cursor: pointer;
-      transition: var(--transition);
+    /* Base styles for all buttons in the email formatter grid */
+    .email-formatter-container .button-grid .btn {
+        color: white;
+        border: none;
+        cursor: pointer;
+        transition: var(--transition);
+        font-weight: 500;
     }
 
-    #convertEmailBtn:hover, #copyEmailBtn:hover {
+    /* Specific color for the 'success' (green) buttons */
+    #convertEmailBtn,
+    #nameOnlyBtn {
+        background-color: var(--success-color);
+    }
+
+    /* Grouped hover effects */
+    #convertEmailBtn:hover,
+    #nameOnlyBtn:hover {
+        background-color: #45a049; /* Darker green */
+        transform: translateY(-2px);
+    }
+
+    /* Style for the single 'Copy' button below the grid */
+    #copyEmailBtn {
+        width: 100%;
+        margin-top: 12px;
+        padding: 10px;
+        background-color: var(--success-color);
+        color: white;
+        border: none;
+        border-radius: var(--border-radius);
+        cursor: pointer;
+        transition: var(--transition);
+    }
+
+    #copyEmailBtn:hover {
+        background-color: #45a049;
+        transform: translateY(-2px);
+    }
+
+    #convertEmailBtn:hover, #copyEmailBtn:hover, #nameOnlyBtn:hover {
       background-color: #45a049;
       transform: translateY(-2px);
     }
@@ -803,6 +831,20 @@
       </div>
     </div>
 
+    <div id="jobSelectionSection" class="section-container">
+      <h3>Bot Job Selection</h3>
+      <label for="jobStatusInput">Job ID:</label>
+      <div class="input-with-button">
+        <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
+      </div>
+      <div class="button-grid" style="margin-top: 10px;">
+        <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
+        <button id="copyJobStatusIdBtn" class="btn btn-sm">Copy ID</button>
+        <button id="copyJobStatusUrlBtn" class="btn btn-sm">Copy URL</button>
+        <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
+      </div>
+    </div>
+
     <div id="mailroomDetailsSection" class="section-container" style="display: none;">
       <h3>Mailroom Details</h3>
       <div class="info-row">
@@ -894,7 +936,7 @@
     <div class="section-container">
       <h3>Practice Details (from Job Data)</h3>
       <label for="practiceDropdown">Practice Name:</label>
-      <div class="input-with-button practice-input-grid">
+      <div class="input-with-button">
         <input id="practiceDropdown" placeholder="Enter or select practice" autocomplete="off">
         <button id="openPractice" class="btn btn-sm">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -939,6 +981,7 @@
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
           </svg>
         </button>
+        <div id="jobIdAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
       </div>
       <div class="button-grid" style="margin-bottom: 10px;">
         <button id="openJobDirect" class="btn btn-sm">
@@ -978,15 +1021,20 @@
   <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
     
     <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
-    <button id="convertEmailBtn" class="btn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="17 1 21 5 17 9"></polyline>
-        <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-        <polyline points="7 23 3 19 7 15"></polyline>
-        <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-      </svg>
-      Convert
-    </button>
+    <div class="button-grid" style="margin-bottom: 12px;">
+      <button id="convertEmailBtn" class="btn btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+        </svg>
+        Convert
+      </button>
+      <button id="nameOnlyBtn" class="btn btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
+        </svg>
+        Name
+      </button>
+    </div>
     <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
     <button id="copyEmailBtn" class="btn">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
