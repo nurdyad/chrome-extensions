@@ -387,6 +387,30 @@ function convertEmails() {
     outputEmailFormatter.value = parsedList.join(",\n");
 }
 
+// Function for name-only conversion
+function convertEmailsToNamesOnly() {
+    const input = inputEmailFormatter.value;
+    const rawEntries = input
+      .split(/[\n;,]+/)
+      .map(entry => entry.trim())
+      .filter(entry => entry.length > 0);
+
+    const nameList = rawEntries.map(entry => {
+      const match = entry.match(/<?([\w.-]+@[\w.-]+\.\w+)>?/);
+      if (match) {
+        const email = match[1].trim();
+        // This is the only part that's different:
+        // It calls extractNameFromEmail but doesn't include the email address.
+        return extractNameFromEmail(email);
+      } else {
+        // If it's not an email, assume it's already a name
+        return entry;
+      }
+    });
+
+    outputEmailFormatter.value = nameList.join(", ");
+}
+
 function copyEmails() {
     outputEmailFormatter.select();
     document.execCommand("copy");
@@ -893,6 +917,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     mailroomJobId = document.getElementById("mailroom-job-id");
     mailroomInferredType = document.getElementById("mailroom-inferred-type");
     copyMailroomDetailsBtn = document.getElementById("copyMailroomDetails");
+    const jobStatusInput = document.getElementById('jobStatusInput');
+    const openJobStatusBtn = document.getElementById('openJobStatusBtn');
+    const copyJobStatusIdBtn = document.getElementById('copyJobStatusIdBtn');
+    const copyJobStatusUrlBtn = document.getElementById('copyJobStatusUrlBtn');
+    const clearJobStatusInputBtn = document.getElementById('clearJobStatusInputBtn');
+
+    openJobStatusBtn.disabled = true;
+    copyJobStatusIdBtn.disabled = true;
+    copyJobStatusUrlBtn.disabled = true;
+    clearJobStatusInputBtn.disabled = true;
 
     // Email Formatter Elements
     emailFormatterView = document.getElementById('emailFormatterView');
@@ -900,6 +934,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     outputEmailFormatter = document.getElementById("outputEmailFormatter");
     convertEmailBtn = document.getElementById("convertEmailBtn");
     copyEmailBtn = document.getElementById("copyEmailBtn");
+    const nameOnlyBtn = document.getElementById('nameOnlyBtn');
 
     // Initial View Setup
     showView('practiceNavigatorView');
@@ -1197,6 +1232,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Email Formatter Event Listeners
     convertEmailBtn.addEventListener("click", convertEmails);
+    if (nameOnlyBtn) {
+    nameOnlyBtn.addEventListener("click", convertEmailsToNamesOnly);
+    }
     copyEmailBtn.addEventListener("click", copyEmails);
 
     // Job Manager Event Listeners
@@ -1415,24 +1453,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Autocomplete Event Listeners for Job Manager
     docInput.addEventListener("input", () => {
-      const docIdFullString = docInput.value;
-      const numericDocId = getNumericDocIdFromInput(docIdFullString);
-      const match = jobData.find(j => j.documentId === numericDocId);
-      if (match) {
-        jobIdInput.value = match.jobId;
-        jobTypeLabel.textContent = match.jobType;
-        practiceInputJobManager.value = match.practiceName;
-        odsCodeLabel.textContent = match.odsCode;
-      } else {
-        clearDependentFields();
-        practiceInputJobManager.value = "";
-      }
-      filterAndDisplayJobIdSuggestions();
-      if (numericDocId && /^\d+$/.test(numericDocId)) {
-          documentActionsSection.style.display = 'block';
-      } else {
-          documentActionsSection.style.display = 'none';
-      }
+        const docIdFullString = docInput.value;
+        const numericDocId = getNumericDocIdFromInput(docIdFullString);
+        
+        // Find a match in the currently scraped data
+        const match = jobData.find(j => j.documentId === numericDocId);
+
+        if (match) {
+            // If a match is found, populate all the fields
+            jobIdInput.value = match.jobId || '';
+            jobTypeLabel.textContent = match.jobType || '—';
+            practiceInputJobManager.value = match.practiceName || '';
+            odsCodeLabel.textContent = match.odsCode || '—';
+        } else {
+            // If no match is found (e.g., you're not on a dashboard page),
+            // clear the dependent fields
+            clearDependentFields();
+            practiceInputJobManager.value = "";
+        }
+
+        // Run the autocomplete for the Job ID field
+        filterAndDisplayJobIdSuggestions();
+
+        // **THE FIX**: This check now runs last to ensure the action
+        // buttons appear whenever there's a valid ID in the box.
+        if (numericDocId) {
+            documentActionsSection.style.display = 'block';
+        } else {
+            documentActionsSection.style.display = 'none';
+        }
     });
 
     docInput.addEventListener("focus", filterAndDisplaySuggestions);
@@ -1483,6 +1532,62 @@ document.addEventListener('DOMContentLoaded', async () => {
             hideSuggestions();
         }
     });
+
+    // The Job Selection buttons
+    if (jobStatusInput) {
+        jobStatusInput.addEventListener('input', () => {
+            const hasInput = jobStatusInput.value.trim().length > 0;
+            openJobStatusBtn.disabled = !hasInput;
+            copyJobStatusIdBtn.disabled = !hasInput;
+            copyJobStatusUrlBtn.disabled = !hasInput;
+            clearJobStatusInputBtn.disabled = !hasInput; // <-- ADD THIS LINE
+        });
+    }
+
+    // 3. Add the click handlers for each button's action
+    if (openJobStatusBtn) {
+        openJobStatusBtn.addEventListener('click', () => {
+            const jobId = jobStatusInput.value.trim();
+            if (jobId) {
+                const url = `https://app.betterletter.ai/admin_panel/bots/jobs/${jobId}`;
+                chrome.tabs.create({ url: url });
+            }
+        });
+    }
+
+    if (copyJobStatusIdBtn) {
+        copyJobStatusIdBtn.addEventListener('click', () => {
+            const jobId = jobStatusInput.value.trim();
+            if (jobId) {
+                navigator.clipboard.writeText(jobId);
+                showToast("Job ID copied!");
+            }
+        });
+    }
+
+    if (copyJobStatusUrlBtn) {
+        copyJobStatusUrlBtn.addEventListener('click', () => {
+            const jobId = jobStatusInput.value.trim();
+            if (jobId) {
+                const url = `https://app.betterletter.ai/admin_panel/bots/jobs/${jobId}`;
+                navigator.clipboard.writeText(url);
+                showToast("Job Status URL copied!");
+            }
+        });
+    }
+
+    if (clearJobStatusInputBtn) {
+        clearJobStatusInputBtn.addEventListener('click', () => {
+            jobStatusInput.value = ''; // Clear the input field
+
+            // Manually trigger the 'input' event we created earlier.
+            // This re-uses our existing logic to disable the other buttons.
+            jobStatusInput.dispatchEvent(new Event('input'));
+
+            jobStatusInput.focus(); // For convenience, focus back on the input field
+        });
+    }
+    // END: Job Selection button listeners
     
     // Global mousedown listener to hide all autocompletes
     document.addEventListener("mousedown", (e) => {
