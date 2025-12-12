@@ -512,49 +512,43 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
     await waitForTabToLoad(createdTab.id, 15000);
 
     // 3️⃣ Inject LiveView-aware polling click
-    const [{ result: clickSucceeded }] =
-      await chrome.scripting.executeScript({
-        target: { tabId: createdTab.id },
-        func: () => {
-          return new Promise((resolve) => {
-            const selector = '[data-test-id="tab-ehr_settings"]';
-            const maxRetries = 20; // ~10s
-            let attempts = 0;
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: createdTab.id },
+      func: () => {
+        return new Promise((resolve) => {
+          const selector = '[data-test-id="tab-ehr_settings"]';
+          const maxRetries = 20; // ~10 seconds
+          let attempts = 0;
 
-            const tryClick = () => {
-              const tab = document.querySelector(selector);
-              if (tab) {
-                console.log("[BetterLetter] Clicking EHR Settings tab");
-                tab.click();
-                resolve(true);
-                return;
-              }
+          const interval = setInterval(() => {
+            const tab = document.querySelector(selector);
 
-              if (++attempts >= maxRetries) {
-                console.warn(
-                  "[BetterLetter] EHR Settings tab not found after retries"
-                );
-                resolve(false);
-              }
-            };
+            if (tab) {
+              console.log("[BetterLetter] Clicking EHR Settings tab");
+              tab.click();
+              clearInterval(interval);
+              resolve(true); // ✅ LiveView hydrated
+              return;
+            }
 
-            // Phoenix LiveView often hydrates *after* load
-            const interval = setInterval(() => {
-              tryClick();
-              if (attempts >= maxRetries) {
-                clearInterval(interval);
-              }
-            }, 500);
-          });
-        }
-      });
+            if (++attempts >= maxRetries) {
+              console.warn(
+                "[BetterLetter] EHR Settings tab not found after retries"
+              );
+              clearInterval(interval);
+              resolve(false);
+            }
+          }, 500);
+        });
+      }
+    });
 
     // 4️⃣ Activate only if this is still the most recent tab
-    if (createdTab.id === lastOpenedPracticeTabId) {
+    if (result === true && createdTab.id === lastOpenedPracticeTabId) {
       await chrome.tabs.update(createdTab.id, { active: true });
     }
 
-    return { success: true, clicked: clickSucceeded };
+    return { success: true, clicked: result };
   } catch (err) {
     console.error("[BetterLetter] handleOpenPractice failed:", err);
     return { error: err.message };
