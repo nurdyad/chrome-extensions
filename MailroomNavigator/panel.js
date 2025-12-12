@@ -50,7 +50,6 @@ let jobManagerView = null;
 let statusDisplayEl = null;
 let statusEl = null;
 let cdbSearchResultEl = null;
-let settingTypeEl = null;
 let resetSettingsBtn = null;
 let practiceInputEl = null;
 let suggestionsList = null;
@@ -873,7 +872,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusDisplayEl = document.getElementById('statusDisplay');
     statusEl = document.getElementById('status');
     cdbSearchResultEl = document.getElementById('cdbSearchResult');
-    settingTypeEl = document.getElementById('settingType');
     resetSettingsBtn = document.getElementById('resetSettingsBtn');
     practiceInputEl = document.getElementById('practiceInput');
     suggestionsList = document.getElementById('suggestions');
@@ -950,11 +948,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (resetSettingsBtn) {
         resetSettingsBtn.addEventListener('click', () => {
             practiceInputEl.value = '';
-            settingTypeEl.value = '';
             suggestionsList.style.display = 'none';
             cdbSuggestionsList.style.display = 'none';
             currentSelectedOdsCode = null;
-            setContextualButtonsState(false);
+            setNavigatorButtonsState(false);;
             if (statusDisplayEl) statusDisplayEl.style.display = 'none';
             if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
             showStatus('Settings reset.', 'success');
@@ -1063,17 +1060,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         chrome.tabs.create({ url: 'https://app.betterletter.ai/admin_panel/practices/new' });
     });
 
-    settingTypeEl.addEventListener('change', function() {
-        const selectedSettingType = this.value;
-        if (currentSelectedOdsCode && selectedSettingType !== "") {
-            triggerOpenPracticePage(practiceInputEl.value, selectedSettingType);
-        } else if (currentSelectedOdsCode && selectedSettingType === "") {
-            showStatus('Please select a valid setting type.', 'error');
-        } else {
-            showStatus('Please select a practice first.', 'error');
-        }
-    });
-
     practiceInputEl.addEventListener('input', () => {
         const query = practiceInputEl.value.toLowerCase().trim();
         const cachedPracticeDisplayNames = Object.keys(cachedPractices);
@@ -1088,8 +1074,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     practiceInputEl.value = name;
                     suggestionsList.style.display = 'none';
                     updateContextualButtonsOnInput(true);
-                    if (currentSelectedOdsCode && settingTypeEl.value !== "") {
-                        triggerOpenPracticePage(practiceInputEl.value, settingTypeEl.value);
+                    if (currentSelectedOdsCode) {
+                        triggerOpenPracticePage(practiceInputEl.value, "ehr_settings");
                     }
                 });
                 suggestionsList.appendChild(li);

@@ -112,14 +112,23 @@ function waitForSpecificElementOnTabLoad(tabId, selector, timeout = 15000, inter
           setTimeout(pollForElement, interval);
         }
       }).catch(err => {
-        console.warn(`%c[Merged BG] Error during element polling for ${selector} on tab ${tabId}: ${err.message}`, 'color: orange;');
-        if (Date.now() - start > timeout) {
-          console.error(`%c[Merged BG] Polling for "${selector}" on tab ${tabId} failed after ${timeout}ms due to script error: ${err.message}`, 'color: red;');
-          resolve(false);
-        } else {
-          setTimeout(pollForElement, interval);
-        }
-      });
+          console.warn(`%c[Merged BG] Error during element polling for ${selector} on tab ${tabId}: ${err.message}`, 'color: orange;');
+
+          if (Date.now() - start > timeout) {
+            // 🔕 Silenced the red console spam
+            if (selector.includes('ehr_settings')) {
+              console.warn(`[Merged BG] EHR Settings tab not found after ${timeout}ms — skipping click and continuing.`);
+              resolve(true); // continue gracefully
+            } else {
+              console.error(`%c[Merged BG] Polling for "${selector}" on tab ${tabId} failed after ${timeout}ms.`, 'color: red;');
+              resolve(false);
+            }
+          } else {
+            // Retry slower to let LiveView render fully
+            setTimeout(pollForElement, interval * 2);
+          }
+        });
+
     };
     pollForElement();
   });
@@ -180,8 +189,13 @@ async function clickSettingsTab(tabId, settingType) {
     const delay = 300 + attempt * 200;
     await new Promise(resolve => setTimeout(resolve, delay));
   }
-  console.error(`%c[Merged BG] Failed to click tab ${settingType} after 3 attempts.`, 'color: red;');
-  return false;
+  if (settingType === "ehr_settings") {
+    console.warn(`[Merged BG] EHR Settings tab not clickable after 3 attempts — continuing anyway.`);
+    return true; // ✅ continue gracefully
+  } else {
+    console.error(`%c[Merged BG] Failed to click tab ${settingType} after 3 attempts.`, 'color: red;');
+    return false;
+  }
 }
 
 /**
@@ -476,9 +490,103 @@ async function getOdsCodeFromName(input) {
  * @param {string} input - The practice name or ODS code.
  * @param {string} settingType - The type of setting to open (e.g., 'basic', 'service').
  */
-async function handleOpenPractice(input, settingType) {
-  const practiceId = await getOdsCodeFromName(input);
-  await openPracticePage(practiceId, settingType);
+let lastOpenTimestamp = 0;
+let lastOpenedTabId = null;
+let lastOpenedPracticeTabId = null;
+
+async function handleOpenPractice(input, settingType = "ehr_settings") {
+  try {
+    const odsMatch = input.match(/\(([^)]+)\)$/);
+    const odsCode = odsMatch ? odsMatch[1] : input.trim();
+    const url = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
+
+    // 1️⃣ Create tab in background
+    const createdTab = await chrome.tabs.create({
+      url,
+      active: false
+    });
+
+    lastOpenedPracticeTabId = createdTab.id;
+
+    // 2️⃣ Wait for *basic* load (not LiveView-ready)
+    await waitForTabToLoad(createdTab.id, 15000);
+
+    // 3️⃣ Inject LiveView-aware polling click
+    const [{ result: clickSucceeded }] =
+      await chrome.scripting.executeScript({
+        target: { tabId: createdTab.id },
+        func: () => {
+          return new Promise((resolve) => {
+            const selector = '[data-test-id="tab-ehr_settings"]';
+            const maxRetries = 20; // ~10s
+            let attempts = 0;
+
+            const tryClick = () => {
+              const tab = document.querySelector(selector);
+              if (tab) {
+                console.log("[BetterLetter] Clicking EHR Settings tab");
+                tab.click();
+                resolve(true);
+                return;
+              }
+
+              if (++attempts >= maxRetries) {
+                console.warn(
+                  "[BetterLetter] EHR Settings tab not found after retries"
+                );
+                resolve(false);
+              }
+            };
+
+            // Phoenix LiveView often hydrates *after* load
+            const interval = setInterval(() => {
+              tryClick();
+              if (attempts >= maxRetries) {
+                clearInterval(interval);
+              }
+            }, 500);
+          });
+        }
+      });
+
+    // 4️⃣ Activate only if this is still the most recent tab
+    if (createdTab.id === lastOpenedPracticeTabId) {
+      await chrome.tabs.update(createdTab.id, { active: true });
+    }
+
+    return { success: true, clicked: clickSucceeded };
+  } catch (err) {
+    console.error("[BetterLetter] handleOpenPractice failed:", err);
+    return { error: err.message };
+  }
+}
+
+/**
+ * Wait for a tab to fully load using chrome.tabs.onUpdated listener.
+ */
+async function waitForTabToLoad(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+
+    function handleUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(handleUpdated);
+        console.log(`[Merged BG] Tab ${tabId} finished loading.`);
+        resolve(true);
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+
+    const interval = setInterval(() => {
+      if (Date.now() - start > timeoutMs) {
+        chrome.tabs.onUpdated.removeListener(handleUpdated);
+        clearInterval(interval);
+        console.warn(`[Merged BG] Tab ${tabId} load timeout after ${timeoutMs}ms.`);
+        resolve(false);
+      }
+    }, 500);
+  });
 }
 
 /**
