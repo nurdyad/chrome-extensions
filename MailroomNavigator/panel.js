@@ -885,37 +885,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     function openSingleJobDashboard(jobType) {
         if (!jobType) return;
 
+        if (!currentSelectedOdsCode) {
+            console.warn('[BetterLetter] No practice selected – cannot filter jobs');
+            return;
+        }
+
         const url =
             `https://app.betterletter.ai/admin_panel/bots/dashboard` +
             `?job_types=${encodeURIComponent(jobType)}` +
+            `&practice_ids=${encodeURIComponent(currentSelectedOdsCode)}` +
             `&status=paused`;
 
-        openTabWithTimeout(url); // existing helper
-        }
-
-        if (docmanJobSelectNav) {
-        docmanJobSelectNav.addEventListener('change', () => {
-            const jobType = docmanJobSelectNav.value;
-            if (!jobType) return;
-
-            // reset the other dropdown
-            if (emisJobSelectNav) emisJobSelectNav.value = "";
-
-            openSingleJobDashboard(jobType);
-        });
-        }
-
-        if (emisJobSelectNav) {
-        emisJobSelectNav.addEventListener('change', () => {
-            const jobType = emisJobSelectNav.value;
-            if (!jobType) return;
-
-            // reset the other dropdown
-            if (docmanJobSelectNav) docmanJobSelectNav.value = "";
-
-            openSingleJobDashboard(jobType);
-        });
-        }
+        openTabWithTimeout(url);
+    }   
 
     // Job Manager Elements
     jobManagerView = document.getElementById('jobManagerView');
