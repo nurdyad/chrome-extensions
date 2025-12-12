@@ -1103,8 +1103,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 practiceInputEl.value = name;
                 suggestionsList.style.display = 'none';
                 updateContextualButtonsOnInput(true);
-                if (currentSelectedOdsCode && settingTypeEl.value !== "") {
-                    triggerOpenPracticePage(practiceInputEl.value, settingTypeEl.value);
+                if (currentSelectedOdsCode) {
+                    triggerOpenPracticePage(
+                        practiceInputEl.value,
+                        "ehr_settings"
+                    );
                 }
             });
             suggestionsList.appendChild(li);
