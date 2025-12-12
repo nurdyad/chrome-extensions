@@ -32,11 +32,12 @@
       font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
       padding: 12px;
       width: 320px;
+      height: 600px;
       background-color: var(--light-gray);
       color: var(--text-color);
       line-height: 1.5;
-      min-height: 620px;
       overflow-x: hidden;
+      overflow-y: hidden;
     }
 
     h1 {
@@ -205,6 +206,26 @@
       grid-template-columns: 3fr 1fr 1fr;
       gap: 6px;
       align-items: center;
+    }
+
+    .jobs-row {
+      display: flex;
+      gap: 9px;
+      margin-top: 6px;
+    }
+
+    .job-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .job-col select {
+      width: 100%;
+    }
+
+    .jobs-row label {
+      margin-bottom: 4px;
     }
 
     #toast {
@@ -757,6 +778,39 @@
         </svg>
         Rejected
       </button>
+    </div>
+
+    <div class="section-container">
+
+      <div class="jobs-row">
+        <div class="job-col">
+          <label for="docmanJobSelectNav">Docman Jobs</label>
+          <select id="docmanJobSelectNav">
+            <option value="">Select Docman job…</option>
+            <option value="generate_output">Generate Output</option>
+            <option value="docman_validate">Docman Validate</option>
+            <option value="docman_import">Docman Import</option>
+            <option value="docman_file">Docman File</option>
+            <option value="merge_tasks_for_same_recipient">Merge Tasks for Same Recipient</option>
+            <option value="publish_tasks">Publish Tasks</option>
+            <option value="docman_review">Docman Review</option>
+            <option value="docman_delete_original">Docman Delete Original</option>
+            <option value="docman_upload">Docman Upload</option>
+            <option value="docman_rejection">Docman Rejection</option>
+          </select>
+        </div>
+
+        <div class="job-col">
+          <label for="emisJobSelectNav">EMIS Jobs</label>
+          <select id="emisJobSelectNav">
+            <option value="">Select EMIS job…</option>
+            <option value="emis_api_consultation">EMIS API Consultation</option>
+            <option value="emis_unmatch">EMIS Unmatch</option>
+            <option value="emis_prepare">EMIS Prepare</option>
+            <option value="emis_delete_originals">EMIS Delete Originals</option>
+            <option value="emis_rejection">EMIS Rejection</option>
+          </select>
+        </div>
     </div>
 
     <div style="margin-bottom: 15px;">
