@@ -53,6 +53,8 @@ let cdbSearchResultEl = null;
 let resetSettingsBtn = null;
 let practiceInputEl = null;
 let suggestionsList = null;
+let docmanJobSelectNav = null;
+let emisJobSelectNav = null;
 let cdbSearchInputEl = null;
 let cdbSuggestionsList = null;
 
@@ -875,8 +877,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     resetSettingsBtn = document.getElementById('resetSettingsBtn');
     practiceInputEl = document.getElementById('practiceInput');
     suggestionsList = document.getElementById('suggestions');
+    docmanJobSelectNav = document.getElementById('docmanJobSelectNav');
+    emisJobSelectNav = document.getElementById('emisJobSelectNav');
     cdbSearchInputEl = document.getElementById('cdbSearchInput');
     cdbSuggestionsList = document.getElementById('cdbSuggestions');
+
+    function openSingleJobDashboard(jobType) {
+        if (!jobType) return;
+
+        const url =
+            `https://app.betterletter.ai/admin_panel/bots/dashboard` +
+            `?job_types=${encodeURIComponent(jobType)}` +
+            `&status=paused`;
+
+        openTabWithTimeout(url); // existing helper
+        }
+
+        if (docmanJobSelectNav) {
+        docmanJobSelectNav.addEventListener('change', () => {
+            const jobType = docmanJobSelectNav.value;
+            if (!jobType) return;
+
+            // reset the other dropdown
+            if (emisJobSelectNav) emisJobSelectNav.value = "";
+
+            openSingleJobDashboard(jobType);
+        });
+        }
+
+        if (emisJobSelectNav) {
+        emisJobSelectNav.addEventListener('change', () => {
+            const jobType = emisJobSelectNav.value;
+            if (!jobType) return;
+
+            // reset the other dropdown
+            if (docmanJobSelectNav) docmanJobSelectNav.value = "";
+
+            openSingleJobDashboard(jobType);
+        });
+        }
 
     // Job Manager Elements
     jobManagerView = document.getElementById('jobManagerView');

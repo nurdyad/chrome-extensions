@@ -494,13 +494,57 @@ let lastOpenTimestamp = 0;
 let lastOpenedTabId = null;
 let lastOpenedPracticeTabId = null;
 
+async function findExistingPracticeTab(odsCode) {
+  const urlPrefix = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
+
+  const tabs = await chrome.tabs.query({
+    url: `${urlPrefix}*`
+  });
+
+  return tabs.length > 0 ? tabs[0] : null;
+}
+
 async function handleOpenPractice(input, settingType = "ehr_settings") {
   try {
     const odsMatch = input.match(/\(([^)]+)\)$/);
     const odsCode = odsMatch ? odsMatch[1] : input.trim();
     const url = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
 
-    // 1️⃣ Create tab in background
+    // 🔍 STEP 1: Reuse existing tab if already open (any window)
+    const existingTab = await findExistingPracticeTab(odsCode);
+
+    if (existingTab) {
+      console.log("[BetterLetter] Reusing existing practice tab:", existingTab.id);
+
+      lastOpenedPracticeTabId = existingTab.id;
+
+      // Bring the window to the foreground
+      await chrome.windows.update(existingTab.windowId, {
+        focused: true
+      });
+
+      // Activate the tab
+      await chrome.tabs.update(existingTab.id, {
+        active: true
+      });
+
+      // Ensure EHR Settings tab is selected (safe + idempotent)
+      chrome.scripting.executeScript({
+        target: { tabId: existingTab.id },
+        func: () => {
+          const selector = '[data-test-id="tab-ehr_settings"]';
+          const tab = document.querySelector(selector);
+          if (tab) {
+            console.log("[BetterLetter] Clicking EHR Settings tab (existing tab)");
+            tab.click();
+          }
+        }
+      });
+
+      return { success: true, reused: true };
+    }
+
+    // 🆕 STEP 2: No existing tab → create new one (your existing logic)
     const createdTab = await chrome.tabs.create({
       url,
       active: false
@@ -508,7 +552,7 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
 
     lastOpenedPracticeTabId = createdTab.id;
 
-    // 🔥 ACTIVATE AS SOON AS CHROME PAINTS
+    // 🔥 Activate as soon as Chrome paints the page
     chrome.tabs.onUpdated.addListener(function activateOnLoad(tabId, info) {
       if (
         tabId === createdTab.id &&
@@ -520,16 +564,16 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
       }
     });
 
-    // 2️⃣ Wait for *basic* load (not LiveView-ready)
+    // Wait for basic load (not LiveView-ready)
     await waitForTabToLoad(createdTab.id, 15000);
 
-    // 3️⃣ Inject LiveView-aware polling click
+    // LiveView-aware polling for EHR Settings tab
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: createdTab.id },
       func: () => {
         return new Promise((resolve) => {
           const selector = '[data-test-id="tab-ehr_settings"]';
-          const maxRetries = 20; // ~10 seconds
+          const maxRetries = 20;
           let attempts = 0;
 
           const interval = setInterval(() => {
@@ -539,7 +583,7 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
               console.log("[BetterLetter] Clicking EHR Settings tab");
               tab.click();
               clearInterval(interval);
-              resolve(true); // ✅ LiveView hydrated
+              resolve(true);
               return;
             }
 
@@ -555,7 +599,7 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
       }
     });
 
-    // 4️⃣ Activate only if this is still the most recent tab
+    // Final safety activation (last-tab-wins)
     if (result === true && createdTab.id === lastOpenedPracticeTabId) {
       await chrome.tabs.update(createdTab.id, { active: true });
     }
