@@ -508,6 +508,18 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
 
     lastOpenedPracticeTabId = createdTab.id;
 
+    // 🔥 ACTIVATE AS SOON AS CHROME PAINTS
+    chrome.tabs.onUpdated.addListener(function activateOnLoad(tabId, info) {
+      if (
+        tabId === createdTab.id &&
+        info.status === "complete" &&
+        tabId === lastOpenedPracticeTabId
+      ) {
+        chrome.tabs.update(tabId, { active: true });
+        chrome.tabs.onUpdated.removeListener(activateOnLoad);
+      }
+    });
+
     // 2️⃣ Wait for *basic* load (not LiveView-ready)
     await waitForTabToLoad(createdTab.id, 15000);
 
