@@ -31,7 +31,7 @@ let scrapingTabId = null; // Single hidden tab for scraping (used by BL-Mailroom
  * wakes up after being inactive.
  */
 
-async function getOrCreateScrapingTab(url) {
+async function getOrCreateScrapingTab(url) { 
     if (scrapingTabId) {
         try {
             // Attempt to update the existing scraping tab if it's still valid

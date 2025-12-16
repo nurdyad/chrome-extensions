@@ -278,6 +278,85 @@ async function triggerOpenPracticePage(rawInput, settingType) {
     }
 }
 
+// --- Practice Selection: Single Source of Truth ---
+
+function normalizePracticeSelection(input) {
+  // Returns { name, ods, display } or null
+
+  // A) Cached practice object: { name, ods, ... }
+  if (input && typeof input === 'object' && typeof input.ods === 'string') {
+    const name = typeof input.name === 'string' ? input.name : '';
+    return { name, ods: input.ods, display: `${name} (${input.ods})` };
+  }
+
+  // B) Job Manager shape: { practiceName, odsCode }
+  if (input && typeof input === 'object' && typeof input.odsCode === 'string') {
+    const name = typeof input.practiceName === 'string' ? input.practiceName : '';
+    return { name, ods: input.odsCode, display: `${name} (${input.odsCode})` };
+  }
+
+  // C) String key in cachedPractices: "Name (ODS)"
+  if (typeof input === 'string' && cachedPractices[input] && typeof cachedPractices[input].ods === 'string') {
+    const p = cachedPractices[input];
+    return { name: p.name, ods: p.ods, display: input };
+  }
+
+  // D) Raw ODS typed/pasted
+  if (typeof input === 'string' && /^[A-Z]\d{5}$/.test(input.trim())) {
+    return { name: '', ods: input.trim(), display: input.trim() };
+  }
+
+  return null;
+}
+
+function setSelectedPractice(practiceLike, { updateInput = true, triggerStatus = true } = {}) {
+  const normalized = normalizePracticeSelection(practiceLike);
+
+  if (!normalized || typeof normalized.ods !== 'string' || !/^[A-Z]\d{5}$/.test(normalized.ods)) {
+    console.error('[BetterLetter] setSelectedPractice: invalid selection:', practiceLike);
+    // Fail loudly + clear state deterministically
+    currentSelectedOdsCode();
+    setNavigatorButtonsState(false);
+    if (docmanJobSelectNav) docmanJobSelectNav.disabled = true;
+    if (emisJobSelectNav) emisJobSelectNav.disabled = true;
+    throw new Error('Invalid practice selection (ODS must be a string like M84003).');
+  }
+
+  // ✅ The ONLY place currentSelectedOdsCode is ever set
+  currentSelectedOdsCode = normalized.ods;
+
+  if (updateInput && practiceInputEl) practiceInputEl.value = normalized.display;
+
+  if (suggestionsList) suggestionsList.style.display = 'none';
+  setNavigatorButtonsState(true);
+  if (docmanJobSelectNav) docmanJobSelectNav.disabled = false;
+  if (emisJobSelectNav) emisJobSelectNav.disabled = false;
+
+  if (triggerStatus) displayPracticeStatus();
+  
+  const ehrBtn = document.getElementById('openEhrSettingsBtn');
+  if (ehrBtn) ehrBtn.disabled = false;
+
+  return normalized;
+}
+
+function clearSelectedPractice() {
+  currentSelectedOdsCode = null;
+  setNavigatorButtonsState(false);
+  if (docmanJobSelectNav) docmanJobSelectNav.disabled = true;
+  if (emisJobSelectNav) emisJobSelectNav.disabled = true;
+  const ehrBtn = document.getElementById('openEhrSettingsBtn');
+    if (ehrBtn) ehrBtn.disabled = true;
+}
+
+function requireSelectedOdsCode() {
+  if (typeof currentSelectedOdsCode !== 'string' || !/^[A-Z]\d{5}$/.test(currentSelectedOdsCode)) {
+    console.error('[BetterLetter] Invalid currentSelectedOdsCode:', currentSelectedOdsCode);
+    throw new Error('No valid practice selected (ODS must be a string like M84003).');
+  }
+  return currentSelectedOdsCode;
+}
+
 async function updateContextualButtonsOnInput(triggerStatus = true) {
   const inputValue = practiceInputEl.value.trim();
   let foundOds = null;
@@ -300,19 +379,9 @@ async function updateContextualButtonsOnInput(triggerStatus = true) {
       }
     }
   }
+    
+  clearSelectedPractice();
 
-  if (foundOds) {
-    currentSelectedOdsCode = foundOds;
-    setNavigatorButtonsState(true); 
-    if (triggerStatus) {
-        displayPracticeStatus();
-    }
-  } else {
-    currentSelectedOdsCode = null;
-    setNavigatorButtonsState(false);
-    if (statusDisplayEl) statusDisplayEl.style.display = 'none';
-    if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
-  }
 }
 
 async function displayPracticeStatus() {
@@ -737,6 +806,12 @@ function filterAndDisplayPracticeSuggestions() {
     }
 
     const searchTerm = practiceInput.value.trim().toLowerCase();
+    if (searchTerm.length < 2) {
+        resultsContainer.innerHTML = '';
+        resultsContainer.style.display = 'none';
+        return;
+    }
+
     const isInputFocused = (document.activeElement === practiceInput);
     
     if (!searchTerm && (!isInputFocused || !uniquePractices?.length)) {
@@ -807,17 +882,12 @@ function filterAndDisplayPracticeSuggestions() {
 }
 
 function selectPracticeSuggestion(practice) {
-    // Check which view is active to update the correct elements
-    if (jobManagerView.style.display === 'block') {
-        practiceInputJobManager.value = practice.practiceName;
-        odsCodeLabel.textContent = practice.odsCode;
-        setJobPanelButtonsState(true); // Enable Job Panel buttons
-    } else {
-        practiceInputEl.value = `${practice.practiceName} (${practice.odsCode})`;
-        currentSelectedOdsCode = practice.odsCode;
-        setNavigatorButtonsState(true); // Enable Navigator buttons
-    }
+  setSelectedPractice(practice, {
+    updateInput: true,
+    triggerStatus: true
+  });
 }
+
 
 function filterAndDisplayJobIdSuggestions() {
     const currentDocId = getNumericDocIdFromInput(docInput.value);
@@ -885,19 +955,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     function openSingleJobDashboard(jobType) {
         if (!jobType) return;
 
-        if (!currentSelectedOdsCode) {
-            console.warn('[BetterLetter] No practice selected – cannot filter jobs');
-            return;
-        }
+        const ods = requireSelectedOdsCode(); // ✅ hard-fail if invalid
 
         const url =
             `https://app.betterletter.ai/admin_panel/bots/dashboard` +
             `?job_types=${encodeURIComponent(jobType)}` +
-            `&practice_ids=${encodeURIComponent(currentSelectedOdsCode)}` +
+            `&practice_ids=${encodeURIComponent(ods)}` +
             `&status=paused`;
 
         openTabWithTimeout(url);
-    }   
+    }
 
     // Job Manager Elements
     jobManagerView = document.getElementById('jobManagerView');
@@ -958,6 +1025,64 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initial View Setup
     showView('practiceNavigatorView');
 
+    const openEhrSettingsBtn = document.getElementById('openEhrSettingsBtn');
+
+    if (openEhrSettingsBtn) {
+        openEhrSettingsBtn.addEventListener('click', async () => {
+            try {
+            const ods = requireSelectedOdsCode();
+
+            await chrome.runtime.sendMessage({
+                action: 'openPractice',
+                input: ods,
+                settingType: 'ehr_settings'
+            });
+            } catch (error) {
+            console.error('EHR Settings open failed:', error);
+            showStatus('Please select a practice first.', 'error');
+            }
+        });
+    }
+
+    // ------------------------------
+    // Job Dropdown Listeners (FIX)
+    // ------------------------------
+
+    if (docmanJobSelectNav) {
+        docmanJobSelectNav.addEventListener('change', (event) => {
+            const jobType = event.target.value;
+
+            if (!jobType) return;
+
+            try {
+                openSingleJobDashboard(jobType);
+            } catch (err) {
+                console.error('Docman job open failed:', err);
+            }
+
+            // Reset dropdown after opening
+            event.target.value = '';
+        });
+    }
+
+    if (emisJobSelectNav) {
+        emisJobSelectNav.addEventListener('change', (event) => {
+            const jobType = event.target.value;
+
+            if (!jobType) return;
+
+            try {
+                openSingleJobDashboard(jobType);
+            } catch (err) {
+                console.error('EMIS job open failed:', err);
+            }
+
+            // Reset dropdown after opening
+            event.target.value = '';
+        });
+    }
+
+
     // Global Navigation Toggle Buttons
     document.getElementById("navigatorGlobalToggleBtn").addEventListener("click", () => showView('practiceNavigatorView'));
     document.getElementById("jobManagerGlobalToggleBtn").addEventListener("click", () => showView('jobManagerView'));
@@ -971,7 +1096,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             practiceInputEl.value = '';
             suggestionsList.style.display = 'none';
             cdbSuggestionsList.style.display = 'none';
-            currentSelectedOdsCode = null;
+            clearSelectedPractice();
             setNavigatorButtonsState(false);;
             if (statusDisplayEl) statusDisplayEl.style.display = 'none';
             if (cdbSearchResultEl) cdbSearchResultEl.style.display = 'none';
@@ -995,12 +1120,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     p.ods.toLowerCase() === practiceInputEl.value.toLowerCase().trim()
                 );
                 if (foundPractice) {
-                    currentSelectedOdsCode = foundPractice.ods;
-                    setContextualButtonsState(true);
-                    displayPracticeStatus();
+                    setSelectedPractice(foundPractice, { updateInput: true, triggerStatus: true });
                 } else {
-                    setContextualButtonsState(false);
+                    clearSelectedPractice();
                 }
+
             }
             if (statusEl) setTimeout(() => statusEl.style.display = 'none', 1500);
         } else {
@@ -1092,12 +1216,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const li = document.createElement('li');
                 li.textContent = name;
                 li.addEventListener('click', () => {
-                    practiceInputEl.value = name;
+                    const practiceObj = cachedPractices[name] || name; // name is "Practice (ODS)"
+                    selectPracticeSuggestion(practiceObj);             // sets ODS + enables buttons + shows status
                     suggestionsList.style.display = 'none';
-                    updateContextualButtonsOnInput(true);
-                    if (currentSelectedOdsCode) {
-                        triggerOpenPracticePage(practiceInputEl.value, "ehr_settings");
-                    }
                 });
                 suggestionsList.appendChild(li);
             });
@@ -1113,7 +1234,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         suggestionsList.innerHTML = '';
         if (matches.length === 0) {
             suggestionsList.style.display = 'none';
-            setContextualButtonsState(false);
+            setNavigatorButtonsState(false);
             return;
         }
 
@@ -1121,15 +1242,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const li = document.createElement('li');
             li.textContent = name;
             li.addEventListener('click', () => {
-                practiceInputEl.value = name;
+                const practiceObj = cachedPractices[name] || name; // name is "Practice (ODS)"
+                selectPracticeSuggestion(practiceObj);             // sets ODS + enables buttons + shows status
                 suggestionsList.style.display = 'none';
-                updateContextualButtonsOnInput(true);
-                if (currentSelectedOdsCode) {
-                    triggerOpenPracticePage(
-                        practiceInputEl.value,
-                        "ehr_settings"
-                    );
-                }
             });
             suggestionsList.appendChild(li);
         });
@@ -1183,7 +1298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 showStatus('Practice found by CDB!', 'success');
                 practiceInputEl.value = `${response.practice.name} (${response.practice.ods})`;
-                currentSelectedOdsCode = response.practice.ods;
+                setSelectedPractice({ name: response.practice.name, ods: response.practice.ods }, { updateInput: true, triggerStatus: true });
                 updateContextualButtonsOnInput(true);
             } else {
                 if (cdbSearchResultEl) {
@@ -1214,7 +1329,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             li.addEventListener('click', () => {
                 cdbSearchInputEl.value = match.cdb;
                 practiceInputEl.value = `${match.name} (${match.ods})`;
-                currentSelectedOdsCode = match.ods;
+                setSelectedPractice({ name: match.name, ods: match.ods }, { updateInput: true, triggerStatus: true });
                 cdbSuggestionsList.style.display = 'none';
                 updateContextualButtonsOnInput(true);
             });
@@ -1537,7 +1652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (practiceActive > -1 && items[practiceActive]) {
                 const practiceName = items[practiceActive].dataset.practiceName;
                 const odsCode = items[practiceActive].dataset.odsCode;
-                selectPracticeSuggestion({ practiceName, odsCode });
+                selectPracticeSuggestion({ name: practiceName, ods: odsCode });
             }
             hideSuggestions();
         }
