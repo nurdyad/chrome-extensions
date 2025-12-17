@@ -126,6 +126,8 @@ function setNavigatorButtonsState(enable) {
   document.getElementById('collectionBtn').disabled = !enable;
   document.getElementById('preparingBtn').disabled = !enable;
   document.getElementById('rejectedBtn').disabled = !enable;
+  const taskRecipientsBtn = document.getElementById('taskRecipientsBtn');
+  if (taskRecipientsBtn) taskRecipientsBtn.disabled = !enable;
 }
 
 // Contextual Buttons StateFor Job Panel
@@ -1040,6 +1042,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             } catch (error) {
             console.error('EHR Settings open failed:', error);
             showStatus('Please select a practice first.', 'error');
+            }
+        });
+    }
+
+    const taskRecipientsBtn = document.getElementById('taskRecipientsBtn');
+
+    if (taskRecipientsBtn) {
+        taskRecipientsBtn.addEventListener('click', async () => {
+            try {
+            // Uses your strict guard (string-only)
+            requireSelectedOdsCode();
+
+            // IMPORTANT: use the same background openPractice pipeline
+            await triggerOpenPracticePage(practiceInputEl.value, 'task_recipients');
+            } catch (err) {
+            showStatus('Please select a valid practice first.', 'error');
             }
         });
     }

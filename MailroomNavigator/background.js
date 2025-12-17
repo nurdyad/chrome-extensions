@@ -147,17 +147,15 @@ async function tabExists(tabId) {
  * Injects a script into the specified tab to click a specific setting tab.
  * Uses a robust polling mechanism with aggressive event simulation.
  * @param {number} tabId - The ID of the tab where the action should occur.
- * @param {string} settingType - The type of setting tab to click (e.g., 'basic').
+ * @param {string} settingType - The type of setting tab to click (e.g., 'ehr setting').
  * @throws {Error} If the element is not found within the timeout or script execution fails.
  */
 async function clickSettingsTab(tabId, settingType) {
   console.log(`%c[Merged BG] Attempting to click tab: ${settingType} on tab ${tabId}`, 'color: #3498db;');
 
   const selectorMap = {
-    basic: "[data-test-id='tab-basic']",
-    service: "[data-test-id='tab-service']",
-    workflows: "[data-test-id='tab-workflows']",
-    ehr_settings: "[data-test-id='tab-ehr_settings']"
+    ehr_settings: "[data-test-id='tab-ehr_settings']",
+    task_recipients: "[data-test-id='tab-task_recipients']"
   };
 
   const selector = selectorMap[settingType];
@@ -501,7 +499,7 @@ async function getOdsCodeFromName(input) {
  * Handles the logic for opening practice settings.
  * Resolves the practice ID and then calls openPracticePage.
  * @param {string} input - The practice name or ODS code.
- * @param {string} settingType - The type of setting to open (e.g., 'basic', 'service').
+ * @param {string} settingType - The type of setting to open (e.g., 'ehr setting', 'workflows').
  */
 let lastOpenTimestamp = 0;
 let lastOpenedTabId = null;
@@ -541,18 +539,8 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
         active: true
       });
 
-      // Ensure EHR Settings tab is selected (safe + idempotent)
-      chrome.scripting.executeScript({
-        target: { tabId: existingTab.id },
-        func: () => {
-          const selector = '[data-test-id="tab-ehr_settings"]';
-          const tab = document.querySelector(selector);
-          if (tab) {
-            console.log("[BetterLetter] Clicking EHR Settings tab (existing tab)");
-            tab.click();
-          }
-        }
-      });
+       // Replaces the old hard-coded EHR click
+      await clickSettingsTab(existingTab.id, settingType);
 
       return { success: true, reused: true };
     }
@@ -565,7 +553,7 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
 
     lastOpenedPracticeTabId = createdTab.id;
 
-    // 🔥 Activate as soon as Chrome paints the page
+    // Activate as soon as Chrome paints the page
     chrome.tabs.onUpdated.addListener(function activateOnLoad(tabId, info) {
       if (
         tabId === createdTab.id &&
@@ -580,44 +568,10 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
     // Wait for basic load (not LiveView-ready)
     await waitForTabToLoad(createdTab.id, 15000);
 
-    // LiveView-aware polling for EHR Settings tab
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: createdTab.id },
-      func: () => {
-        return new Promise((resolve) => {
-          const selector = '[data-test-id="tab-ehr_settings"]';
-          const maxRetries = 20;
-          let attempts = 0;
+    // Click the requested settings tab (EHR / Task Recipients / etc.)
+    await clickSettingsTab(createdTab.id, settingType);
 
-          const interval = setInterval(() => {
-            const tab = document.querySelector(selector);
-
-            if (tab) {
-              console.log("[BetterLetter] Clicking EHR Settings tab");
-              tab.click();
-              clearInterval(interval);
-              resolve(true);
-              return;
-            }
-
-            if (++attempts >= maxRetries) {
-              console.warn(
-                "[BetterLetter] EHR Settings tab not found after retries"
-              );
-              clearInterval(interval);
-              resolve(false);
-            }
-          }, 500);
-        });
-      }
-    });
-
-    // Final safety activation (last-tab-wins)
-    if (result === true && createdTab.id === lastOpenedPracticeTabId) {
-      await chrome.tabs.update(createdTab.id, { active: true });
-    }
-
-    return { success: true, clicked: result };
+    return { success: true };
   } catch (err) {
     console.error("[BetterLetter] handleOpenPractice failed:", err);
     return { error: err.message };
@@ -655,7 +609,7 @@ async function waitForTabToLoad(tabId, timeoutMs = 15000) {
 /**
  * Opens (or focuses) a practice settings page and then attempts to click a specific tab.
  * @param {string} practiceId - The ODS code of the practice.
- * @param {string} settingType - The type of setting tab to open (e.g., 'basic', 'workflows').
+ * @param {string} settingType - The type of setting tab to open (e.g., 'ehr setting', 'workflows').
  */
 async function openPracticePage(practiceId, settingType) {
   const practiceUrl = `https://app.betterletter.ai/admin_panel/practices/${practiceId}`;
@@ -663,10 +617,8 @@ async function openPracticePage(practiceId, settingType) {
   let practiceTab = existingTabs[0];
 
   const selectorMap = {
-    basic: "[data-test-id='tab-basic']",
-    service: "[data-test-id='tab-service']",
-    workflows: "[data-test-id='tab-workflows']",
-    ehr_settings: "[data-test-id='tab-ehr_settings']"
+    ehr_settings: "[data-test-id='tab-ehr_settings']",
+    task_recipients: "[data-test-id='tab-task_recipients']",
   };
   const targetTabSelector = selectorMap[settingType];
 
