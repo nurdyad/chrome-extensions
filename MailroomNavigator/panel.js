@@ -315,8 +315,8 @@ function setSelectedPractice(practiceLike, { updateInput = true, triggerStatus =
   if (!normalized || typeof normalized.ods !== 'string' || !/^[A-Z]\d{5}$/.test(normalized.ods)) {
     console.error('[BetterLetter] setSelectedPractice: invalid selection:', practiceLike);
     // Fail loudly + clear state deterministically
-    currentSelectedOdsCode();
-    setNavigatorButtonsState(false);
+    clearSelectedPractice();
+    throw new Error('Invalid practice selection (ODS must be a string like M84003).');
     if (docmanJobSelectNav) docmanJobSelectNav.disabled = true;
     if (emisJobSelectNav) emisJobSelectNav.disabled = true;
     throw new Error('Invalid practice selection (ODS must be a string like M84003).');
