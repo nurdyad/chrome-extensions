@@ -134,6 +134,15 @@ function waitForSpecificElementOnTabLoad(tabId, selector, timeout = 15000, inter
   });
 }
 
+async function tabExists(tabId) {
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Injects a script into the specified tab to click a specific setting tab.
  * Uses a robust polling mechanism with aggressive event simulation.
@@ -361,6 +370,10 @@ async function scrapePracticeCDB(odsCode) {
         const practiceUrl = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
         
         tempTabId = await getOrCreateScrapingTab(practiceUrl); // Use getOrCreateScrapingTab to reuse/create a tab
+        if (!(await tabExists(tempTabId))) {
+          console.warn('[Merged BG] Scrape aborted — tab no longer exists for', odsCode);
+          return 'Error';
+        }
 
         await new Promise(resolve => setTimeout(resolve, 100)); // Short delay after navigation
 
