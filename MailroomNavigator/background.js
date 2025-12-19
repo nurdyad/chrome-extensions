@@ -359,86 +359,135 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
  */
 async function scrapePracticeCDB(odsCode) {
   if (cdbCache[odsCode]) {
-    console.log(`%c[Merged BG] Returning cached CDB for ${odsCode}: ${cdbCache[odsCode]}`, 'color: green;');
+    console.log(
+      `%c[Merged BG] Returning cached CDB for ${odsCode}: ${cdbCache[odsCode]}`,
+      'color: green;'
+    );
     return cdbCache[odsCode];
   }
-    console.log(`%c[Merged BG] Attempting to scrape CDB for ODS: ${odsCode}`, 'color: #FF8C00;');
-    let tempTabId = null; // Use a distinct variable for the tab opened in this function
-    try {
-        const practiceUrl = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
-        
-        tempTabId = await getOrCreateScrapingTab(practiceUrl); // Use getOrCreateScrapingTab to reuse/create a tab
-        if (!(await tabExists(tempTabId))) {
-          console.warn('[Merged BG] Scrape aborted — tab no longer exists for', odsCode);
-          return 'Error';
-        }
 
-        await new Promise(resolve => setTimeout(resolve, 100)); // Short delay after navigation
+  console.log(
+    `%c[Merged BG] Attempting to scrape CDB for ODS: ${odsCode}`,
+    'color: #FF8C00;'
+  );
 
-        await waitForSpecificElementOnTabLoad(tempTabId, "[data-test-id='tab-basic']", 15000);
+  let tempTabId = null;
 
-        const ehrTabClicked = await chrome.scripting.executeScript({
-            target: { tabId: tempTabId },
-            func: () => {
-                const ehrTab = document.querySelector("[data-test-id='tab-ehr_settings']");
-                if (ehrTab) {
-                    ehrTab.focus();
-                    // Simulate a more robust click sequence for SPAs
-                    ehrTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    ehrTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    ehrTab.click();
-                    console.log('%c[Merged BG - Injected] Clicked EHR Settings tab.', 'color: green;');
-                    return true;
-                }
-                console.error('%c[Merged BG - Injected] EHR Settings tab not found for CDB scrape.', 'color: red;');
-                return 'N/A';
-            }
-        });
-        
-        if (!ehrTabClicked[0]?.result) {
-            console.error(`%c[Merged BG] EHR Settings tab click failed or tab not found for CDB scrape.`, 'color: red;');
-            return 'N/A';
-        }
+  try {
+    const practiceUrl = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
 
-        const cdbInputSelector = 'input[name="ehr_settings[practice_cdb]"]';
-        const cdbInputReady = await waitForSpecificElementOnTabLoad(tempTabId, cdbInputSelector, 30000, 750); // Longer timeout for this input
+    tempTabId = await getOrCreateScrapingTab(practiceUrl);
 
-        if (!cdbInputReady) {
-            console.error(`%c[Merged BG] CDB input field not found after navigating to EHR Settings tab. EHR content might not have loaded.`, 'color: red;');
-            return 'N/A';
-        }
-
-        const result = await chrome.scripting.executeScript({
-            target: { tabId: tempTabId },
-            func: (selector) => {
-                const cdbInput = document.querySelector(selector);
-                return cdbInput ? cdbInput.value : null;
-            },
-            args: [cdbInputSelector]
-        });
-
-        const cdbValue = result[0]?.result || 'N/A';
-        cdbCache[odsCode] = cdbValue; // Update in-memory cdbCache
-        console.log(`%c[Merged BG] Scraped CDB for ${odsCode}: "${cdbValue}"`, 'color: #FF8C00;');
-        return cdbValue;
-
-    } catch (error) {
-        console.error(`%c[Merged BG] ERROR: Failed to scrape CDB for ${odsCode}: ${error.message}`, 'color: red; font-weight: bold;', error);
-        return 'Error';
-    } finally {
-        // Only close the tab if it was explicitly opened by this function AND it's not the globally managed scrapingTabId
-        // This logic ensures that the main scrapingTabId is managed by fetchAndCachePracticeList's finally block,
-        // preventing premature closing if multiple scrape calls are nested or rapid.
-        if (tempTabId !== null && tempTabId === scrapingTabId) {
-             try {
-                await chrome.tabs.remove(tempTabId);
-                scrapingTabId = null; // Reset scrapingTabId after closing
-                console.log(`%c[Merged BG] Closed temporary CDB scrape tab: ${tempTabId}`, 'color: gray;');
-            } catch (e) {
-                console.warn(`%c[Merged BG] Could not close temporary CDB scrape tab ${tempTabId}: ${e.message}`, 'color: orange;');
-            }
-        }
+    // 🔒 Gracefully abort if tab vanished (expected in MV3)
+    if (!(await tabExists(tempTabId))) {
+      console.warn(
+        `[Merged BG] CDB scrape aborted — tab no longer exists for ${odsCode}`
+      );
+      return 'N/A';
     }
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Wait for LiveView base tab (readiness signal)
+    await waitForSpecificElementOnTabLoad(
+      tempTabId,
+      "[data-test-id='tab-basic']",
+      15000
+    );
+
+    // Click EHR Settings tab
+    const ehrTabClicked = await chrome.scripting.executeScript({
+      target: { tabId: tempTabId },
+      func: () => {
+        const ehrTab = document.querySelector(
+          "[data-test-id='tab-ehr_settings']"
+        );
+        if (ehrTab) {
+          ehrTab.focus();
+          ehrTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          ehrTab.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+          ehrTab.click();
+          return true;
+        }
+        return false;
+      }
+    });
+
+    if (!ehrTabClicked[0]?.result) {
+      console.warn(
+        `[Merged BG] EHR Settings tab not clickable for ${odsCode}`
+      );
+      return 'N/A';
+    }
+
+    const cdbInputSelector =
+      'input[name="ehr_settings[practice_cdb]"]';
+
+    const cdbInputReady = await waitForSpecificElementOnTabLoad(
+      tempTabId,
+      cdbInputSelector,
+      30000,
+      750
+    );
+
+    if (!cdbInputReady) {
+      console.warn(
+        `[Merged BG] CDB input not found for ${odsCode}`
+      );
+      return 'N/A';
+    }
+
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tempTabId },
+      func: selector => {
+        const input = document.querySelector(selector);
+        return input ? input.value : null;
+      },
+      args: [cdbInputSelector]
+    });
+
+    const cdbValue = result[0]?.result || 'N/A';
+
+    cdbCache[odsCode] = cdbValue;
+
+    console.log(
+      `%c[Merged BG] Scraped CDB for ${odsCode}: "${cdbValue}"`,
+      'color: #FF8C00;'
+    );
+
+    return cdbValue;
+  } catch (error) {
+    if (error.message?.includes('No tab with id')) {
+      console.warn(
+        `[Merged BG] CDB scrape skipped — tab disappeared for ${odsCode}`
+      );
+      return 'N/A';
+    }
+
+    console.error(
+      `%c[Merged BG] ERROR: Failed to scrape CDB for ${odsCode}: ${error.message}`,
+      'color: red; font-weight: bold;',
+      error
+    );
+    return 'Error';
+  } finally {
+    // Only close if this function owns the tab
+    if (tempTabId !== null && tempTabId === scrapingTabId) {
+      try {
+        await chrome.tabs.remove(tempTabId);
+        scrapingTabId = null;
+        console.log(
+          `%c[Merged BG] Closed temporary CDB scrape tab: ${tempTabId}`,
+          'color: gray;'
+        );
+      } catch (e) {
+        console.warn(
+          `%c[Merged BG] Could not close temporary CDB scrape tab ${tempTabId}: ${e.message}`,
+          'color: orange;'
+        );
+      }
+    }
+  }
 }
 
 /**
