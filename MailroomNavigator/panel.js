@@ -1323,7 +1323,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     cdbSearchResultEl.innerHTML = `<strong class="text-red-500">Error:</strong> ${response?.error || 'Practice not found for this CDB.'}`;
                     cdbSearchResultEl.style.display = 'block';
                 }
-                showStatus(`Search failed: ${response?.error || 'Practice not found.'}`, 'error');
                 console.warn(
                     `%c[Merged UI] CDB Search: ${response?.error || 'No matching practice found.'}`,
                     'color: orange;'
@@ -1337,26 +1336,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     cdbSearchInputEl.addEventListener('input', () => {
-        const query = cdbSearchInputEl.value.toLowerCase().trim();
-        const practicesWithValidCDB = Object.values(cachedPractices).filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error');
-        const matches = query ? practicesWithValidCDB.filter(p => p.cdb.toLowerCase().includes(query)) : practicesWithValidCDB;
-        const displayMatches = matches.map(p => ({ displayName: `${p.name} (${p.ods}) - ${p.cdb}`, ods: p.ods, cdb: p.cdb, name: p.name })).slice(0, 8);
+        const query = (cdbSearchInputEl.value || '').toLowerCase().trim();
+
+        // ✅ Use ALL practices (not just ones with a known CDB)
+        const allPractices = Object.values(cachedPractices);
+
+        // ✅ When empty, show ALL practices (like the main practice list)
+        const matches = !query
+        ? allPractices
+        : allPractices.filter(p => {
+            const name = (p.name || '').toLowerCase();
+            const ods  = (p.ods || '').toLowerCase();
+            const cdb  = (p.cdb || '').toLowerCase();
+            return name.includes(query) || ods.includes(query) || cdb.includes(query);
+            });
+
+        // (Optional) keep a cap so the popup stays fast. Increase if you want.
+        const displayMatches = matches
+        .map(p => {
+            const cdbText = (p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error') ? p.cdb : '—';
+            return {
+            displayName: `${p.name} (${p.ods}) - ${cdbText}`,
+            ods: p.ods,
+            cdb: cdbText,
+            name: p.name
+            };
+        })
+        .slice(0, 200);
 
         cdbSuggestionsList.innerHTML = '';
-        if (displayMatches.length === 0) { cdbSuggestionsList.style.display = 'none'; return; }
+        if (displayMatches.length === 0) {
+        cdbSuggestionsList.style.display = 'none';
+        return;
+        }
 
         displayMatches.forEach(match => {
-            const li = document.createElement('li');
-            li.textContent = match.displayName;
-            li.addEventListener('click', () => {
-                cdbSearchInputEl.value = match.cdb;
-                practiceInputEl.value = `${match.name} (${match.ods})`;
-                setSelectedPractice({ name: match.name, ods: match.ods }, { updateInput: true, triggerStatus: true });
-                cdbSuggestionsList.style.display = 'none';
-                updateContextualButtonsOnInput(true);
-            });
-            cdbSuggestionsList.appendChild(li);
+        const li = document.createElement('li');
+        li.textContent = match.displayName;
+
+        li.addEventListener('click', () => {
+            // If CDB is unknown, don’t force "—" into the input box
+            cdbSearchInputEl.value = (match.cdb === '—') ? '' : match.cdb;
+
+            // Selecting a suggestion should behave like selecting a practice
+            practiceInputEl.value = `${match.name} (${match.ods})`;
+            setSelectedPractice({ name: match.name, ods: match.ods }, { updateInput: true, triggerStatus: true });
+
+            cdbSuggestionsList.style.display = 'none';
+            updateContextualButtonsOnInput(true);
         });
+
+        cdbSuggestionsList.appendChild(li);
+        });
+
         cdbSuggestionsList.style.display = 'block';
     });
 
