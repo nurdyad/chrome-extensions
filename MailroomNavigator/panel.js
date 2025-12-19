@@ -1324,7 +1324,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     cdbSearchResultEl.style.display = 'block';
                 }
                 showStatus(`Search failed: ${response?.error || 'Practice not found.'}`, 'error');
-                console.error(`%c[Merged UI] CDB Search failed: ${response?.error}`, 'color: red;');
+                console.warn(
+                    `%c[Merged UI] CDB Search: ${response?.error || 'No matching practice found.'}`,
+                    'color: orange;'
+                );
+
             }
         } catch (err) {
             showStatus(`Error during CDB search: ${err.message}`, 'error');
