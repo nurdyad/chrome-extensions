@@ -328,7 +328,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
                        chrome.storage.local.set({ practiceCache: practiceCache });
                    }
                });
-           await new Promise(resolve => setTimeout(resolve, 50)); // Small delay between CDB scrapes
+           await new Promise(resolve => setTimeout(resolve, 1500)); // Small delay between CDB scrapes
        }
    }
    console.log('%c[Merged BG] Background CDB scraping initiated for missing entries.', 'color: #9932CC;');
@@ -908,44 +908,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const allPractices = Object.values(practiceCache); // Get current state of practiceCache
 
             // First, check in-memory cdbCache and practiceCache
-            for (const p of allPractices) {
-                if ((p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error' && p.cdb === searchedCDB) || (cdbCache[p.ods] === searchedCDB)) {
-                    foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb || cdbCache[p.ods] };
-                    console.log(`%c[Merged BG] Match found in CACHE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                    break;
-                }
-            }
+            return {
+              success: false,
+              error: `No practice found for CDB: "${searchedCDB}". It may not be indexed yet.`
+            };
 
             // If not found, iterate through practices and scrape missing CDBs
             if (!foundPractice) {
-                console.log(`%c[Merged BG] CDB not in cache. Will attempt to scrape practices for match.`, 'color: orange;');
-                for (const p of allPractices) {
-                    // Only scrape if CDB is unknown/error
-                    if (p.ods && (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error')) {
-                        try {
-                            const scrapedCDB = await scrapePracticeCDB(p.ods);
-                            p.cdb = scrapedCDB; // Update the cache entry in practiceCache
-                            await chrome.storage.local.set({ practiceCache: practiceCache }); // Persist updated cache
-                            cdbCache[p.ods] = scrapedCDB; // Update in-memory cdbCache
-
-                            if (scrapedCDB === searchedCDB) {
-                                foundPractice = { name: p.name, ods: p.ods, cdb: scrapedCDB };
-                                console.log(`%c[Merged BG] Match found by SCRAPE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                                break;
-                            }
-                        } catch (scrapeError) {
-                            console.warn(`%c[Merged BG] Could not scrape CDB for ${p.name} (${p.ods}) during search: ${scrapeError.message}`, 'color: orange;');
-                            if (p.cdb === undefined || p.cdb === 'N/A') { // Only mark as error if it was truly unknown/N/A
-                                p.cdb = 'Error';
-                                await chrome.storage.local.set({ practiceCache: practiceCache });
-                            }
-                        }
-                    } else if (p.ods && p.cdb === searchedCDB) { // Already had a valid CDB and it matches
-                        foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
-                        console.log(`%c[Merged BG] Match found (already scraped) for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                        break;
-                    }
-                }
+              return {
+                success: false,
+                error: `No practice found for CDB: "${searchedCDB}". It may not be indexed yet.`
+              };
             }
 
             if (foundPractice) {

@@ -34,6 +34,7 @@ function toggleLoadingState(element, isLoading) {
 const debouncedFilterAndDisplaySuggestions = debounce(filterAndDisplaySuggestions, 300);
 const debouncedFilterAndDisplayPracticeSuggestions = debounce(filterAndDisplayPracticeSuggestions, 300);
 const debouncedFilterAndDisplayJobIdSuggestions = debounce(filterAndDisplayJobIdSuggestions, 300);
+const DEBUG_MODE = false;
 
 // --- Global State Variables ---
 let currentSelectedOdsCode = null;
@@ -1320,14 +1321,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 updateContextualButtonsOnInput(true);
             } else {
                 if (cdbSearchResultEl) {
-                    cdbSearchResultEl.innerHTML = `<strong class="text-red-500">Error:</strong> ${response?.error || 'Practice not found for this CDB.'}`;
+                    cdbSearchResultEl.innerHTML = `<strong>Info:</strong> ${response?.error || 'No matching practice found yet.'}`;
+
                     cdbSearchResultEl.style.display = 'block';
                 }
-                console.warn(
-                    `%c[Merged UI] CDB Search: ${response?.error || 'No matching practice found.'}`,
-                    'color: orange;'
-                );
-
+                if (DEBUG_MODE){
+                    console.debug('[CDB Search]', response?.error);
+                }                    
             }
         } catch (err) {
             showStatus(`Error during CDB search: ${err.message}`, 'error');
