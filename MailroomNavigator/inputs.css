@@ -1,0 +1,189 @@
+textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+input[type="text"], input[list], select, textarea {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid var(--dark-gray);
+    border-radius: var(--border-radius);
+    font-size: 0.9em;
+    background-color: white;
+    transition: var(--transition);
+}
+
+input[type="text"]:focus, input[list]:focus, select:focus, textarea:focus {
+    border-color: var(--primary-color);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+}
+
+input[readonly] {
+    background-color: var(--light-gray);
+    cursor: default;
+}
+
+.input-with-button {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 15px;
+    align-items: center;
+    position: relative;
+}
+
+.input-with-button input {
+    flex-grow: 1;
+    height: 36px;
+    margin-bottom: 0 !important;
+}
+
+.job-col select {
+    width: 100%;
+}
+
+.dropdown-stable {
+    transition: opacity 0.2s ease;
+}
+
+.email-formatter-container textarea {
+    width: 100%;
+    height: 100px;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+}
+
+.autocomplete-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--medium-gray);
+    transition: background 0.2s;
+}
+
+.autocomplete-item:hover {
+    background-color: var(--light-gray);
+}
+
+.suggestion-main {
+    font-weight: 500;
+    margin-bottom: 3px;
+}
+
+.suggestion-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8em;
+    color: var(--dark-gray);
+}
+
+.custom-autocomplete-results {
+    position: absolute;
+    top: 100%;
+    background-color: white;
+    border: 1px solid var(--dark-gray);
+    border-radius: var(--border-radius);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1002;
+    box-shadow: var(--box-shadow);
+    display: none;
+    margin-top: 2px;
+    width: calc(100% - 20px);
+    left: 10px;
+    animation: fadeIn 0.2s ease;
+}
+
+.custom-autocomplete-results .autocomplete-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--medium-gray);
+    font-size: 0.9em;
+    color: var(--text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background-color 0.1s;
+}
+
+.custom-autocomplete-results .autocomplete-item:last-child {
+    border-bottom: none;
+}
+
+.custom-autocomplete-results .autocomplete-item:hover,
+.custom-autocomplete-results .autocomplete-item.active {
+    background-color: #f0f7ff;
+    color: var(--primary-color);
+}
+
+.loading-state {
+    position: relative;
+    padding-right: 30px;
+}
+
+.loading-state::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(0, 0, 0, 0.1);
+    border-radius: 50%;
+    border-top-color: var(--primary-color);
+    animation: spin 1s linear infinite;
+}
+
+
+#suggestions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--dark-gray);
+    max-height: 180px;
+    overflow-y: auto;
+    display: none;
+    background: white;
+    
+    /* Anchor strictly to the input container */
+    position: absolute;
+    top: 100%; /* Right below the input */
+    left: 0;
+    width: 100%; /* Match width of input container exactly */
+    
+    z-index: 2000; /* Ensure it floats ABOVE the buttons */
+    box-shadow: 0 8px 16px rgba(0,0,0,0.15); /* Stronger shadow for depth */
+    border-radius: 0 0 var(--border-radius) var(--border-radius);
+    animation: fadeIn 0.1s ease;
+}
+
+#suggestions, #cdbSuggestions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--dark-gray);
+    max-height: 160px;
+    overflow-y: auto;
+    display: none;
+    background: white;
+    position: absolute;
+    width: calc(100% - 16px);
+    z-index: 1000;
+    box-shadow: var(--box-shadow);
+    border-radius: var(--border-radius);
+    left: 8px;
+    animation: fadeIn 0.2s ease;
+}
+
+#suggestions li, #cdbSuggestions li {
+    padding: 10px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.1s;
+}
+
+#suggestions li:hover, #suggestions li.highlighted,
+#cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
+    background-color: #f0f7ff;
+}
