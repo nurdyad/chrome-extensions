@@ -21,6 +21,12 @@ const cdbCache = {}; // ODS => CDB value (This in-memory cache will store scrape
 let floatingWindowId = null; // Stores the ID of the unified popup window
 let scrapingTabId = null; // Single hidden tab for scraping (used by BL-Mailroom's background logic)
 
+let cdbIndexProgress = {
+  total: 0,
+  completed: 0,
+  running: false
+};
+
 
 // --- HELPER FUNCTIONS (DEFINED AT TOP-LEVEL SCOPE) ---
 
