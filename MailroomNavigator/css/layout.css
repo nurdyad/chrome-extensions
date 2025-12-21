@@ -1,0 +1,244 @@
+body {
+    font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    padding: 12px;
+    width: 320px;
+    height: 600px;
+    background-color: var(--light-gray);
+    color: var(--text-color);
+    line-height: 1.5;
+    overflow-x: hidden;
+    overflow-y: hidden;
+}
+
+h1 {
+    font-size: 1.3rem;
+    text-align: center;
+    margin-bottom: 15px;
+    color: var(--text-color);
+    font-weight: 600;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--medium-gray);
+    position: relative;
+}
+
+h1::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 2px;
+    background: var(--primary-color);
+    transition: var(--transition);
+}
+
+h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    color: var(--primary-color);
+    font-size: 1.05em;
+    font-weight: 600;
+    padding-bottom: 6px;
+    position: relative;
+}
+
+h3::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 30px;
+    height: 2px;
+    background: var(--primary-color);
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #555;
+    font-size: 0.9em;
+}
+
+/* This replaces the old squashed row with a clean 2-column grid */
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* Two equal columns */
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+/* Ensure buttons inside the grid fill the space */
+.action-grid .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* This ensures the suggestion list sticks exactly to the input box */
+.search-container {
+  position: relative; /* Crucial: This holds the absolute list inside */
+  margin-bottom: 15px;
+}
+
+.section-container {
+    background-color: white;
+    border-radius: var(--border-radius);
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: var(--box-shadow);
+    border-left: 4px solid var(--primary-color);
+    transition: var(--transition);
+    position: relative;
+    z-index: 1;
+}
+
+.section-container:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+}
+
+.btn-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.button-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 10px;
+    margin-top: 8px;
+}
+
+
+
+.practice-input-grid {
+    display: grid;
+    grid-template-columns: 3fr 1fr 1fr;
+    gap: 6px;
+    align-items: center;
+}
+
+.practice-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.practice-input-row label {
+    margin-bottom: 0;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.practice-input-row input {
+    flex-grow: 1;
+    margin-bottom: 0;
+}
+
+.jobs-row {
+    display: flex;
+    gap: 9px;
+    margin-top: 6px;
+}
+
+.job-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.jobs-row label {
+    margin-bottom: 4px;
+}
+
+.global-nav-buttons-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    background: white;
+    border-radius: var(--border-radius);
+    padding: 6px;
+    box-shadow: var(--box-shadow);
+}
+
+.global-nav-buttons-row .btn {
+    flex: 1;
+    padding: 8px;
+    font-size: 13px;
+    background-color: white;
+    color: var(--text-color);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: center;
+    margin: 0 1px;
+    box-shadow: none;
+    border-bottom: 2px solid transparent;
+}
+
+.global-nav-buttons-row .btn:hover {
+    background-color: var(--light-gray);
+}
+
+.global-nav-buttons-row .btn.active-tab {
+    background-color: var(--light-gray);
+    color: var(--text-color);
+    border-bottom: 2px solid var(--primary-color);
+    font-weight: 600;
+}
+
+.contextual-buttons-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+.email-formatter-container, .job-manager-container {
+    position: relative;
+    padding-top: 20px;
+}
+
+.back-to-nav-btn:hover {
+    background-color: #5a6268;
+    transform: translateY(-1px);
+}
+
+#documentSelectionSection {
+    z-index: 5;
+}
+
+#jobTitleSection {
+    margin-top: 12px !important;
+    padding-top: 10px !important;
+    border-top: 1px dashed var(--medium-gray);
+}
+
+#navigatorGlobalToggleBtn.active-tab { 
+    color: var(--primary-color); border-bottom-color: var(--primary-color);
+}
+#jobManagerGlobalToggleBtn.active-tab { 
+    color: var(--info-color); border-bottom-color: var(--info-color);
+}
+#emailFormatterGlobalToggleBtn.active-tab { 
+    color: #9b59b6; border-bottom-color: #9b59b6;
+}
+
+@media (max-width: 340px) {
+    body {
+    padding: 8px;
+    }
+    
+    .section-container {
+    padding: 12px;
+    }
+    
+    .global-nav-buttons-row .btn {
+    font-size: 12px;
+    padding: 6px;
+    }
+}
