@@ -5,6 +5,9 @@
 Icon
 ._*
 
+# Warp AI files
+WARP.md
+
 # Chrome Extension dev files
 *.log
 *.zip
