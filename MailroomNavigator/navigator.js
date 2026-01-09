@@ -45,6 +45,9 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   const list = document.getElementById('suggestions');
   if (list) list.style.display = 'none';
 
+  const cdbList = document.getElementById('cdbSuggestions');
+  if (cdbList) cdbList.style.display = 'none';
+
   setNavigatorButtonsState(true);
 
   if (triggerStatus) displayPracticeStatus();
@@ -66,7 +69,8 @@ export function setNavigatorButtonsState(enable) {
         'collectionBtn', 
         'preparingBtn', 
         'rejectedBtn', 
-        'taskRecipientsBtn', // Included based on your uploaded file
+        'openEhrSettingsBtn',
+        'taskRecipientsBtn',
         'docmanJobSelectNav', 
         'emisJobSelectNav'
     ];
@@ -154,4 +158,57 @@ export function handleNavigatorInput() {
     if (!state.currentSelectedOdsCode && !state.cachedPractices[inputEl.value]) {
          setNavigatorButtonsState(false);
     }
+}
+
+// --- 8. CDB Specific Logic ---
+
+export function buildCdbIndex() {
+    // This creates a fast, searchable list of all valid CDB codes
+    state.cachedCdbIndex = Object.values(state.cachedPractices)
+        .filter(p => p.cdb && p.cdb !== 'N/A' && p.cdb !== 'Error')
+        .map(p => ({
+            cdb: p.cdb,
+            ods: p.ods,
+            name: p.name,
+            label: `${p.cdb} - ${p.name}`
+        }));
+}
+
+export function handleCdbInput() {
+    const inputEl = document.getElementById('cdbSearchInput');
+    const listEl = document.getElementById('cdbSuggestions');
+    if (!inputEl || !listEl) return;
+
+    const query = inputEl.value.trim().toUpperCase();
+    
+    // Only search if the user has typed at least 2 characters
+    if (query.length < 2) {
+        listEl.style.display = 'none';
+        return;
+    }
+
+    const matches = (state.cachedCdbIndex || [])
+        .filter(item => item.cdb.toUpperCase().includes(query))
+        .slice(0, 8);
+
+    if (matches.length === 0) {
+        listEl.style.display = 'none';
+        return;
+    }
+
+    listEl.innerHTML = '';
+    matches.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.label;
+        li.addEventListener('click', () => {
+            // This selects the practice based on the ODS linked to that CDB
+            const practiceObj = state.cachedPractices[`${item.name} (${item.ods})`];
+            if (practiceObj) {
+                setSelectedPractice(practiceObj, { updateInput: true, triggerStatus: true });
+                inputEl.value = item.cdb; // Keep the CDB code visible in its box
+            }
+        });
+        listEl.appendChild(li);
+    });
+    listEl.style.display = 'block';
 }

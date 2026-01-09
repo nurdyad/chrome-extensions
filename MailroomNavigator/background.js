@@ -764,7 +764,7 @@ chrome.action.onClicked.addListener(async (tab) => {
         url: panelUrl, // Use the new merged panel.html
         type: 'popup',
         width: 320, // Default width from original BL-Mailroom popup
-        height: 620, // Adjusted height for combined features
+        height: 720, // Adjusted height for combined features
         focused: true,
         // Position relative to the top-left of the current browser window
         top: currentWindow.top + 50,

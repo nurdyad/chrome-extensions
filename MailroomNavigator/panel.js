@@ -52,6 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
         if (response && response.practiceCache) {
             setCachedPractices(response.practiceCache);
+            Navigator.buildCdbIndex();
             console.log('Cache loaded:', Object.keys(response.practiceCache).length);
         }
     } catch (e) { console.error("Cache load error:", e); }
@@ -61,12 +62,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     const pInput = document.getElementById('practiceInput');
     pInput.addEventListener('input', Navigator.handleNavigatorInput);
     pInput.addEventListener('focus', Navigator.handleNavigatorInput);
+
+    const cdbInput = document.getElementById('cdbSearchInput');
+    cdbInput.addEventListener('input', Navigator.handleCdbInput);
+    cdbInput.addEventListener('focus', Navigator.handleCdbInput);
     
+    // --- 1. The RESET Button (Clears the search box) ---
     document.getElementById('resetSettingsBtn').addEventListener('click', () => {
         pInput.value = '';
         Navigator.clearSelectedPractice();
         showStatus('Settings reset.', 'success');
     });
+    
+    // --- 2. The LIVE REFRESH Button (Force a new scan) ---
+    // We target the blue refresh button next to the reset button
+    const liveRefreshBtn = document.getElementById('resetSettingsBtn').nextElementSibling;
+    if (liveRefreshBtn) {
+        liveRefreshBtn.addEventListener('click', async () => {
+            showStatus('Refreshing live data...', 'loading');
+            try {
+                // Tells background to scrape the page again
+                await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+                
+                // Get the updated cache
+                const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+                if (response && response.practiceCache) {
+                    setCachedPractices(response.practiceCache);
+                    Navigator.buildCdbIndex();
+                }
+                
+                // Refresh the display for the current practice
+                if (state.currentSelectedOdsCode) {
+                    await Navigator.displayPracticeStatus();
+                }
+                showStatus('Data updated!', 'success');
+            } catch (e) {
+                showStatus('Refresh failed: ' + e.message, 'error');
+            }
+        });
+    }
 
     // Helper for URL opening logic
     const openUrl = (suffix) => {
