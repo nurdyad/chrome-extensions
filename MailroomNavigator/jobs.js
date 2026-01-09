@@ -41,6 +41,15 @@ export async function fetchAndPopulateData() {
 
     try {
         const { targetTabId } = await chrome.storage.local.get("targetTabId") || {};
+
+        if (targetTabId) {
+            const tab = await chrome.tabs.get(targetTabId);
+            // Check if the URL starts with 'chrome://' or 'edge://'
+            if (tab.url.startsWith("chrome://") || tab.url.startsWith("edge://")) {
+                console.log("Scraper skipped: Protected browser page.");
+                return; // Exit safely without triggering the error
+            }
+        }
         
         // Check for clicked mailroom data first
         const { clickedMailroomDocData } = await chrome.storage.local.get("clickedMailroomDocData") || {};
