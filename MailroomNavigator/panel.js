@@ -257,3 +257,11 @@ setInterval(async () => {
     }
   }
 }, 5000);
+
+window.addEventListener('DOMContentLoaded', () => {
+  // Auto-resize the popup window to tightly fit the content
+  const width = document.documentElement.scrollWidth;
+  const height = document.documentElement.scrollHeight;
+
+  window.resizeTo(width + 20, height + 40); // Padding for scrollbar & borders
+});

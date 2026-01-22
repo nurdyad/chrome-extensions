@@ -1,22 +1,38 @@
 body {
-    font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
-    padding: 12px;
-    width: 320px;
-    height: 600px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+    padding: 8px;
+    box-sizing: border-box;
     background-color: var(--light-gray);
-    color: var(--text-color);
-    line-height: 1.5;
-    overflow-x: hidden;
-    overflow-y: hidden;
+    /* 🛡️ This stops the body from defaulting to 100% width */
+    display: flex;
+    justify-content: flex-start;
+    overflow-x: hidden; 
+}
+
+.extension-wrapper {
+    /* 🛡️ THE SECRET: 'inline-block' makes the window hug the content */
+    display: inline-block; 
+    width: auto;
+    /* 🛡️ Setting height to auto helps remove bottom whitespace */
+    height: auto;
+    min-height: 480px;
+    
+    padding: 10px;
+    box-sizing: border-box;
+    background-color: var(--light-gray);
 }
 
 h1 {
-    font-size: 1.3rem;
+    font-size: 1.1rem;      
     text-align: center;
-    margin-bottom: 15px;
+    margin-bottom: 8px;    
+    margin-top: 0;         
     color: var(--text-color);
     font-weight: 600;
-    padding-bottom: 8px;
+    padding-bottom: 5px;
     border-bottom: 1px solid var(--medium-gray);
     position: relative;
 }
@@ -55,16 +71,16 @@ h3::after {
 
 label {
     display: block;
-    margin-bottom: 5px;
+    margin-bottom: 3px;
     font-weight: 500;
     color: #555;
-    font-size: 0.9em;
+    font-size: 0.82em;
 }
 
 /* This replaces the old squashed row with a clean 2-column grid */
 .action-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr; /* Two equal columns */
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-bottom: 15px;
 }
@@ -84,13 +100,10 @@ label {
 .section-container {
     background-color: white;
     border-radius: var(--border-radius);
-    padding: 15px;
-    margin-bottom: 15px;
+    padding: 10px;
+    margin-bottom: 10px;
     box-shadow: var(--box-shadow);
     border-left: 4px solid var(--primary-color);
-    transition: var(--transition);
-    position: relative;
-    z-index: 1;
 }
 
 .section-container:hover {
@@ -158,26 +171,21 @@ label {
 .global-nav-buttons-row {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 15px;
+    margin-bottom: 8px;
     background: white;
     border-radius: var(--border-radius);
-    padding: 6px;
+    padding: 3px;
     box-shadow: var(--box-shadow);
 }
 
 .global-nav-buttons-row .btn {
     flex: 1;
-    padding: 8px;
-    font-size: 13px;
+    padding: 6px 8px;
+    font-size: 11px;
+    gap: 4px;
     background-color: white;
     color: var(--text-color);
     border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: var(--transition);
-    text-align: center;
-    margin: 0 1px;
-    box-shadow: none;
     border-bottom: 2px solid transparent;
 }
 
