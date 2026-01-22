@@ -166,22 +166,22 @@ export function buildCdbIndex() {
         }));
 }
 
+// --- 8. CDB Search Logic  ---
 export function handleCdbInput() {
     const inputEl = document.getElementById('cdbSearchInput');
     const listEl = document.getElementById('cdbSuggestions');
     if (!inputEl || !listEl) return;
 
-    const query = inputEl.value.trim();
-    if (query.length < 2) {
-        listEl.style.display = 'none';
-        return;
-    }
+    const query = inputEl.value.trim().toLowerCase();
+    const allCdbItems = state.cachedCdbIndex || [];
 
-    const matches = (state.cachedCdbIndex || [])
-        .filter(item => item.cdb.includes(query))
-        .slice(0, 8);
+    // Show top 15 if empty, otherwise filter by typing
+    let matches = !query 
+        ? allCdbItems.slice(0, 15) 
+        : allCdbItems.filter(item => item.cdb.includes(query)).slice(0, 8);
 
     if (matches.length === 0) {
+        listEl.innerHTML = '';
         listEl.style.display = 'none';
         return;
     }
@@ -190,14 +190,20 @@ export function handleCdbInput() {
     matches.forEach(item => {
         const li = document.createElement('li');
         li.textContent = item.label;
-        li.addEventListener('click', () => {
+        
+        // --- FIX: Use mousedown to prevent the list from vanishing ---
+        li.addEventListener('mousedown', (e) => {
+            e.stopPropagation(); // Stops the global listener from seeing this click
+            e.preventDefault(); // This stops the "blur" event from hiding the list
             const practiceObj = state.cachedPractices[`${item.name} (${item.ods})`];
             if (practiceObj) {
                 setSelectedPractice(practiceObj);
                 inputEl.value = item.cdb;
+                listEl.style.display = 'none';
             }
         });
         listEl.appendChild(li);
     });
+    
     listEl.style.display = 'block';
 }

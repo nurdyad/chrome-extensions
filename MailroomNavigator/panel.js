@@ -33,12 +33,12 @@ function showView(viewId) {
 // --- 2. Global Hide Suggestions ---
 function hideSuggestions() {
     setTimeout(() => {
-        const ids = ['autocompleteResults', 'practiceAutocompleteResultsContainer', 'suggestions', 'cdbSuggestions', 'jobIdAutocompleteResultsContainer'];
+        const ids = ['suggestions', 'cdbSuggestions', 'autocompleteResults', 'practiceAutocompleteResultsContainer', 'jobIdAutocompleteResultsContainer'];
         ids.forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
         });
-    }, 150);
+    }, 200); 
 }
 
 // --- 3. Main Initialization ---
@@ -207,9 +207,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
-        const isInput = ['practiceInput', 'documentDropdown', 'job-id', 'practiceDropdown'].includes(e.target.id);
+        // List of all inputs that should NOT hide the dropdown when clicked
+        const safeInputs = [
+            'practiceInput', 
+            'documentDropdown', 
+            'job-id', 
+            'practiceDropdown', 
+            'cdbSearchInput' // We added this to the "safe" list
+        ];
+
+        const isInput = safeInputs.includes(e.target.id);
         const isList = e.target.closest('ul') || e.target.closest('.custom-autocomplete-results');
-        if (!isInput && !isList) hideSuggestions();
+
+        // ONLY hide if the click was NOT on an input and NOT on the list itself
+        if (!isInput && !isList) {
+            hideSuggestions();
+        }
     });
 
     showView('practiceNavigatorView');
