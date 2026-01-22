@@ -1,4 +1,4 @@
-// jobs.js
+// jobs.js - Full Replacement with URL Safety Guards
 import { state, setJobData, setUniquePractices, setDocActive, setJobIdActive, setPracticeActive } from './state.js';
 import { showToast, safeSetInnerHTML, toggleLoadingState, addActive, openTabWithTimeout } from './utils.js';
 import { setSelectedPractice } from './navigator.js';
@@ -30,7 +30,6 @@ export async function fetchAndPopulateData() {
         if(elements.mailroomDetailsSection) elements.mailroomDetailsSection.style.display = 'none';
         if(elements.jobTitleSection) elements.jobTitleSection.style.display = 'none';
         
-        // Reset Mailroom specific fields (simplified for brevity, ensures clean slate)
         ['mailroom-original-name', 'mailroom-nhs-no', 'mailroom-patient-name', 'mailroom-reason', 
          'mailroom-rejected-by-on', 'mailroom-status', 'mailroom-job-id', 'mailroom-inferred-type']
          .forEach(id => {
@@ -42,37 +41,29 @@ export async function fetchAndPopulateData() {
     try {
         const { targetTabId } = await chrome.storage.local.get("targetTabId") || {};
 
+        // --- 🛡️ SAFETY GUARD: Prevent chrome:// URL Access ---
         if (targetTabId) {
             const tab = await chrome.tabs.get(targetTabId);
-            // Check if the URL starts with 'chrome://' or 'edge://'
-            if (tab.url.startsWith("chrome://") || tab.url.startsWith("edge://")) {
-                console.log("Scraper skipped: Protected browser page.");
-                return; // Exit safely without triggering the error
+            // Skip protected pages to prevent console errors
+            if (tab.url.startsWith("chrome://") || tab.url.startsWith("edge://") || tab.url.startsWith("about:")) {
+                console.log("[Jobs] Scraper skipped: Protected system page.");
+                return; 
             }
         }
         
-        // Check for clicked mailroom data first
         const { clickedMailroomDocData } = await chrome.storage.local.get("clickedMailroomDocData") || {};
-        
-        const dashboardUrlPrefix = "https://app.betterletter.ai/admin_panel/bots/dashboard";
-        
-        // Preserve user input if they typed something before switching tabs
         const userTypedDocId = elements.docInput?.value || '';
 
         resetUI();
 
         if (!targetTabId) {
-            showToast("No active tab context.");
             if (elements.docInput) elements.docInput.value = userTypedDocId;
             return;
         }
 
         // --- A) Handle Mailroom Data Clicked from Content Script ---
         if (clickedMailroomDocData) {
-            console.log("Using Mailroom Document data:", clickedMailroomDocData);
-            
             if (elements.docInput) elements.docInput.value = clickedMailroomDocData.documentId || "";
-            // Populate mailroom fields
             const map = {
                 'mailroom-original-name': clickedMailroomDocData.originalNameContent,
                 'mailroom-nhs-no': clickedMailroomDocData.nhsNo,
@@ -89,9 +80,8 @@ export async function fetchAndPopulateData() {
             });
 
             if (elements.mailroomDetailsSection) elements.mailroomDetailsSection.style.display = 'block';
-            await chrome.storage.local.remove("clickedMailroomDocData"); // Clear after use
+            await chrome.storage.local.remove("clickedMailroomDocData"); 
 
-            // Show actions if valid doc ID
             if (elements.docInput?.value && /^\d+$/.test(elements.docInput.value)) {
                 if (elements.documentActionsSection) elements.documentActionsSection.style.display = 'block';
             }
@@ -99,11 +89,10 @@ export async function fetchAndPopulateData() {
         }
 
         // --- B) Scrape Dashboard Data ---
-        // We need to execute script on the target tab to get the table rows
         const [{ result }] = await chrome.scripting.executeScript({
             target: { tabId: targetTabId },
             func: () => {
-                if (!window.location.href.includes("bots/dashboard")) return null; // Only scrape dashboard
+                if (!window.location.href.includes("bots/dashboard")) return null; 
                 const tableRows = document.querySelectorAll("table tbody tr");
                 if (!tableRows || tableRows.length === 0) return [];
                 return Array.from(tableRows).map(row => {
@@ -120,9 +109,7 @@ export async function fetchAndPopulateData() {
         });
 
         if (result && result.length > 0) {
-            setJobData(result); // Store in global state
-            
-            // Extract unique practices for the dropdown
+            setJobData(result); 
             const practiceMap = new Map();
             result.forEach(job => {
                 if (job.practiceName && job.odsCode) {
@@ -132,28 +119,20 @@ export async function fetchAndPopulateData() {
             const unique = Array.from(practiceMap, ([name, code]) => ({ practiceName: name, odsCode: code }));
             setUniquePractices(unique);
 
-            // Auto-fill first result if strictly relevant (optional, mostly we wait for user input)
-            // But we do refresh suggestions
             filterAndDisplaySuggestions();
             filterAndDisplayPracticeSuggestions();
         } else {
-            // Not on dashboard or no data
             setJobData([]);
             setUniquePractices([]);
         }
         
-        // Restore input
         if (elements.docInput && userTypedDocId) {
             elements.docInput.value = userTypedDocId;
-            // Trigger input event logic manually to refresh UI based on restored ID
-            // We can call the handler directly or dispatch event. 
-            // Dispatching event is safer in this modular context if listeners are set up.
             elements.docInput.dispatchEvent(new Event('input')); 
         }
 
     } catch (err) {
         console.error("Error in fetchAndPopulateData:", err);
-        // Don't show toast on simple errors to avoid annoyance, just log
     }
 }
 
@@ -169,7 +148,6 @@ export function filterAndDisplaySuggestions() {
     setDocActive(-1);
 
     const isInputFocused = (document.activeElement === docInput);
-
     if (!searchTerm && (!isInputFocused || state.jobData.length === 0)) return;
 
     let filteredData = state.jobData;
@@ -196,7 +174,7 @@ export function filterAndDisplaySuggestions() {
             item.addEventListener('click', () => {
                 docInput.value = job.documentId;
                 container.style.display = 'none';
-                docInput.dispatchEvent(new Event('input')); // Trigger update
+                docInput.dispatchEvent(new Event('input')); 
             });
             container.appendChild(item);
         }
@@ -215,12 +193,10 @@ export function filterAndDisplayJobIdSuggestions() {
     
     if(!docInput || !jobIdInput || !container) return;
 
-    // Logic: Find job IDs associated with the current Document ID
-    const currentDocId = docInput.value.trim(); // Simplified regex check
+    const currentDocId = docInput.value.trim(); 
     let relevantJobIds = [];
 
     if (currentDocId) {
-        // Find all jobs that match this document ID
         const matchingJobs = state.jobData.filter(job => job.documentId === currentDocId);
         const uniqueIds = new Set(matchingJobs.map(j => j.jobId).filter(Boolean));
         relevantJobIds = Array.from(uniqueIds);
@@ -263,12 +239,6 @@ export function filterAndDisplayPracticeSuggestions() {
 
     const isInputFocused = (document.activeElement === practiceInput);
 
-    // Use unique practices found on the dashboard + global cache if needed?
-    // For Job Manager, we usually prioritize what's on the dashboard (state.uniquePractices)
-    // But your original code also looked at global cache. Let's stick to uniquePractices for specific job matching,
-    // or combine them if you prefer. Original code used 'cachedPractices' inside this function.
-    // Let's use state.cachedPractices to be consistent with original behavior.
-
     const allPractices = Object.values(state.cachedPractices).map(p => ({
         practiceName: p.name,
         odsCode: p.ods
@@ -288,7 +258,7 @@ export function filterAndDisplayPracticeSuggestions() {
         noResults.textContent = 'No matching practices found';
         container.appendChild(noResults);
     } else {
-        filteredData.slice(0, 50).forEach(p => { // Limit results for performance
+        filteredData.slice(0, 50).forEach(p => { 
             if (p.practiceName && p.odsCode) {
                 const item = document.createElement('div');
                 item.className = 'autocomplete-item';
@@ -297,13 +267,8 @@ export function filterAndDisplayPracticeSuggestions() {
                     <div class="suggestion-meta">${p.odsCode}</div>
                 `;
                 item.addEventListener('click', () => {
-                    // Update the Navigator as well when selecting here?
-                    // Original code called 'selectPracticeSuggestion' which calls 'setSelectedPractice'
                     setSelectedPractice({ name: p.practiceName, ods: p.odsCode }); 
-                    
-                    // Also update this specific input
                     practiceInput.value = `${p.practiceName} (${p.odsCode})`;
-                    
                     container.style.display = 'none';
                 });
                 container.appendChild(item);

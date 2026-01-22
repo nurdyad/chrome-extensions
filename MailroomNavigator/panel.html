@@ -36,7 +36,10 @@
   </div>
 
   <div id="practiceNavigatorView" class="view-transition">
-    <h1>Practice Navigator</h1>
+    <h1>
+      Practice Navigator
+      <span id="liveIndicator" class="live-dot" title="Auto-scan active"></span>
+    </h1>
     
     <div style="margin-bottom: 15px;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
@@ -65,19 +68,16 @@
       </div>
 
       <div class="search-container" style="position: relative;">
-          <div class="input-with-button" style="margin-bottom: 0;">
-            <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
-            <button id="resetSettingsBtn" class="btn btn-sm" title="Reset">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
-                <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
-              </svg>
-            </button>
-          </div>
-          <button id="liveRefreshBtn" class="btn btn-sm" title="Live Refresh" style="position: absolute; right: -40px; top: 0; background-color: #3498db;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M21.5 22v-6h-6"></path><path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path></svg>
+        <div class="input-with-button" style="margin-bottom: 0;">
+          <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
+          <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
+              <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
+            </svg>
           </button>
-          <ul id="suggestions"></ul>
+        </div>
+        <ul id="suggestions"></ul>
       </div>
     </div>
 

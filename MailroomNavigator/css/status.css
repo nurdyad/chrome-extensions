@@ -39,6 +39,26 @@
     text-overflow: ellipsis;
 }
 
+/* The Live Indicator Dot */
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background-color: #2ecc71; /* Green */
+    border-radius: 50%;
+    margin-left: 8px;
+    vertical-align: middle;
+    transition: transform 0.2s ease;
+    opacity: 0.6;
+}
+
+/* The Pulse Effect when a scan succeeds */
+.live-dot.pulse {
+    transform: scale(1.5);
+    opacity: 1;
+    box-shadow: 0 0 8px #2ecc71;
+}
+
 #status {
     margin-top: 12px;
     padding: 10px;

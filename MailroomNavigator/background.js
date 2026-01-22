@@ -20,6 +20,8 @@ const cdbCache = {}; // ODS => CDB value (This in-memory cache will store scrape
 
 let floatingWindowId = null; // Stores the ID of the unified popup window
 let scrapingTabId = null; // Single hidden tab for scraping (used by BL-Mailroom's background logic)
+let scrapingWindowId = null; // Window ID for the hidden scraping tab
+let isScrapingActive = false; // Flag to prevent concurrent scrapes
 
 let cdbIndexProgress = {
   total: 0,
@@ -31,56 +33,57 @@ let cdbIndexProgress = {
 // --- HELPER FUNCTIONS (DEFINED AT TOP-LEVEL SCOPE) ---
 
 /**
- * Ensures the in-memory practiceCache is loaded from chrome.storage.local
- * if it's currently empty or if the stored cache has expired.
- * This function is crucial for re-hydrating the cache when the service worker
- * wakes up after being inactive.
+ * Creates or reuses a minimized "Hidden Window" for background scraping.
+ * This prevents tabs from flickering in the user's main window.
  */
-
 async function getOrCreateScrapingTab(url) { 
-    if (scrapingTabId) {
+    if (scrapingWindowId && scrapingTabId) {
         try {
-            // Attempt to update the existing scraping tab if it's still valid
             await chrome.tabs.update(scrapingTabId, { url, active: false });
-            console.log(`%c[Merged BG] Reusing existing scraping tab ${scrapingTabId} for URL: ${url}`, 'color: gray;');
             return scrapingTabId;
         } catch (e) {
-            console.warn(`%c[Merged BG] Failed to update existing scraping tab ${scrapingTabId}: ${e.message}. Creating new tab.`, 'color: orange;');
-            scrapingTabId = null; // Reset if the tab is no longer valid
+            scrapingWindowId = null;
+            scrapingTabId = null;
         }
     }
-    // Create a new hidden tab
-    const tab = await chrome.tabs.create({ url, active: false });
-    scrapingTabId = tab.id;
-    console.log(`%c[Merged BG] Created new scraping tab: ${scrapingTabId} for URL: ${url}`, 'color: blue;');
+
+    // Create a new window that is minimized AND positioned off-screen
+    const window = await chrome.windows.create({ 
+        url, 
+        type: 'popup', 
+        focused: false, 
+        width: 1,       // Tiny size makes it invisible
+        height: 1,
+        left: -2000,    // Moves it far off-screen
+        top: -2000
+    });
+    
+    scrapingWindowId = window.id;
+    scrapingTabId = window.tabs[0].id;
+
+    // Pin it so it doesn't get swept by tab discarders
+    await chrome.tabs.update(scrapingTabId, { pinned: true }); 
+    
     return scrapingTabId;
 }
 
 async function ensureCacheLoaded() {
-    if (Object.keys(practiceCache).length === 0) {
-        console.log('%c[Merged BG] Checking chrome.storage.local for cached practices...', 'color: blue;');
-        const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
+    // 1. Check if in-memory cache is already full
+    if (Object.keys(practiceCache).length > 0) return;
 
-        if (
-            result.practiceCache &&
-            result.cacheTimestamp &&
-            Date.now() - result.cacheTimestamp < CACHE_EXPIRY
-        ) {
-            practiceCache = result.practiceCache;
-            // Also re-hydrate cdbCache from practiceCache if available
-            for (const key in practiceCache) {
-                if (practiceCache[key].cdb && practiceCache[key].cdb !== 'N/A' && practiceCache[key].cdb !== 'Error') {
-                    cdbCache[practiceCache[key].ods] = practiceCache[key].cdb;
-                }
-            }
-            console.log(`%c[Merged BG] In-memory practice cache re-hydrated from storage. Size: ${Object.keys(practiceCache).length}`, 'color: green;');
-        } else {
-            console.log('%c[Merged BG] Stored cache expired or not found. Triggering fresh fetch.', 'color: orange;');
-            // Force background scrape for re-hydration
-            await fetchAndCachePracticeList('re-hydration').catch(e => console.error("[Merged BG] Cache re-hydration fetch failed:", e));
-        }
+    // 2. Try to get from local storage
+    const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
+    
+    // 3. Only trigger a new scrape if storage is empty OR data is older than 24 hours
+    const isExpired = !result.cacheTimestamp || (Date.now() - result.cacheTimestamp > CACHE_EXPIRY);
+    
+    if (result.practiceCache && !isExpired) {
+        practiceCache = result.practiceCache;
+        console.log('[Merged BG] Cache loaded from storage. No tab needed.');
     } else {
-        console.log('%c[Merged BG] In-memory practice cache is already populated.', 'color: gray;');
+        // Only open the tab if we absolutely have to
+        console.log('[Merged BG] Cache missing or expired. Opening background tab once.');
+        await fetchAndCachePracticeList('initial-load');
     }
 }
 
@@ -94,49 +97,29 @@ async function ensureCacheLoaded() {
  * @param {number} interval - Interval between polls in milliseconds (default: 500ms).
  * @returns {Promise<boolean>} A promise that resolves to true when the element is found, or false on timeout.
  */
-function waitForSpecificElementOnTabLoad(tabId, selector, timeout = 15000, interval = 500) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    console.log(`%c[Merged BG] Waiting for element: ${selector} on tab ${tabId}`, 'color: gray;');
 
-    const pollForElement = () => {
+// Safely wait for a specific element to appear in a tab
+async function waitForSpecificElementOnTabLoad(tabId, selector, timeoutMs = 15000, intervalMs = 500) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    async function poll() {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab) return resolve(false);
+      } catch (e) { return resolve(false); }
+
+      if (Date.now() - start > timeoutMs) return resolve(false);
+
       chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: (sel) => {
-          return document.querySelector(sel) !== null;
-        },
+        target: { tabId },
+        func: (sel) => !!document.querySelector(sel),
         args: [selector]
       }).then(results => {
-        const elementFound = results[0]?.result;
-        if (elementFound) {
-          console.log(`%c[Merged BG] Element found: ${selector} on tab ${tabId}`, 'color: green;');
-          resolve(true);
-        } else if (Date.now() - start > timeout) {
-          console.warn(`%c[Merged BG] Element NOT found: ${selector} on tab ${tabId} after ${timeout}ms.`, 'color: orange;');
-          resolve(false);
-        } else {
-          setTimeout(pollForElement, interval);
-        }
-      }).catch(err => {
-          console.warn(`%c[Merged BG] Error during element polling for ${selector} on tab ${tabId}: ${err.message}`, 'color: orange;');
-
-          if (Date.now() - start > timeout) {
-            // 🔕 Silenced the red console spam
-            if (selector.includes('ehr_settings')) {
-              console.warn(`[Merged BG] EHR Settings tab not found after ${timeout}ms — skipping click and continuing.`);
-              resolve(true); // continue gracefully
-            } else {
-              console.error(`%c[Merged BG] Polling for "${selector}" on tab ${tabId} failed after ${timeout}ms.`, 'color: red;');
-              resolve(false);
-            }
-          } else {
-            // Retry slower to let LiveView render fully
-            setTimeout(pollForElement, interval * 2);
-          }
-        });
-
-    };
-    pollForElement();
+        if (results[0]?.result) resolve(true);
+        else setTimeout(poll, intervalMs);
+      }).catch(() => resolve(false));
+    }
+    poll();
   });
 }
 
@@ -219,142 +202,97 @@ async function clickSettingsTab(tabId, settingType) {
  * @throws {Error} If the fetching or scraping process fails.
  */
 async function fetchAndCachePracticeList(purpose = 'background refresh') {
- console.log(`%c[Merged BG] Initiating fetch for practice list (${purpose})...`, 'color: #1E90FF;');
- let tabToCloseExplicitly = null; // Use a distinct variable for the tab created in this function
+  if (isScrapingActive) return []; // Return empty array to prevent .length errors
 
- try {
-   const tabId = await getOrCreateScrapingTab('https://app.betterletter.ai/admin_panel/practices');
-   tabToCloseExplicitly = tabId; // Store the tabId to close it later in finally block
+  isScrapingActive = true;
+  let tabId = null;
 
-   await waitForSpecificElementOnTabLoad(tabId, 'table tbody tr:first-child a[href*="/admin_panel/practices/"]', 20000);
+  try {
+    tabId = await getOrCreateScrapingTab('https://app.betterletter.ai/admin_panel/practices');
+    const loaded = await waitForSpecificElementOnTabLoad(tabId, 'table tbody tr:first-child a[href*="/admin_panel/practices/"]', 20000);
 
-   const result = await chrome.scripting.executeScript({
-     target: { tabId: tabId },
-     func: () => {
-       const rows = Array.from(document.querySelectorAll('table tbody tr'));
-       return rows.map(row => {
-         const links = row.querySelectorAll('a[href*="/admin_panel/practices/"]');
-         if (links.length === 0) return null;
+    if (!loaded) throw new Error("Practice table failed to load");
 
-         const link = links[0];
-         const practiceName = (link.textContent || '').trim().normalize('NFC').replace(/\s+/g, ' ').trim();
-         const url = new URL(link.href);
-         const ods = url.pathname.split('/').pop();
+    const result = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const rows = Array.from(document.querySelectorAll('table tbody tr'));
+        return rows.map(row => {
+          const link = row.querySelector('a[href*="/admin_panel/practices/"]');
+          if (!link) return null;
+          return { 
+            id: link.href.split('/').pop(), 
+            name: link.textContent.trim().normalize('NFC').replace(/\s+/g, ' '),
+            ehrType: (row.querySelector('td:nth-child(4)')?.textContent || '').trim(),
+            collectionQuota: (row.querySelector('td:nth-child(5)')?.textContent || '').trim(),
+            collectedToday: (row.querySelector('td:nth-child(6)')?.textContent || '').trim(),
+            serviceLevel: (row.querySelector('td:nth-child(7)')?.textContent || '').trim()
+          };
+        }).filter(p => p !== null);
+      },
+    });
 
-         let ehrType = 'N/A';
-         let collectionQuota = 'N/A';
-         let collectedToday = 'N/A';
-         let serviceLevel = 'N/A';
+    const practicesArray = result[0]?.result || [];
+    const cacheMap = {};
+    
+    practicesArray.forEach((p) => {
+      const existing = Object.values(practiceCache).find(ep => ep.ods === p.id);
+      cacheMap[`${p.name} (${p.id})`] = { ods: p.id, timestamp: Date.now(), ...p, cdb: existing ? existing.cdb : undefined };
+    });
+    
+    practiceCache = cacheMap;
+    await chrome.storage.local.set({ practiceCache: cacheMap, cacheTimestamp: Date.now() });
 
-         const ehrTypeCell = row.querySelector('td:nth-child(4)');
-         if (ehrTypeCell) {
-             ehrType = (ehrTypeCell.textContent || '').trim();
-         }
+    // --- Critical Fix: Await CDB scraping BEFORE closing the tab ---
+    for (const key in cacheMap) {
+      const p = cacheMap[key];
+      const isEmis = p.ehrType?.toLowerCase().includes('emis');
+      
+      // Only attempt scrape if it's EMIS and we don't have a CDB yet
+      if (isEmis && (!p.cdb || p.cdb === 'N/A' || p.cdb === 'Error')) {
+        try {
+          const cdb = await scrapePracticeCDB(p.ods); 
+          if (cdb && cdb !== 'N/A') {
+            practiceCache[key].cdb = cdb;
+            await chrome.storage.local.set({ practiceCache: practiceCache });
+          }
+        } catch (e) { console.warn("CDB Scrape skipped for " + p.ods); }
+        await new Promise(r => setTimeout(r, 1000)); // Rate limiting
+      }
+    }
 
-         const collectionQuotaCell = row.querySelector('td:nth-child(5)');
-         if (collectionQuotaCell) {
-             collectionQuota = (collectionQuotaCell.textContent || '').trim();
-         }
+    return practicesArray;
 
-         const collectedTodayCell = row.querySelector('td:nth-child(6)');
-         if (collectedTodayCell) {
-             collectedToday = (collectedTodayCell.textContent || '').trim();
-         }
-         
-         const serviceLevelCell = row.querySelector('td:nth-child(7)');
-         if (serviceLevelCell) {
-             serviceLevel = (serviceLevelCell.textContent || '').trim();
-         }
+  } catch (error) {
+    console.error(`[Merged BG] Scrape Error: ${error.message}`);
+    return []; // Fix: Prevents "Cannot read properties of undefined (reading 'length')"
+  } finally {
+    isScrapingActive = false;
+    // Close the entire hidden window when finished
+    if (scrapingWindowId) {
+      await chrome.windows.remove(scrapingWindowId).catch(() => {});
+      scrapingWindowId = null;
+      scrapingTabId = null;
+    }
+  }
+}
 
-         const allCells = Array.from(row.querySelectorAll('td'));
-         const allCellTexts = allCells.map(cell => (cell.textContent || '').trim());
-         console.log(`%c[Merged BG - Scrape] Raw Nth-Child data: Icon:"${(allCells[0]?.textContent || '').trim()}", ODS:"${(allCells[1]?.textContent || '').trim()}", Name:"${(allCells[2]?.textContent || '').trim()}", EHR:"${(allCells[3]?.textContent || '').trim()}", Quota:"${(allCells[4]?.textContent || '').trim()}", Collected:"${(allCells[5]?.textContent || '').trim()}", ServiceLevel:"${(allCells[6]?.textContent || '').trim()}"`, 'color: #8A2BE2;');
-         console.log(`%c[Merged BG - Scrape] Extracted: Name="${practiceName}", ODS="${ods}", EHR="${ehrType}", Quota="${collectionQuota}", Collected="${collectedToday}", ServiceLevel="${serviceLevel}"`, 'color: #32CD32;');
-
-         if (!practiceName || !ods || !/^[A-Z]\d{5}$/.test(ods)) {
-           console.warn(`%c[Merged BG - Scrape] Skipping malformed practice row: ${row.outerHTML}`, 'color: orange;');
-           return null;
-         }
-         
-         return { id: ods, name: practiceName, ehrType, collectionQuota, collectedToday, serviceLevel };
-       }).filter(p => p !== null);
-     },
-   });
-
-   const practicesArray = result[0]?.result?.filter(p => p && p.name && p.id) || [];
-   console.log(`%c[Merged BG] Fetched ${practicesArray.length} practices. (Including all new data)`, 'color: #1E90FF;');
-
-   if (practicesArray.length === 0 && purpose !== 'initial startup') {
-        console.warn(`%c[Merged BG] Fetched empty practice list for ${purpose}. This might indicate a problem.`, 'color: orange;');
-   }
-
-   const cacheMap = {};
-   practicesArray.forEach((p) => {
-     const existingPractice = Object.values(practiceCache).find(ep => ep.ods === p.id);
-     const cdbToKeep = existingPractice ? existingPractice.cdb : undefined;
-
-     cacheMap[`${p.name} (${p.id})`] = {
-       ods: p.id,
-       timestamp: Date.now(),
-       name: p.name,
-       ehrType: p.ehrType,
-       collectionQuota: p.collectionQuota,
-       collectedToday: p.collectedToday,
-       serviceLevel: p.serviceLevel,
-       cdb: cdbToKeep
-     };
-   });
-   practiceCache = cacheMap;
-
-   chrome.storage.local.set({
-     practiceCache: cacheMap,
-     cacheTimestamp: Date.now(),
-   });
-
-   console.log('%c[Merged BG] Initiating background scrape for missing CDBs...', 'color: #9932CC;');
-   for (const key in cacheMap) {
-       const p = cacheMap[key];
-       // Only scrape CDB if it's not already cached and valid
-       if (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error') {
-           scrapePracticeCDB(p.ods)
-               .then(scrapedCDB => {
-                   if (scrapedCDB && scrapedCDB !== 'N/A' && scrapedCDB !== 'Error') {
-                       if (practiceCache[key]) {
-                           practiceCache[key].cdb = scrapedCDB;
-                           chrome.storage.local.set({ practiceCache: practiceCache });
-                           cdbCache[p.ods] = scrapedCDB;
-                           console.log(`%c[Merged BG] Successfully scraped and cached CDB for ${p.ods}: ${scrapedCDB}`, 'color: #32CD32;');
-                       }
-                   }
-               })
-               .catch(error => {
-                   console.warn(`%c[Merged BG] Failed background CDB scrape for ${p.ods}: ${error.message}`, 'color: orange;');
-                   if (practiceCache[key]) {
-                       practiceCache[key].cdb = 'Error';
-                       chrome.storage.local.set({ practiceCache: practiceCache });
-                   }
-               });
-           await new Promise(resolve => setTimeout(resolve, 1500)); // Small delay between CDB scrapes
-       }
-   }
-   console.log('%c[Merged BG] Background CDB scraping initiated for missing entries.', 'color: #9932CC;');
-
-   return practicesArray;
- } catch (error) {
-   console.error(`%c[Merged BG] ERROR: Failed to fetch and cache practice list for ${purpose}: ${error.message}`, 'color: red; font-weight: bold;', error);
-   practiceCache = {}; // Clear cache on major failure
-   throw error;
- } finally {
-   if (tabToCloseExplicitly !== null && tabToCloseExplicitly === scrapingTabId) { // Only close if it's the dedicated scraping tab
-     try {
-       await chrome.tabs.remove(tabToCloseExplicitly);
-       scrapingTabId = null; // Reset scrapingTabId after closing
-       console.log(`%c[Merged BG] Closed scraping tab: ${tabToCloseExplicitly}`, 'color: gray;');
-     } catch (e) {
-       console.warn(`%c[Merged BG] Could not close temporary scrape tab ${tabToCloseExplicitly}: ${e.message}`, 'color: orange;');
-     }
-   }
- }
+// Separate helper to handle CDB scraping without blocking the main list
+async function processCdbScrapeQueue(cacheMap) {
+    for (const key in cacheMap) {
+        const p = cacheMap[key];
+        if (!p.cdb || p.cdb === 'N/A' || p.cdb === 'Error') {
+            try {
+                const scrapedCDB = await scrapePracticeCDB(p.ods);
+                if (scrapedCDB && scrapedCDB !== 'N/A') {
+                    practiceCache[key].cdb = scrapedCDB;
+                    chrome.storage.local.set({ practiceCache: practiceCache });
+                }
+            } catch (e) { /* silent error for background tasks */ }
+            // Wait 2 seconds between practices to prevent Chrome from flagging the extension
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
 }
 
 /**
@@ -363,51 +301,36 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
  * @returns {Promise<string>} The scraped Practice CDB code.
  * @throws {Error} If the CDB cannot be found or the scraping process fails.
  */
+
 async function scrapePracticeCDB(odsCode) {
+  // --- SAFETY CHECK ---
+  const cachedData = Object.values(practiceCache).find(p => p.ods === odsCode);
+  if (cachedData && !cachedData.ehrType?.toLowerCase().includes('emis')) {
+    console.log(`[Merged BG] Skipping CDB scrape: ${odsCode} is not an EMIS practice.`);
+    return 'N/A';
+  }
   if (cdbCache[odsCode]) {
-    console.log(
-      `%c[Merged BG] Returning cached CDB for ${odsCode}: ${cdbCache[odsCode]}`,
-      'color: green;'
-    );
+    console.log(`%c[Merged BG] Returning cached CDB for ${odsCode}: ${cdbCache[odsCode]}`, 'color: green;');
     return cdbCache[odsCode];
   }
-
-  console.log(
-    `%c[Merged BG] Attempting to scrape CDB for ODS: ${odsCode}`,
-    'color: #FF8C00;'
-  );
-
-  let tempTabId = null;
-
+  
+  console.log(`%c[Merged BG] Attempting to scrape CDB for ODS: ${odsCode}`, 'color: #FF8C00;');
+  let tempTabId = null; 
+  
   try {
     const practiceUrl = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
+    
+    // Reuse the globally managed scraping tab
+    tempTabId = await getOrCreateScrapingTab(practiceUrl); 
 
-    tempTabId = await getOrCreateScrapingTab(practiceUrl);
+    await new Promise(resolve => setTimeout(resolve, 100)); 
 
-    // 🔒 Gracefully abort if tab vanished (expected in MV3)
-    if (!(await tabExists(tempTabId))) {
-      console.warn(
-        `[Merged BG] CDB scrape aborted — tab no longer exists for ${odsCode}`
-      );
-      return 'N/A';
-    }
+    await waitForSpecificElementOnTabLoad(tempTabId, "[data-test-id='tab-basic']", 15000);
 
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Wait for LiveView base tab (readiness signal)
-    await waitForSpecificElementOnTabLoad(
-      tempTabId,
-      "[data-test-id='tab-basic']",
-      15000
-    );
-
-    // Click EHR Settings tab
     const ehrTabClicked = await chrome.scripting.executeScript({
       target: { tabId: tempTabId },
       func: () => {
-        const ehrTab = document.querySelector(
-          "[data-test-id='tab-ehr_settings']"
-        );
+        const ehrTab = document.querySelector("[data-test-id='tab-ehr_settings']");
         if (ehrTab) {
           ehrTab.focus();
           ehrTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -418,83 +341,46 @@ async function scrapePracticeCDB(odsCode) {
         return false;
       }
     });
-
+    
     if (!ehrTabClicked[0]?.result) {
-      console.warn(
-        `[Merged BG] EHR Settings tab not clickable for ${odsCode}`
-      );
+      console.error(`%c[Merged BG] EHR Settings tab click failed for ${odsCode}`, 'color: red;');
       return 'N/A';
     }
 
-    const cdbInputSelector =
-      'input[name="ehr_settings[practice_cdb]"]';
-
-    const cdbInputReady = await waitForSpecificElementOnTabLoad(
-      tempTabId,
-      cdbInputSelector,
-      30000,
-      750
-    );
+    const cdbInputSelector = 'input[name="ehr_settings[practice_cdb]"]';
+    const cdbInputReady = await waitForSpecificElementOnTabLoad(tempTabId, cdbInputSelector, 30000, 750);
 
     if (!cdbInputReady) {
-      console.warn(
-        `[Merged BG] CDB input not found for ${odsCode}`
-      );
+      console.error(`%c[Merged BG] CDB input field not found for ${odsCode}`, 'color: red;');
       return 'N/A';
     }
 
     const result = await chrome.scripting.executeScript({
       target: { tabId: tempTabId },
-      func: selector => {
-        const input = document.querySelector(selector);
-        return input ? input.value : null;
+      func: (selector) => {
+        const cdbInput = document.querySelector(selector);
+        return cdbInput ? cdbInput.value : null;
       },
       args: [cdbInputSelector]
     });
 
     const cdbValue = result[0]?.result || 'N/A';
-
     cdbCache[odsCode] = cdbValue;
-
-    console.log(
-      `%c[Merged BG] Scraped CDB for ${odsCode}: "${cdbValue}"`,
-      'color: #FF8C00;'
-    );
-
+    console.log(`%c[Merged BG] Scraped CDB for ${odsCode}: "${cdbValue}"`, 'color: #FF8C00;');
     return cdbValue;
-  } catch (error) {
-    if (error.message?.includes('No tab with id')) {
-      console.warn(
-        `[Merged BG] CDB scrape skipped — tab disappeared for ${odsCode}`
-      );
-      return 'N/A';
-    }
 
-    console.error(
-      `%c[Merged BG] ERROR: Failed to scrape CDB for ${odsCode}: ${error.message}`,
-      'color: red; font-weight: bold;',
-      error
-    );
+  } catch (error) {
+    console.error(`%c[Merged BG] ERROR: Failed to scrape CDB for ${odsCode}: ${error.message}`, 'color: red; font-weight: bold;');
     return 'Error';
-  } finally {
-    // Only close if this function owns the tab
-    if (tempTabId !== null && tempTabId === scrapingTabId) {
-      try {
-        await chrome.tabs.remove(tempTabId);
-        scrapingTabId = null;
-        console.log(
-          `%c[Merged BG] Closed temporary CDB scrape tab: ${tempTabId}`,
-          'color: gray;'
-        );
-      } catch (e) {
-        console.warn(
-          `%c[Merged BG] Could not close temporary CDB scrape tab ${tempTabId}: ${e.message}`,
-          'color: orange;'
-        );
-      }
-    }
   }
 }
+
+/**
+ * NEW FUNCTION: Scrapes the Practice CDB from a specific practice's EHR Settings page.
+ * @param {string} odsCode - The ODS code of the practice to scrape the CDB from.
+ * @returns {Promise<string>} The scraped Practice CDB code.
+ * @throws {Error} If the CDB cannot be found or the scraping process fails.
+ */
 
 /**
  * Retrieves the ODS code for a given practice input (name or ODS).
@@ -737,42 +623,30 @@ chrome.windows.onRemoved.addListener((windowId) => {
 });
 
 // Unified action button listener (icon click) - Now ONLY opens/focuses the panel
-chrome.action.onClicked.addListener(async (tab) => {
-    const panelUrl = chrome.runtime.getURL("panel.html");
-    
-    // Set targetTabId to the ID of the tab where the action icon was clicked.
-    // The panel.js will then determine if it needs data from this tab for Job Panel functionality.
-    await chrome.storage.local.set({ targetTabId: tab.id });
+let popupWindowId = null;
 
-    // Manage the unified floating popup window
-    if (floatingWindowId) {
-        try {
-            const existing = await chrome.windows.get(floatingWindowId);
-            if (existing) {
-                await chrome.windows.update(floatingWindowId, { focused: true });
-                return;
-            }
-        } catch (e) {
-            console.warn(`%c[Merged BG] Existing floating window ${floatingWindowId} not found, likely closed: ${e.message}`, 'color: orange;');
-            floatingWindowId = null; // Reset if not found (window might have been closed by user)
-        }
-    }
+chrome.action.onClicked.addListener(() => {
+  if (popupWindowId !== null) {
+    chrome.windows.update(popupWindowId, { focused: true });
+    return;
+  }
 
-    // Get current window details to position the new popup
-    const currentWindow = await chrome.windows.getCurrent();
-    const popup = await chrome.windows.create({
-        url: panelUrl, // Use the new merged panel.html
-        type: 'popup',
-        width: 320, // Default width from original BL-Mailroom popup
-        height: 720, // Adjusted height for combined features
-        focused: true,
-        // Position relative to the top-left of the current browser window
-        top: currentWindow.top + 50,
-        left: currentWindow.left + 50
+  chrome.windows.create({
+    url: chrome.runtime.getURL("panel.html"),
+    type: "popup",
+    width: 400,
+    height: 600,
+  }, (win) => {
+    popupWindowId = win.id;
+
+    chrome.windows.onRemoved.addListener(function listener(closedId) {
+      if (closedId === popupWindowId) {
+        popupWindowId = null;
+        chrome.windows.onRemoved.removeListener(listener);
+      }
     });
-    floatingWindowId = popup.id;
+  });
 });
-
 
 // Tab activation and update listeners for BetterLetterJobManager context
 // These listeners are kept as they are useful for updating targetTabId
@@ -798,156 +672,98 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // Unified message listener for popup (panel.js) and content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handleMessage = async () => {
-    // Ensure cache is loaded before processing any action from popup.js
-    if (message.action) { // Only apply this for actions originating from popup.js (UI)
+    // 1. Safety: Ensure cache is hydrated before any UI action
+    if (message.action) { 
         await ensureCacheLoaded();
     }
 
-    // --- BetterLetterJobManager messages (from mailroom_page_integrator.js) ---
+    // --- Content Script Messages ---
     if (message.type === 'mailroom_doc_clicked' && message.data) {
-        console.log("Background: Processing mailroom_doc_clicked message. Data received:", message.data);
         await chrome.storage.local.set({ clickedMailroomDocData: message.data });
-        return { status: 'Data received and stored in background' };
+        return { status: 'Data received' };
     }
 
-    // --- BL-Mailroom (Practice Navigator) messages (from popup.js/panel.js) ---
+    // --- UI (panel.js) Messages ---
     if (message.action === 'openPractice') {
       try {
         await handleOpenPractice(message.input, message.settingType);
         return { success: true };
-      } catch (error) {
-        console.error(`%c[Merged BG] Error in openPractice: ${error.message}`, 'color: red; font-weight: bold;', error);
-        return { error: error.message };
-      }
-    } else if (message.action === 'getPracticeCache') {
-      console.log(`%c[Merged BG] getPracticeCache requested. Current cache size: ${Object.keys(practiceCache).length}`, 'color: cyan;');
+      } catch (error) { return { error: error.message }; }
+    } 
+    
+    else if (message.action === 'getPracticeCache') {
       return { practiceCache: practiceCache };
-    } else if (message.action === 'getOdsCodeFromName') {
+    } 
+    
+    else if (message.action === 'getOdsCodeFromName') {
       try {
         const odsCode = await getOdsCodeFromName(message.practiceName);
         return { odsCode: odsCode };
-      } catch (error) {
-        console.error(`%c[Merged BG] Error in getOdsCodeFromName: ${error.message}`, 'color: red; font-weight: bold;', error);
-        return { error: error.message };
-      }
-    } else if (message.action === 'requestActiveScrape') {
+      } catch (error) { return { error: error.message }; }
+    } 
+
+    // --- 🛡️ FIXED: requestActiveScrape (No more .length crashes) ---
+    else if (message.action === 'requestActiveScrape') {
         try {
-            // Force background scrape even for 'active' request
-            const fetchedPractices = await fetchAndCachePracticeList('active foreground scrape (now background)');
-            return { success: true, practicesCount: fetchedPractices.length };
+            const fetchedPractices = await fetchAndCachePracticeList('active foreground scrape');
+            // Safety: If fetchedPractices is undefined, default to an empty array []
+            const count = (fetchedPractices || []).length; 
+            return { success: true, practicesCount: count };
         } catch (error) {
-            console.error(`%c[Merged BG] Error in active scrape request: ${error.message}`, 'color: red; font-weight: bold;', error);
             return { error: `Failed to load practices: ${error.message}` };
         }
-    } else if (message.action === 'getPracticeStatus') {
+    } 
+
+    else if (message.action === 'getPracticeStatus') {
         try {
             const practiceOds = message.odsCode;
-            if (!practiceOds) {
-                return { error: "ODS code is required for status lookup." };
-            }
+            if (!practiceOds) return { error: "ODS code required" };
 
             let practiceEntry = Object.values(practiceCache).find(p => p.ods === practiceOds);
+            let practiceCDB = cdbCache[practiceOds] || (practiceEntry ? practiceEntry.cdb : 'N/A');
             
-            let practiceCDB = 'N/A';
-            
-            if (cdbCache[practiceOds]) {
-                practiceCDB = cdbCache[practiceOds];
-                console.log(`%c[Merged BG] CDB found in in-memory cdbCache for ${practiceOds}: ${practiceCDB}`, 'color: green;');
-            } else if (practiceEntry && practiceEntry.cdb && practiceEntry.cdb !== 'N/A' && practiceEntry.cdb !== 'Error') {
-                practiceCDB = practiceEntry.cdb;
-                cdbCache[practiceOds] = practiceCDB;
-                console.log(`%c[Merged BG] CDB found in main practiceCache for ${practiceOds}: ${practiceCDB}`, 'color: green;');
-            } else {
-                try {
-                    console.log(`%c[Merged BG] CDB missing for ${practiceOds}. Triggering specific scrape.`, 'color: orange;');
-                    practiceCDB = await scrapePracticeCDB(practiceOds);
-                    if (practiceEntry) { // Update the practiceCache with the newly scraped CDB
-                        practiceEntry.cdb = practiceCDB;
-                        await chrome.storage.local.set({ practiceCache: practiceCache });
-                    }
-                } catch (cdbError) {
-                    console.warn(`%c[Merged BG] Failed to scrape CDB for ${practiceOds}: ${cdbError.message}`, 'color: orange;');
-                    if (practiceEntry) {
-                        practiceEntry.cdb = 'Error'; // Mark as error so we don't try again until full refresh
-                        await chrome.storage.local.set({ practiceCache: practiceCache });
-                    }
+            const isEmis = practiceEntry?.ehrType?.toLowerCase().includes('emis');
+            if (isEmis && (practiceCDB === 'N/A' || !practiceCDB)) {
+                practiceCDB = await scrapePracticeCDB(practiceOds);
+                if (practiceEntry) {
+                    practiceEntry.cdb = practiceCDB;
+                    await chrome.storage.local.set({ practiceCache: practiceCache });
                 }
+            } else if (!isEmis) {
+                practiceCDB = 'N/A (System1)'; // Set a clear value for non-EMIS
             }
 
-            // After potentially scraping CDB, check for full practice entry data
-            if (!practiceEntry || practiceEntry.ehrType === undefined || practiceEntry.collectionQuota === undefined || practiceEntry.collectedToday === undefined || practiceEntry.serviceLevel === undefined) {
-                console.warn(`%c[Merged BG] Full status data (other than CDB) not found/complete for ODS: ${practiceOds}. Attempting fresh main scrape...`, 'color: orange;');
-                // Force background scrape
-                const freshlyScrapedPractices = await fetchAndCachePracticeList('status lookup (full refresh, now background)'); // This updates practiceCache
-                practiceEntry = Object.values(practiceCache).find(p => p.ods === practiceOds); // Re-fetch the entry after refresh
-            }
-
-            if (practiceEntry && practiceEntry.ehrType !== undefined && practiceEntry.collectionQuota !== undefined && practiceEntry.collectedToday !== undefined && practiceEntry.serviceLevel !== undefined) {
-                console.log(`%c[Merged BG] Found complete status data for ODS ${practiceOds}:`, 'color: green;', practiceEntry);
+            if (practiceEntry) {
                 return {
                     success: true,
-                    status: {
-                        odsCode: practiceEntry.ods,
-                        ehrType: practiceEntry.ehrType,
-                        collectionQuota: practiceEntry.collectionQuota,
-                        collectedToday: practiceEntry.collectedToday,
-                        serviceLevel: practiceEntry.serviceLevel,
-                        practiceCDB: practiceCDB // Use the most up-to-date CDB
-                    }
+                    status: { ...practiceEntry, odsCode: practiceEntry.ods, practiceCDB }
                 };
-            } else {
-                return { error: `Complete status data not found for practice ${practiceOds} even after trying to refresh.` };
             }
-        } catch (error) {
-            console.error(`%c[Merged BG] Error in getPracticeStatus: ${error.message}`, 'color: red; font-weight: bold;', error);
-            return { error: `Failed to get status: ${error.message}` };
-        }
-    } else if (message.action === 'searchCDB') {
+            return { error: "Practice details not found" };
+        } catch (error) { return { error: error.message }; }
+    } 
+
+    else if (message.action === 'searchCDB') {
         try {
             const searchedCDB = message.cdb;
-            if (!searchedCDB) {
-                return { success: false, error: "CDB code is required for search." };
-            }
-            console.log(`%c[Merged BG] Initiating CDB search for: "${searchedCDB}"`, 'color: #DA70D6;');
-
-            let foundPractice = null;
-            const allPractices = Object.values(practiceCache); // Get current state of practiceCache
-
-            // First, check in-memory cdbCache and practiceCache
-            return {
-              success: false,
-              error: `No practice found for CDB: "${searchedCDB}". It may not be indexed yet.`
-            };
-
-            // If not found, iterate through practices and scrape missing CDBs
-            if (!foundPractice) {
-              return {
-                success: false,
-                error: `No practice found for CDB: "${searchedCDB}". It may not be indexed yet.`
-              };
-            }
-
-            if (foundPractice) {
-                return { success: true, practice: foundPractice };
-            } else {
-                return { success: false, error: `No practice found for CDB: "${searchedCDB}". Please ensure the CDB is correct.` };
-            }
-
-        } catch (error) {
-            console.error(`%c[Merged BG] Error during CDB search: ${error.message}`, 'color: red; font-weight: bold;', error);
-            return { success: false, error: `Internal error during CDB search: ${error.message}` };
-        }
+            if (!searchedCDB) return { success: false, error: "CDB required" };
+            
+            // Search local cache first
+            const found = Object.values(practiceCache).find(p => p.cdb === searchedCDB);
+            if (found) return { success: true, practice: found };
+            
+            return { success: false, error: `CDB "${searchedCDB}" not found in current index.` };
+        } catch (error) { return { success: false, error: error.message }; }
     }
+
     return { error: "Unknown action" };
   };
 
   handleMessage().then(response => {
     try {
       sendResponse(response);
-    } catch (e) {
-      console.warn('[Merged BG] Failed to send response (message port might be closed):', e.message, 'Response:', response);
-    }
+    } catch (e) { console.warn('[Merged BG] Port closed before response.'); }
   });
 
-  return true;
+  return true; // Keep message channel open for async response
 });
