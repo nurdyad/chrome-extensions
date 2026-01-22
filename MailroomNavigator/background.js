@@ -634,8 +634,9 @@ chrome.action.onClicked.addListener(() => {
   chrome.windows.create({
     url: chrome.runtime.getURL("panel.html"),
     type: "popup",
-    width: 400,
-    height: 600,
+    width: 300,  // smaller default width
+    height: 750, // smaller default height
+    focused: true
   }, (win) => {
     popupWindowId = win.id;
 

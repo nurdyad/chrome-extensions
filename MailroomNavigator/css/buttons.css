@@ -1,18 +1,16 @@
 .btn {
-    padding: 8px 14px;
-    font-size: 13px;
+    padding: 5px 8px;  /* Very slim padding */
+    font-size: 11px;    /* Matches the small nav text */
     background-color: var(--primary-color);
     color: white;
     border: none;
     border-radius: var(--border-radius);
     cursor: pointer;
-    transition: var(--transition);
     font-weight: 500;
-    box-shadow: var(--box-shadow);
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 4px;
 }
 
 .btn:hover:not(:disabled) {
