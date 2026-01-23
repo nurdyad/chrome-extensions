@@ -177,8 +177,8 @@ export function handleCdbInput() {
 
     // Show top 15 if empty, otherwise filter by typing
     let matches = !query 
-        ? allCdbItems.slice(0, 15) 
-        : allCdbItems.filter(item => item.cdb.includes(query)).slice(0, 8);
+        ? allCdbItems.slice(0, 30) // Increased to show more initial options
+        : allCdbItems.filter(item => item.cdb.includes(query)).slice(0, 15);
 
     if (matches.length === 0) {
         listEl.innerHTML = '';
@@ -187,6 +187,12 @@ export function handleCdbInput() {
     }
 
     listEl.innerHTML = '';
+
+    const countHeader = document.createElement('div');
+    countHeader.className = 'suggestion-count';
+    countHeader.textContent = `Total Results: ${matches.length} practices shown`;
+    listEl.appendChild(countHeader);
+    
     matches.forEach(item => {
         const li = document.createElement('li');
         li.textContent = item.label;

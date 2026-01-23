@@ -46,6 +46,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
 
+    resizeToFitContent();
+
     // B. Initial Data Load
     try {
         const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
@@ -74,17 +76,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         cdbInput.addEventListener('focus', Navigator.handleCdbInput);
     }
     
-    // --- FIX: Added handlers for missing buttons ---
+    // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/practices/new');
     });
 
+    // --- Show Practices Page ---
     document.getElementById('practicesBtn')?.addEventListener('click', () => {
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/practices');
-    });
-
-    document.getElementById('searchCdbBtn')?.addEventListener('click', () => {
-        Navigator.handleCdbInput();
     });
     
     // 1. Reset Button
@@ -149,7 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) { showToast(e.message); }
     });
 
-    // G. Job Dropdowns
+    // Job Dropdowns
     const openJobDashboard = (jobType) => {
         if (!jobType) return;
         try {
@@ -162,44 +161,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('docmanJobSelectNav')?.addEventListener('change', (e) => { openJobDashboard(e.target.value); e.target.value = ''; });
     document.getElementById('emisJobSelectNav')?.addEventListener('change', (e) => { openJobDashboard(e.target.value); e.target.value = ''; });
 
-    // H. JOB MANAGER LOGIC
-    document.getElementById("documentDropdown")?.addEventListener("input", (e) => {
-        const val = e.target.value.trim();
-        const actions = document.getElementById('documentActionsSection');
-        if (actions) actions.style.display = /^\d+$/.test(val) ? 'block' : 'none';
-        Jobs.filterAndDisplaySuggestions();
-    });
-    
-    document.getElementById("documentDropdown")?.addEventListener("focus", Jobs.filterAndDisplaySuggestions);
-
-    const docAction = (type) => {
-        const val = document.getElementById("documentDropdown").value.trim();
-        const id = val.match(/^\d+$/) ? val : null;
-        if (!id) return showToast("Invalid Doc ID");
-        let url = "";
-        if (type === 'status') url = `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`;
-        if (type === 'oban') url = `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}&state=available`;
-        if (type === 'anno') url = `https://app.betterletter.ai/mailroom/annotations/${id}`;
-        if (type === 'log') url = `https://app.betterletter.ai/admin_panel/event_log/${id}`;
-        if (type === 'admin') url = `https://app.betterletter.ai/admin_panel/letter/${id}`;
-        navigator.clipboard.writeText(url);
-        showToast("URL Copied!");
-        openTabWithTimeout(url);
-    };
-
-    document.getElementById("openDocumentStatus")?.addEventListener("click", () => docAction('status'));
-    document.getElementById("openObanJob")?.addEventListener("click", () => docAction('oban'));
-    document.getElementById("openAnnotation")?.addEventListener("click", () => docAction('anno'));
-    document.getElementById("openEventLog")?.addEventListener("click", () => docAction('log'));
-    document.getElementById("openLetterAdmin")?.addEventListener("click", () => docAction('admin'));
-    
-    document.getElementById("clearDocId")?.addEventListener("click", () => {
-        const di = document.getElementById("documentDropdown");
-        if (di) di.value = "";
-        const das = document.getElementById('documentActionsSection');
-        if (das) das.style.display = 'none';
-    });
-
     // I. EMAIL FORMATTER LOGIC
     document.getElementById("convertEmailBtn")?.addEventListener("click", Email.convertEmails);
     document.getElementById("nameOnlyBtn")?.addEventListener("click", Email.convertEmailsToNamesOnly);
@@ -210,10 +171,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // List of all inputs that should NOT hide the dropdown when clicked
         const safeInputs = [
             'practiceInput', 
-            'documentDropdown', 
-            'job-id', 
-            'practiceDropdown', 
-            'cdbSearchInput' // We added this to the "safe" list
+            'cdbSearchInput' 
         ];
 
         const isInput = safeInputs.includes(e.target.id);
@@ -258,10 +216,12 @@ setInterval(async () => {
   }
 }, 5000);
 
-window.addEventListener('DOMContentLoaded', () => {
-  // Auto-resize the popup window to tightly fit the content
+function resizeToFitContent(extraHeight = 40) {
   const width = document.documentElement.scrollWidth;
   const height = document.documentElement.scrollHeight;
+  window.resizeTo(width + 20, height + extraHeight);
+}
 
-  window.resizeTo(width + 20, height + 40); // Padding for scrollbar & borders
+window.addEventListener('DOMContentLoaded', () => {
+  resizeToFitContent(40, 750); // You can tweak the 700px value
 });
