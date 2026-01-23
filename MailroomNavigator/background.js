@@ -51,9 +51,9 @@ async function getOrCreateScrapingTab(url) {
     const window = await chrome.windows.create({ 
         url, 
         type: 'popup', 
-        focused: false, 
-        width: 1,       // Tiny size makes it invisible
-        height: 1,
+        focused: true, 
+        width: 460,       // Tiny size makes it invisible
+        height: 750,
         left: -2000,    // Moves it far off-screen
         top: -2000
     });
