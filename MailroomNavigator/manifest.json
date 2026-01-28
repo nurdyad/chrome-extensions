@@ -9,6 +9,7 @@
     "storage",
     "scripting",
     "clipboardWrite",
+    "offscreen",
     "alarms"
   ],
   "host_permissions": [
