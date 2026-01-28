@@ -179,17 +179,37 @@
     </div>
 
     <div id="jobManagerView" class="job-manager-container view-transition" style="display: none; width: 100%;">
+  
       <div class="section-container">
-        <h3>Bot Job Selection</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin: 0;">Quick Document Search</h3>
+            <span id="pasteStatus" style="font-size: 10px; color: #28a745; font-weight: normal; opacity: 0; transition: opacity 0.3s;">Pasted!</span>
+        </div>
+        
+        <div class="input-with-button">
+          <input type="text" id="manualDocId" placeholder="Paste or type ID..." autocomplete="off">
+        </div>
+        
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <button id="btnJobs" class="btn btn-sm" style="background: #6c757d;">Jobs</button>
+            <button id="btnOban" class="btn btn-sm" style="background: #fd7e14;">Oban</button>
+            <button id="btnLog" class="btn btn-sm" style="background: #17a2b8;">Log</button>
+            <button id="btnAdmin" class="btn btn-sm" style="background: #007bff;">Admin</button>
+        </div>
+      </div>
+
+      <div class="section-container">
+        <h3>Single ID Status Check</h3>
         <label for="jobStatusInput">Job ID:</label>
         <div class="input-with-button">
           <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
         </div>
-        <div class="button-grid" style="margin-top: 10px;">
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
           <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
         </div>
       </div>
+
     </div>
 
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
