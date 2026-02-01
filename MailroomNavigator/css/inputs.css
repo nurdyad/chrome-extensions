@@ -1,17 +1,16 @@
 textarea {
-    min-height: 80px;
+    min-height: 60px;
     resize: vertical;
 }
 
-input[type="text"], input[list], select, textarea {
+input[type="text"], select {
     width: 100%;
-    padding: 10px;
-    margin-bottom: 15px;
+    padding: 8px;
+    margin-bottom: 10px;
     border: 1px solid var(--dark-gray);
     border-radius: var(--border-radius);
-    font-size: 0.9em;
+    font-size: 0.85em;
     background-color: white;
-    transition: var(--transition);
 }
 
 input[type="text"]:focus, input[list]:focus, select:focus, textarea:focus {
@@ -27,16 +26,33 @@ input[readonly] {
 
 .input-with-button {
     display: flex;
-    gap: 6px;
-    margin-bottom: 15px;
-    align-items: center;
     position: relative;
+    align-items: center;
+    width: 100%;
 }
 
 .input-with-button input {
-    flex-grow: 1;
-    height: 36px;
-    margin-bottom: 0 !important;
+    flex: 1;
+    height: 32px;
+    padding-right: 35px !important; 
+}
+
+.input-with-button button {
+    position: absolute;
+    right: 4px;
+    height: 24px;
+    width: 24px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    background-color: var(--primary-color);
+    border-radius: 4px;
+}
+
+.input-with-button button + button {
+    display: none !important;
 }
 
 .job-col select {
@@ -135,55 +151,75 @@ input[readonly] {
     animation: spin 1s linear infinite;
 }
 
-
-#suggestions {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    border: 1px solid var(--dark-gray);
-    max-height: 180px;
-    overflow-y: auto;
-    display: none;
-    background: white;
-    
-    /* Anchor strictly to the input container */
-    position: absolute;
-    top: 100%; /* Right below the input */
-    left: 0;
-    width: 100%; /* Match width of input container exactly */
-    
-    z-index: 2000; /* Ensure it floats ABOVE the buttons */
-    box-shadow: 0 8px 16px rgba(0,0,0,0.15); /* Stronger shadow for depth */
-    border-radius: 0 0 var(--border-radius) var(--border-radius);
-    animation: fadeIn 0.1s ease;
-}
-
 #suggestions, #cdbSuggestions {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    border: 1px solid var(--dark-gray);
-    max-height: 160px;
-    overflow-y: auto;
-    display: none;
-    background: white;
     position: absolute;
-    width: calc(100% - 16px);
-    z-index: 1000;
-    box-shadow: var(--box-shadow);
-    border-radius: var(--border-radius);
-    left: 8px;
-    animation: fadeIn 0.2s ease;
+    top: 100%;
+    left: 0;
+    width: 310px !important; 
+    max-height: 200px !important; /* Slightly taller for better viewing */
+    overflow-y: auto !important;
+    border: 1px solid var(--dark-gray);
+    background: white;
+    z-index: 9999; /* Ensure it stays on top of buttons */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 0 0 var(--border-radius) var(--border-radius);
+    display: none;
+    padding: 0;
+    margin: 0;
+    list-style: none;
 }
 
+/* 3. Global List Item Style - The "Cut-Off" Fix */
 #suggestions li, #cdbSuggestions li {
-    padding: 10px;
+    padding: 8px 10px;
     cursor: pointer;
-    font-size: 14px;
-    transition: background-color 0.1s;
+    font-size: 13px;
+    color: var(--text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--medium-gray);
 }
 
 #suggestions li:hover, #suggestions li.highlighted,
 #cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
     background-color: #f0f7ff;
+}
+
+.suggestion-count {
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #777;
+    background-color: #f9f9f9;
+    border-bottom: 1px solid var(--medium-gray);
+    font-style: italic;
+    font-weight: 500;
+}
+
+/* Fix for the CDB Search button to prevent it from looking 'fat' */
+.search-container-cdb {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+#searchCdbBtn {
+    position: absolute;
+    right: 4px;
+    top: 4px; /* Centering fix */
+    height: 24px;
+    width: 24px;
+    background-color: var(--primary-color);
+    border: none;
+    border-radius: 4px;
+    z-index: 5;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#cdbSearchInput {
+    padding-right: 40px !important; /* Makes room for the button icon */
+    margin-bottom: 0 !important;
 }
