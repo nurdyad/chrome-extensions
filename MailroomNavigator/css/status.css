@@ -39,6 +39,26 @@
     text-overflow: ellipsis;
 }
 
+/* The Live Indicator Dot */
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background-color: #2ecc71; /* Green */
+    border-radius: 50%;
+    margin-left: 8px;
+    vertical-align: middle;
+    transition: transform 0.2s ease;
+    opacity: 0.6;
+}
+
+/* The Pulse Effect when a scan succeeds */
+.live-dot.pulse {
+    transform: scale(1.5);
+    opacity: 1;
+    box-shadow: 0 0 8px #2ecc71;
+}
+
 #status {
     margin-top: 12px;
     padding: 10px;
@@ -50,16 +70,17 @@
 }
 
 #statusDisplay, #cdbSearchResult {
-    margin-top: 12px;
-    padding: 12px;
+    margin-top: 8px;        /* Reduced space above */
+    padding: 10px;         /* Tighter inside padding */
     border: 1px solid var(--medium-gray);
     border-radius: var(--border-radius);
     background-color: white;
     text-align: left;
-    font-size: 0.9em;
+    font-size: 0.85em;     /* Slightly smaller text to fit better */
     color: var(--text-color);
     display: none;
     border-left: 3px solid var(--primary-color);
+    box-shadow: var(--box-shadow);
     animation: fadeIn 0.3s ease;
 }
 
