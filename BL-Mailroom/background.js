@@ -565,46 +565,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     break;
                 }
             }
-
-            // If not found in cached CDBs, then iterate and scrape as needed.
-            // This loop *is* the one that would cause "too many pages"
             if (!foundPractice) {
-                console.log(`%c[BL Nav - Background] CDB not in cache. Will attempt to scrape practices for match.`, 'color: orange;');
-                for (const p of allPractices) {
-                    // Only scrape if CDB is not already cached for this specific practice or is 'N/A'/'Error'
-                    if (p.ods && (p.cdb === undefined || p.cdb === 'N/A' || p.cdb === 'Error')) {
-                        try {
-                            const scrapedCDB = await scrapePracticeCDB(p.ods);
-                            // Update cache for this practice
-                            p.cdb = scrapedCDB;
-                            // Persist updated cache immediately after each scrape for robustness
-                            await chrome.storage.local.set({ practiceCache: practiceCache }); 
-                            // Ensure in-memory cdbCache is updated
-                            cdbCache[p.ods] = scrapedCDB;
+                console.log(
+                  `%c[BL Nav - Background] CDB "${searchedCDB}" not found in cache. Skipping scrape.`,
+                  'color: gray;'
+                );
 
-                            if (scrapedCDB === searchedCDB) {
-                                foundPractice = { name: p.name, ods: p.ods, cdb: scrapedCDB };
-                                console.log(`%c[BL Nav - Background] Match found by SCRAPE for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                                break; // Found a match, no need to check further
-                            }
-                        } catch (scrapeError) {
-                            console.warn(`%c[BL Nav - Background] Could not scrape CDB for ${p.name} (${p.ods}) during search: ${scrapeError.message}`, 'color: orange;');
-                            // Mark as error in cache to avoid re-attempting immediately for this practice
-                            if (p.cdb === undefined || p.cdb === 'N/A') { // Only mark if not already a valid CDB
-                                p.cdb = 'Error';
-                                await chrome.storage.local.set({ practiceCache: practiceCache });
-                            }
-                            // Continue to next practice if one fails
-                        }
-                    } else if (p.ods && p.cdb === searchedCDB) {
-                        // This case handles if it was found in a previous scrape within this loop but not in the initial cache check.
-                        foundPractice = { name: p.name, ods: p.ods, cdb: p.cdb };
-                        console.log(`%c[BL Nav - Background] Match found (already scraped) for CDB "${searchedCDB}": ${p.name} (${p.ods})`, 'color: #32CD32; font-weight: bold;');
-                        break;
-                    }
-                }
+                return {
+                  success: false,
+                  error: `No practice found for CDB: "${searchedCDB}".`
+                };
             }
-
             if (foundPractice) {
                 return { success: true, practice: foundPractice };
             } else {
@@ -615,7 +586,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.error(`%c[BL Nav - Background] Error during CDB search: ${error.message}`, 'color: red; font-weight: bold;', error);
             return { success: false, error: `Internal error during CDB search: ${error.message}` };
         }
-    }
+      }
     // If action is not recognized.
     return { error: "Unknown action" };
   };

@@ -9,6 +9,7 @@
     "storage",
     "scripting",
     "clipboardWrite",
+    "offscreen",
     "alarms"
   ],
   "host_permissions": [
@@ -36,8 +37,21 @@
       "all_frames": true
     },
     {
-      "matches": ["https://app.betterletter.ai/admin_panel/bots/dashboard*", "https://app.betterletter.ai/admin_panel/practices*"],
+      "matches": ["https://app.betterletter.ai/admin_panel/practices*"],
       "js": ["password_content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://app.betterletter.ai/admin_panel/bots/dashboard*",
+        "https://app.betterletter.ai/mailroom/preparing*",
+        "https://app.betterletter.ai/mailroom/edit*",
+        "https://app.betterletter.ai/mailroom/review*",
+        "https://app.betterletter.ai/mailroom/coding*",
+        "https://app.betterletter.ai/mailroom/rejected*"
+      ],
+      "js": ["bot_dashboard_navigator.js"],
       "run_at": "document_idle",
       "all_frames": true
     }

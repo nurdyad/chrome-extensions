@@ -3,1048 +3,243 @@
 <head>
   <meta charset="UTF-8">
   <title>BetterLetter All-in-One</title>
-  <style>
-    :root {
-      --primary-color: #3498db;
-      --secondary-color: #2ecc71;
-      --accent-color: #e74c3c;
-      --text-color: #2c3e50;
-      --light-gray: #f8f9fa;
-      --medium-gray: #ecf0f1;
-      --dark-gray: #bdc3c7;
-      --success-color: #27ae60;
-      --warning-color: #f39c12;
-      --danger-color: #e74c3c;
-      --info-color: #3498db;
-      --collection-color: #9b59b6;
-      --border-radius: 8px;
-      --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      --transition: all 0.3s ease;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
-      padding: 12px;
-      width: 320px;
-      background-color: var(--light-gray);
-      color: var(--text-color);
-      line-height: 1.5;
-      min-height: 620px;
-      overflow-x: hidden;
-    }
-
-    h1 {
-      font-size: 1.3rem;
-      text-align: center;
-      margin-bottom: 15px;
-      color: var(--text-color);
-      font-weight: 600;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--medium-gray);
-      position: relative;
-    }
-
-    h1::after {
-      content: '';
-      position: absolute;
-      bottom: -1px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 60px;
-      height: 2px;
-      background: var(--primary-color);
-      transition: var(--transition);
-    }
-
-    h3 {
-      margin-top: 0;
-      margin-bottom: 12px;
-      color: var(--primary-color);
-      font-size: 1.05em;
-      font-weight: 600;
-      padding-bottom: 6px;
-      position: relative;
-    }
-
-    h3::after {
-      content: '';
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      width: 30px;
-      height: 2px;
-      background: var(--primary-color);
-    }
-
-    label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: 500;
-      color: #555;
-      font-size: 0.9em;
-    }
-
-    input[type="text"], input[list], select, textarea {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 15px;
-      border: 1px solid var(--dark-gray);
-      border-radius: var(--border-radius);
-      font-size: 0.9em;
-      background-color: white;
-      transition: var(--transition);
-    }
-
-    input[type="text"]:focus, input[list]:focus, select:focus, textarea:focus {
-      border-color: var(--primary-color);
-      outline: none;
-      box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
-    }
-
-    input[readonly] {
-      background-color: var(--light-gray);
-      cursor: default;
-    }
-
-    textarea {
-      min-height: 80px;
-      resize: vertical;
-    }
-
-    .btn {
-      padding: 8px 14px;
-      font-size: 13px;
-      background-color: var(--primary-color);
-      color: white;
-      border: none;
-      border-radius: var(--border-radius);
-      cursor: pointer;
-      transition: var(--transition);
-      font-weight: 500;
-      box-shadow: var(--box-shadow);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-    }
-
-    .btn:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
-      opacity: 0.9;
-    }
-
-    .btn:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
-    .btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none !important;
-      background-color: var(--dark-gray);
-    }
-
-    .btn-sm {
-      padding: 6px 10px;
-      font-size: 12px;
-    }
-
-    .button-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-      gap: 10px;
-      margin-top: 8px;
-    }
-
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px dashed var(--medium-gray);
-      font-size: 0.9em;
-    }
-
-    .info-row:last-of-type {
-      border-bottom: none;
-      margin-bottom: 10px;
-    }
-
-    .info-value {
-      font-weight: 600;
-      color: var(--text-color);
-      text-align: right;
-      max-width: 60%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .input-with-button {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 15px;
-      align-items: center;
-      position: relative;
-    }
-
-    .input-with-button input {
-      flex-grow: 1;
-      height: 36px;
-      margin-bottom: 0 !important;
-    }
-
-    .practice-input-grid {
-      display: grid;
-      grid-template-columns: 3fr 1fr 1fr;
-      gap: 6px;
-      align-items: center;
-    }
-
-    #toast {
-      position: fixed;
-      bottom: 15px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(50, 50, 50, 0.9);
-      color: white;
-      padding: 10px 18px;
-      border-radius: var(--border-radius);
-      font-size: 14px;
-      z-index: 1000;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-      white-space: nowrap;
-      opacity: 0;
-      visibility: hidden;
-      transition: all 0.3s ease;
-    }
-
-    #toast.show {
-      opacity: 1;
-      visibility: visible;
-      animation: slideUp 0.3s ease;
-    }
-
-    @keyframes slideUp {
-      from { transform: translateX(-50%) translateY(20px); }
-      to { transform: translateX(-50%) translateY(0); }
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-
-    .section-container {
-      background-color: white;
-      border-radius: var(--border-radius);
-      padding: 15px;
-      margin-bottom: 15px;
-      box-shadow: var(--box-shadow);
-      border-left: 4px solid var(--primary-color);
-      transition: var(--transition);
-      position: relative;
-      z-index: 1;
-    }
-    
-    #documentSelectionSection {
-      z-index: 5;
-    }
-
-    .section-container:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
-    }
-
-    select#settingType {
-      width: calc(100% - 40px); /* Adjust width if needed to align with search button */
-      height: 36px;
-      padding: 8px 10px;
-      font-size: 0.9em;
-      font-family: inherit;
-      border: 1px solid var(--dark-gray);
-      border-radius: 4px; /* Match your input fields */
-      background-color: white;
-      box-sizing: border-box;
-      -webkit-appearance: none;
-      -moz-appearance: none;
-      appearance: none;
-    }
-
-
-    #jobTitleSection {
-      margin-top: 12px !important;
-      padding-top: 10px !important;
-      border-top: 1px dashed var(--medium-gray);
-    }
-
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 15px;
-      justify-content: center;
-    }
-
-    #usersBtn { background-color: var(--secondary-color); }
-    #usersBtn:hover:not(:disabled) { background-color: #27ae60; }
-    #preparingBtn { background-color: var(--warning-color); }
-    #preparingBtn:hover:not(:disabled) { background-color: #e67e22; }
-    #rejectedBtn { background-color: var(--danger-color); }
-    #rejectedBtn:hover:not(:disabled) { background-color: #c0392b; }
-    #searchCdbBtn { background-color: var(--info-color); }
-    #searchCdbBtn:hover:not(:disabled) { background-color: #2980b9; }
-    #collectionBtn { background-color: var(--collection-color); }
-    #collectionBtn:hover:not(:disabled) { background-color: #8e44ad; }
-
-    .global-nav-buttons-row {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 15px;
-      background: white;
-      border-radius: var(--border-radius);
-      padding: 6px;
-      box-shadow: var(--box-shadow);
-    }
-
-    .global-nav-buttons-row .btn {
-      flex: 1;
-      padding: 8px;
-      font-size: 13px;
-      background-color: white;
-      color: var(--text-color);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: var(--transition);
-      text-align: center;
-      margin: 0 1px;
-      box-shadow: none;
-      border-bottom: 2px solid transparent;
-    }
-
-    .global-nav-buttons-row .btn:hover {
-      background-color: var(--light-gray);
-    }
-
-    .global-nav-buttons-row .btn.active-tab {
-      background-color: var(--light-gray);
-      color: var(--text-color);
-      border-bottom: 2px solid var(--primary-color);
-      font-weight: 600;
-    }
-
-    #navigatorGlobalToggleBtn.active-tab { color: var(--primary-color); border-bottom-color: var(--primary-color);}
-    #jobManagerGlobalToggleBtn.active-tab { color: var(--info-color); border-bottom-color: var(--info-color);}
-    #emailFormatterGlobalToggleBtn.active-tab { color: #9b59b6; border-bottom-color: #9b59b6;}
-
-    #suggestions, #cdbSuggestions {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      border: 1px solid var(--dark-gray);
-      max-height: 160px;
-      overflow-y: auto;
-      display: none;
-      background: white;
-      position: absolute;
-      width: calc(100% - 16px);
-      z-index: 1000;
-      box-shadow: var(--box-shadow);
-      border-radius: var(--border-radius);
-      left: 8px;
-      animation: fadeIn 0.2s ease;
-    }
-
-    #suggestions li, #cdbSuggestions li {
-      padding: 10px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background-color 0.1s;
-    }
-
-    #suggestions li:hover, #suggestions li.highlighted,
-    #cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
-      background-color: #f0f7ff;
-    }
-
-    #status {
-      margin-top: 12px;
-      padding: 10px;
-      text-align: center;
-      border-radius: var(--border-radius);
-      display: none;
-      font-size: 0.9em;
-      animation: fadeIn 0.3s ease;
-    }
-
-    .success { 
-      background: #f0fdf4; 
-      color: #065f46;
-      border-left: 3px solid var(--success-color);
-    }
-
-    .error { 
-      background: #fef2f2; 
-      color: #991b1b;
-      border-left: 3px solid var(--danger-color);
-    }
-
-    .loading { 
-      background: #eff6ff; 
-      color: #1e40af;
-      border-left: 3px solid var(--info-color);
-    }
-
-    .autocomplete-item {
-      padding: 10px 12px;
-      cursor: pointer;
-      border-bottom: 1px solid var(--medium-gray);
-      transition: background 0.2s;
-    }
-
-    .autocomplete-item:hover {
-      background-color: var(--light-gray);
-    }
-
-    .suggestion-main {
-      font-weight: 500;
-      margin-bottom: 3px;
-    }
-
-    .suggestion-meta {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.8em;
-      color: var(--dark-gray);
-    }
-    
-    .loading-state {
-      position: relative;
-      padding-right: 30px;
-    }
-    
-    .loading-state::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      right: 10px;
-      transform: translateY(-50%);
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(0, 0, 0, 0.1);
-      border-radius: 50%;
-      border-top-color: var(--primary-color);
-      animation: spin 1s linear infinite;
-    }
-    
-    .dropdown-stable {
-      transition: opacity 0.2s ease;
-    }
-
-    #statusDisplay, #cdbSearchResult {
-      margin-top: 12px;
-      padding: 12px;
-      border: 1px solid var(--medium-gray);
-      border-radius: var(--border-radius);
-      background-color: white;
-      text-align: left;
-      font-size: 0.9em;
-      color: var(--text-color);
-      display: none;
-      border-left: 3px solid var(--primary-color);
-      animation: fadeIn 0.3s ease;
-    }
-
-    .email-formatter-container textarea {
-      width: 100%;
-      height: 100px;
-      margin-bottom: 12px;
-      box-sizing: border-box;
-    }
-
-    /* Base styles for all buttons in the email formatter grid */
-    .email-formatter-container .button-grid .btn {
-        color: white;
-        border: none;
-        cursor: pointer;
-        transition: var(--transition);
-        font-weight: 500;
-    }
-
-    /* Specific color for the 'success' (green) buttons */
-    #convertEmailBtn,
-    #nameOnlyBtn {
-        background-color: var(--success-color);
-    }
-
-    /* Grouped hover effects */
-    #convertEmailBtn:hover,
-    #nameOnlyBtn:hover {
-        background-color: #45a049; /* Darker green */
-        transform: translateY(-2px);
-    }
-
-    /* Style for the single 'Copy' button below the grid */
-    #copyEmailBtn {
-        width: 100%;
-        margin-top: 12px;
-        padding: 10px;
-        background-color: var(--success-color);
-        color: white;
-        border: none;
-        border-radius: var(--border-radius);
-        cursor: pointer;
-        transition: var(--transition);
-    }
-
-    #copyEmailBtn:hover {
-        background-color: #45a049;
-        transform: translateY(-2px);
-    }
-
-    #convertEmailBtn:hover, #copyEmailBtn:hover, #nameOnlyBtn:hover {
-      background-color: #45a049;
-      transform: translateY(-2px);
-    }
-
-    .back-to-nav-btn {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      background-color: #6c757d;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      padding: 6px 10px;
-      font-size: 14px;
-      z-index: 10;
-      width: auto;
-      line-height: 1;
-      text-align: center;
-      transition: var(--transition);
-    }
-
-    .back-to-nav-btn:hover {
-      background-color: #5a6268;
-      transform: translateY(-1px);
-    }
-
-    .email-formatter-container, .job-manager-container {
-      position: relative;
-      padding-top: 20px;
-    }
-
-    .practice-input-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .practice-input-row label {
-      margin-bottom: 0;
-      flex-shrink: 0;
-      white-space: nowrap;
-    }
-
-    .practice-input-row input {
-      flex-grow: 1;
-      margin-bottom: 0;
-    }
-
-    .contextual-buttons-row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 15px;
-    }
-
-    .custom-autocomplete-results {
-      position: absolute;
-      top: 100%;
-      background-color: white;
-      border: 1px solid var(--dark-gray);
-      border-radius: var(--border-radius);
-      max-height: 200px;
-      overflow-y: auto;
-      z-index: 1002;
-      box-shadow: var(--box-shadow);
-      display: none;
-      margin-top: 2px;
-      width: calc(100% - 20px);
-      left: 10px;
-      animation: fadeIn 0.2s ease;
-    }
-
-    .custom-autocomplete-results .autocomplete-item {
-      padding: 10px 12px;
-      cursor: pointer;
-      border-bottom: 1px solid var(--medium-gray);
-      font-size: 0.9em;
-      color: var(--text-color);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      transition: background-color 0.1s;
-    }
-
-    .custom-autocomplete-results .autocomplete-item:last-child {
-      border-bottom: none;
-    }
-
-    .custom-autocomplete-results .autocomplete-item:hover,
-    .custom-autocomplete-results .autocomplete-item.active {
-      background-color: #f0f7ff;
-      color: var(--primary-color);
-    }
-
-    .loading-spinner {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(255, 255, 255, 0.3);
-      border-radius: 50%;
-      border-top-color: white;
-      animation: spin 1s ease-in-out infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .pulse {
-      animation: pulse 2s infinite;
-    }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(52, 152, 219, 0.7); }
-      70% { box-shadow: 0 0 0 10px rgba(52, 152, 219, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(52, 152, 219, 0); }
-    }
-
-    .view-transition {
-      animation: slideIn 0.3s ease;
-    }
-
-    @keyframes slideIn {
-      from { transform: translateX(20px); opacity: 0; }
-      to { transform: translateX(0); opacity: 1; }
-    }
-
-    .tooltip {
-      position: relative;
-      display: inline-block;
-    }
-
-    .tooltip .tooltiptext {
-      visibility: hidden;
-      width: 120px;
-      background-color: #555;
-      color: #fff;
-      text-align: center;
-      border-radius: 6px;
-      padding: 5px;
-      position: absolute;
-      z-index: 1;
-      bottom: 125%;
-      left: 50%;
-      transform: translateX(-50%);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-
-    .tooltip:hover .tooltiptext {
-      visibility: visible;
-      opacity: 1;
-    }
-
-    @media (max-width: 340px) {
-      body {
-        padding: 8px;
-      }
-      
-      .section-container {
-        padding: 12px;
-      }
-      
-      .global-nav-buttons-row .btn {
-        font-size: 12px;
-        padding: 6px;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="css/utilities.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/buttons.css">
+  <link rel="stylesheet" href="css/inputs.css">
+  <link rel="stylesheet" href="css/status.css">
 </head>
 <body>
-  <div class="btn-row global-nav-buttons-row">
-    <button id="navigatorGlobalToggleBtn" class="btn active-tab">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="12" y1="8" x2="12" y2="12"></line>
-        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-      </svg>
-      Navigator
-    </button>
-    <button id="jobManagerGlobalToggleBtn" class="btn">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
-        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-      </svg>
-      Job Panel
-    </button>
-    <button id="emailFormatterGlobalToggleBtn" class="btn">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-        <polyline points="22,6 12,13 2,6"></polyline>
-      </svg>
-      Email
-    </button>
-  </div>
-
-  <div id="practiceNavigatorView" class="view-transition">
-    <h1>Practice Navigator</h1>
-    
-    <div style="margin-bottom: 15px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-        <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
-        <button id="createPracticeAdminBtn" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-        </button>
-
-        <button id="usersBtn" class="btn btn-sm" disabled>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-            <circle cx="9" cy="7" r="4"></circle>
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-          </svg>
-        </button>
-
-        <button id="practicesBtn" class="btn btn-sm">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="input-with-button">
-        <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
-        <button id="resetSettingsBtn" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
-            <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
-          </svg>
-        </button>
-      </div>
-    </div>
-
-    <ul id="suggestions"></ul>
-
-    <div style="margin-bottom: 15px;">
-      <label for="settingType">Setting Type</label>
-      <div class="input-with-button">
-        <select id="settingType">
-          <option value="" selected disabled hidden>Select Setting Type</option>
-          <option value="basic">Basic</option>
-          <option value="service">Service</option>
-          <option value="workflows">Workflows</option>
-          <option value="ehr_settings">EHR Settings</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="btn-row">
-      <button id="collectionBtn" class="btn btn-sm" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-            <line x1="12" y1="22.08" x2="12" y2="12"></line>
-        </svg>
-        Collection
-      </button>
-
-      <button id="preparingBtn" class="btn btn-sm" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <div class="extension-wrapper"> 
+    <div class="btn-row global-nav-buttons-row">
+      <button id="navigatorGlobalToggleBtn" class="btn active-tab">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
-        Preparing
+        Navigator
       </button>
-
-      <button id="rejectedBtn" class="btn btn-sm" disabled>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
+      <button id="jobManagerGlobalToggleBtn" class="btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+          <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
         </svg>
-        Rejected
+        Job Panel
+      </button>
+      <button id="emailFormatterGlobalToggleBtn" class="btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+          <polyline points="22,6 12,13 2,6"></polyline>
+        </svg>
+        Email
       </button>
     </div>
 
-    <div style="margin-bottom: 15px;">
-      <label for="cdbSearchInput">Search by Practice CDB</label>
-      <div class="input-with-button">
-        <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
-        <button id="searchCdbBtn" class="btn btn-sm">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
-        </button>
+    <div id="practiceNavigatorView" class="view-transition">
+      <h1>
+        Practice Navigator
+        <span id="liveIndicator" class="live-dot" title="Auto-scan active"></span>
+      </h1>
+      
+      <div style="margin-bottom: 15px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+          <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
+          <div style="display: flex; gap: 4px;"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              </button>
+              <button id="usersBtn" class="btn btn-sm" disabled title="View Users">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="9" cy="7" r="4"></circle>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              </button>
+              <button id="practicesBtn" class="btn btn-sm" title="All Practices">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              </button>
+          </div>
+        </div>
+
+        <div class="search-container" style="position: relative;">
+          <div class="input-with-button" style="margin-bottom: 0;">
+            <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
+            <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
+                <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
+              </svg>
+            </button>
+          </div>
+          <ul id="suggestions"></ul>
+        </div>
       </div>
-    </div>
 
-    <ul id="cdbSuggestions"></ul>
-    <div id="cdbSearchResult"></div>
-    <div id="status"></div>
-    <div id="statusDisplay"></div>
-  </div>
-
-  <div id="jobManagerView" class="job-manager-container view-transition" style="display: none;">
-    
-    <div id="documentSelectionSection" class="section-container">
-      <h3>Document Selection</h3>
-      <label for="documentDropdown">Document ID:</label>
-      <div class="input-with-button">
-        <input id="documentDropdown" placeholder="Enter or select document ID" autocomplete="off">
-        <button id="copySelectedDocId" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      <div class="action-grid">
+        <button id="collectionBtn" class="btn btn-sm" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+              <line x1="12" y1="22.08" x2="12" y2="12"></line>
           </svg>
+          Collection
         </button>
-        <button id="clearDocId" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+
+        <button id="preparingBtn" class="btn btn-sm" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          Preparing
+        </button>
+
+        <button id="rejectedBtn" class="btn btn-sm" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
+          Rejected
         </button>
-        <div id="autocompleteResults" class="custom-autocomplete-results dropdown-stable"></div>
-      </div>
-    </div>
 
-    <div id="jobSelectionSection" class="section-container">
-      <h3>Bot Job Selection</h3>
-      <label for="jobStatusInput">Job ID:</label>
-      <div class="input-with-button">
-        <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
-      </div>
-      <div class="button-grid" style="margin-top: 10px;">
-        <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
-        <button id="copyJobStatusIdBtn" class="btn btn-sm">Copy ID</button>
-        <button id="copyJobStatusUrlBtn" class="btn btn-sm">Copy URL</button>
-        <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
-      </div>
-    </div>
-
-    <div id="mailroomDetailsSection" class="section-container" style="display: none;">
-      <h3>Mailroom Details</h3>
-      <div class="info-row">
-        <span>Original Name:</span>
-        <span id="mailroom-original-name" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>NHS No.:</span>
-        <span id="mailroom-nhs-no" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Patient Name:</span>
-        <span id="mailroom-patient-name" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Reason:</span>
-        <span id="mailroom-reason" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Rejected By / On:</span>
-        <span id="mailroom-rejected-by-on" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Status:</span>
-        <span id="mailroom-status" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Job ID (Mailroom):</span>
-        <span id="mailroom-job-id" class="info-value">—</span>
-      </div>
-      <div class="info-row">
-        <span>Inferred Type:</span>
-        <span id="mailroom-inferred-type" class="info-value">—</span>
-      </div>
-      <button id="copyMailroomDetails" class="btn btn-sm" style="width: 100%; margin-top: 10px;">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-        Copy All Mailroom Details
-      </button>
-    </div>
-
-    <div id="documentActionsSection" style="display: none;">
-      <div class="section-container">
-        <h3>Document Actions</h3>
-        <div class="button-grid">
-          <button id="openDocumentStatus" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-            Status
-          </button>
-          <button id="openObanJob" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-            Oban
-          </button>
-          <button id="openAnnotation" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a10 10 0 0 0-7 16.9"></path>
-              <path d="M12 2a10 10 0 0 1 7 16.9"></path>
-              <path d="M19 13v6h-6"></path>
-              <path d="M5 13v6h6"></path>
-            </svg>
-            Annotation
-          </button>
-          <button id="openEventLog" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-            </svg>
-            Evt Log
-          </button>
-          <button id="openLetterAdmin" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-              <polyline points="22,6 12,13 2,6"></polyline>
-            </svg>
-            L. Admin
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <div class="section-container">
-      <h3>Practice Details (from Job Data)</h3>
-      <label for="practiceDropdown">Practice Name:</label>
-      <div class="input-with-button">
-        <input id="practiceDropdown" placeholder="Enter or select practice" autocomplete="off">
-        <button id="openPractice" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
+        <button id="openEhrSettingsBtn" class="btn btn-sm" disabled style="background-color: #6c757d;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
             <line x1="12" y1="8" x2="12" y2="16"></line>
             <line x1="8" y1="12" x2="16" y2="12"></line>
           </svg>
+          Settings
         </button>
-        <button id="copyPracticeName" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-        </button>
-        <div id="practiceAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
-      </div>
 
-      <div class="button-grid" style="margin-top: 10px;">
-        <button id="docmanJobsBtn" class="btn btn-sm" disabled>Docman Jobs</button>
-        <button id="emisJobsBtn" class="btn btn-sm" disabled>Emis Jobs</button>
-        <button id="docmanValidateBtn" class="btn btn-sm" disabled>Docman Validate</button>
-      </div>
-
-      <div class="info-row" style="margin-top: 12px; border-bottom: none;">
-        <span>ODS Code:</span>
-        <span id="ods-code" class="info-value">—</span>
-      </div>
-    </div>
-
-    <div class="section-container">
-      <h3>Job Details</h3>
-      <div class="info-row">
-        <span>Job Type:</span>
-        <span id="job-type-label" class="info-value">—</span>
-      </div>
-      <label for="job-id">Job ID:</label>
-      <div class="input-with-button">
-        <input type="text" id="job-id" readonly class="info-input">
-        <button id="copy-job-id" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        <button id="taskRecipientsBtn" class="btn btn-sm" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8.5" cy="7" r="4"></circle>
+            <line x1="20" y1="8" x2="20" y2="14"></line>
+            <line x1="23" y1="11" x2="17" y2="11"></line>
           </svg>
-        </button>
-        <div id="jobIdAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
-      </div>
-      <div class="button-grid" style="margin-bottom: 10px;">
-        <button id="openJobDirect" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-            <polyline points="15 3 21 3 21 9"></polyline>
-            <line x1="10" y1="14" x2="21" y2="3"></line>
-          </svg>
-          Open Job
-        </button>
-        <button id="copyJobPageUrl" class="btn btn-sm">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-          Copy URL
+          Task Recipients
         </button>
       </div>
 
-      <div id="jobTitleSection" style="display: none;">
-        <label for="jobTitleDisplay">Job Title:</label>
-        <div class="input-with-button">
-          <input type="text" id="jobTitleDisplay" readonly class="info-input">
-          <button id="copyJobTitle" class="btn btn-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      <div class="section-container">
+        <div class="jobs-row">
+          <div class="job-col">
+            <label for="docmanJobSelectNav">Docman Jobs</label>
+            <select id="docmanJobSelectNav">
+              <option value="">Select Docman job…</option>
+              <option value="generate_output">Generate Output</option>
+              <option value="docman_validate">Docman Validate</option>
+              <option value="docman_import">Docman Import</option>
+              <option value="docman_file">Docman File</option>
+              <option value="merge_tasks_for_same_recipient">Merge Tasks for Same Recipient</option>
+              <option value="publish_tasks">Publish Tasks</option>
+              <option value="docman_review">Docman Review</option>
+              <option value="docman_delete_original">Docman Delete Original</option>
+              <option value="docman_upload">Docman Upload</option>
+              <option value="docman_rejection">Docman Rejection</option>
+            </select>
+          </div>
+
+          <div class="job-col">
+            <label for="emisJobSelectNav">EMIS Jobs</label>
+            <select id="emisJobSelectNav">
+              <option value="">Select EMIS job…</option>
+              <option value="emis_api_consultation">EMIS API Consultation</option>
+              <option value="emis_unmatch">EMIS Unmatch</option>
+              <option value="emis_prepare">EMIS Prepare</option>
+              <option value="emis_delete_originals">EMIS Delete Originals</option>
+              <option value="emis_rejection">EMIS Rejection</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      
+      <div class="search-container" style="position: relative; width: 100%; max-width: 100%;">
+        <label for="cdbSearchInput">Search by Practice CDB</label>
+        <div class="input-with-button" style="margin-bottom: 0;">
+          <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
+          <button id="searchCdbBtn" class="btn btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
           </button>
         </div>
+        <ul id="cdbSuggestions"></ul> 
       </div>
+      <div id="cdbSearchResult"></div>
+      <div id="status"></div>
+      <div id="statusDisplay"></div>
     </div>
 
-    <div id="toast"></div>
-  </div>
+    <div id="jobManagerView" class="job-manager-container view-transition" style="display: none; width: 100%;">
+  
+      <div class="section-container">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin: 0;">Quick Document Search</h3>
+            <span id="pasteStatus" style="font-size: 10px; color: #28a745; font-weight: normal; opacity: 0; transition: opacity 0.3s;">Pasted!</span>
+        </div>
+        
+        <div class="input-with-button">
+          <input type="text" id="manualDocId" placeholder="Paste or type ID..." autocomplete="off">
+        </div>
+        
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <button id="btnJobs" class="btn btn-sm" style="background: #6c757d;">Jobs</button>
+            <button id="btnOban" class="btn btn-sm" style="background: #fd7e14;">Oban</button>
+            <button id="btnLog" class="btn btn-sm" style="background: #17a2b8;">Log</button>
+            <button id="btnAdmin" class="btn btn-sm" style="background: #007bff;">Admin</button>
+        </div>
+      </div>
 
-  <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
-    
-    <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
-    <div class="button-grid" style="margin-bottom: 12px;">
-      <button id="convertEmailBtn" class="btn btn-sm">
+      <div class="section-container">
+        <h3>Single ID Status Check</h3>
+        <label for="jobStatusInput">Job ID:</label>
+        <div class="input-with-button">
+          <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
+        </div>
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
+          <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
+      
+      <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
+      <div class="button-grid" style="margin-bottom: 12px;">
+        <button id="convertEmailBtn" class="btn btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+          </svg>
+          Convert
+        </button>
+        <button id="nameOnlyBtn" class="btn btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          Name
+        </button>
+      </div>
+      <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
+      <button id="copyEmailBtn" class="btn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
         </svg>
-        Convert
-      </button>
-      <button id="nameOnlyBtn" class="btn btn-sm">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
-        </svg>
-        Name
+        Copy
       </button>
     </div>
-    <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
-    <button id="copyEmailBtn" class="btn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-      </svg>
-      Copy
-    </button>
-  </div>
 
-  <script src="panel.js"></script>
+  </div> 
+  <script type="module" src="panel.js"></script>
 </body>
 </html>
