@@ -1,0 +1,15 @@
+.job-note-icon {
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+.job-note-tooltip {
+  position: absolute;
+  background: #fef9c3;
+  color: #333;
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+  z-index: 10000;
+}
