@@ -1,0 +1,12 @@
+{
+  "name": "BetterLetter Bulk Workflow Groups",
+  "description": "Paste names and auto-create Custom Workflow Groups in BetterLetter admin.",
+  "version": "1.0.0",
+  "manifest_version": 3,
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://app.betterletter.ai/*"],
+  "action": {
+    "default_title": "Bulk Workflow Groups",
+    "default_popup": "popup.html"
+  }
+}
