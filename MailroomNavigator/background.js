@@ -131,19 +131,48 @@ async function scrapePracticeListViaTab() {
                 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                 await delay(2000);
 
+                const headerCells = Array.from(document.querySelectorAll('table thead th'));
+                const headers = headerCells.map((th, idx) => ({
+                    idx,
+                    text: (th.textContent || '').trim().toLowerCase()
+                }));
+
+                const findHeaderIndex = (...keywords) => {
+                    const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
+                    return hit ? hit.idx : -1;
+                };
+
+                const odsIdx = findHeaderIndex('ods');
+                const cdbIdx = findHeaderIndex('cdb');
+                const ehrIdx = findHeaderIndex('ehr');
+                const quotaIdx = findHeaderIndex('quota');
+                const collectedIdx = findHeaderIndex('collected');
+                const serviceIdx = findHeaderIndex('service');
+
                 const rows = Array.from(document.querySelectorAll('table tbody tr'));
                 return rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td'));
                     const link = row.querySelector('a[href*="/admin_panel/practices/"]');
                     if (!link) return null;
 
-                    const id = (link.getAttribute('href') || '').split('/').pop() || '';
+                    const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
+                    const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
+
+                    const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
+                    const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
+                    const id = hrefId || extractedOds;
+
                     return {
                         id,
-                        name: (link.textContent || '').trim().normalize('NFC').replace(/\s+/g, ' '),
-                        cdb: (row.querySelector('td:nth-child(3)')?.textContent || '').trim(),
-                        ehrType: (row.querySelector('td:nth-child(4)')?.textContent || '').trim()
+                        ods: id,
+                        name: normalize(link.textContent).normalize('NFC'),
+                        cdb: fromIdx(cdbIdx),
+                        ehrType: fromIdx(ehrIdx),
+                        collectionQuota: fromIdx(quotaIdx),
+                        collectedToday: fromIdx(collectedIdx),
+                        serviceLevel: fromIdx(serviceIdx)
                     };
-                }).filter(Boolean);
+                }).filter(p => p && p.id);
             }
         });
 
