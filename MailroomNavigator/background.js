@@ -103,18 +103,120 @@ async function setupOffscreen() {
     });
 }
 
+async function scrapePracticeListViaTab() {
+    const url = 'https://app.betterletter.ai/admin_panel/practices';
+    const tab = await chrome.tabs.create({ url, active: false });
+
+    try {
+        await new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }, 30000);
+
+            const listener = (tabId, info) => {
+                if (tabId === tab.id && info.status === 'complete') {
+                    clearTimeout(timeout);
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }
+            };
+
+            chrome.tabs.onUpdated.addListener(listener);
+        });
+
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: async () => {
+                const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+                await delay(2000);
+
+                const headerCells = Array.from(document.querySelectorAll('table thead th'));
+                const headers = headerCells.map((th, idx) => ({
+                    idx,
+                    text: (th.textContent || '').trim().toLowerCase()
+                }));
+
+                const findHeaderIndex = (...keywords) => {
+                    const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
+                    return hit ? hit.idx : -1;
+                };
+
+                const odsIdx = findHeaderIndex('ods');
+                const cdbIdx = findHeaderIndex('cdb');
+                const ehrIdx = findHeaderIndex('ehr');
+                const quotaIdx = findHeaderIndex('quota');
+                const collectedIdx = findHeaderIndex('collected');
+                const serviceIdx = findHeaderIndex('service');
+
+                const rows = Array.from(document.querySelectorAll('table tbody tr'));
+                return rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    const link = row.querySelector('a[href*="/admin_panel/practices/"]');
+                    if (!link) return null;
+
+                    const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
+                    const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
+
+                    const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
+                    const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
+                    const id = hrefId || extractedOds;
+
+                    return {
+                        id,
+                        ods: id,
+                        name: normalize(link.textContent).normalize('NFC'),
+                        cdb: fromIdx(cdbIdx),
+                        ehrType: fromIdx(ehrIdx),
+                        collectionQuota: fromIdx(quotaIdx),
+                        collectedToday: fromIdx(collectedIdx),
+                        serviceLevel: fromIdx(serviceIdx)
+                    };
+                }).filter(p => p && p.id);
+            }
+        });
+
+        return Array.isArray(result) ? result : [];
+    } finally {
+        if (typeof tab?.id === 'number') {
+            await chrome.tabs.remove(tab.id).catch(() => undefined);
+        }
+    }
+}
+
+async function loadCacheFromStorage() {
+    const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
+    if (result.practiceCache && Object.keys(result.practiceCache).length > 0) {
+        practiceCache = result.practiceCache;
+        return result;
+    }
+
+    return result;
+}
+
 async function fetchAndCachePracticeList(purpose = 'background refresh') {
     if (isScrapingActive) return [];
     isScrapingActive = true;
     try {
-        await setupOffscreen();
-        const practicesArray = await chrome.runtime.sendMessage({ 
-            target: 'offscreen', 
-            action: 'scrapePracticeList', 
-            data: { url: 'https://app.betterletter.ai/admin_panel/practices' } 
-        });
+        let practicesArray = [];
+
+        try {
+            await setupOffscreen();
+            practicesArray = await chrome.runtime.sendMessage({
+                target: 'offscreen',
+                action: 'scrapePracticeList',
+                data: { url: 'https://app.betterletter.ai/admin_panel/practices' }
+            });
+        } catch (offscreenErr) {
+            console.warn('[Ghost] Offscreen scrape failed, using tab fallback.', offscreenErr?.message || offscreenErr);
+        }
+
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0 || practicesArray.error) {
+            practicesArray = await scrapePracticeListViaTab();
+        }
 
         if (!practicesArray || practicesArray.error) throw new Error("Scrape failed");
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0) throw new Error('No practices found');
         
         practiceCache = {}; 
         practicesArray.forEach(p => {
@@ -124,6 +226,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
         return practicesArray;
     } catch (e) {
         console.error("[Ghost] Error:", e.message); // cite: Screenshot 2026-01-28 at 14.12.35.png
+        await loadCacheFromStorage();
         return [];
     } finally {
         isScrapingActive = false;
@@ -132,7 +235,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
 
 async function ensureCacheLoaded() {
     if (Object.keys(practiceCache).length > 0) return;
-    const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
+    const result = await loadCacheFromStorage();
     if (result.practiceCache && (Date.now() - result.cacheTimestamp < CACHE_EXPIRY)) {
         practiceCache = result.practiceCache;
     } else {
