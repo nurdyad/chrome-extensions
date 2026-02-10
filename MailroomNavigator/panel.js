@@ -47,16 +47,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     Navigator.cleanDuplicateButtons();
 
     resizeToFitContent();
-
-    // B. Initial Data Load
-    try {
-        const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-        if (response && response.practiceCache) {
-            setCachedPractices(response.practiceCache);
-            Navigator.buildCdbIndex();
-            console.log('Cache loaded:', Object.keys(response.practiceCache).length);
-        }
-    } catch (e) { console.error("Cache load error:", e); }
     
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
@@ -75,6 +65,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         cdbInput.addEventListener('input', Navigator.handleCdbInput);
         cdbInput.addEventListener('focus', Navigator.handleCdbInput);
     }
+
+    document.getElementById('searchCdbBtn')?.addEventListener('click', Navigator.handleCdbInput);
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -184,6 +176,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     showView('practiceNavigatorView');
+
+    // B. Initial Data Load (non-blocking so top navigation responds immediately)
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+        if (response && response.practiceCache) {
+            setCachedPractices(response.practiceCache);
+            Navigator.buildCdbIndex();
+            console.log('Cache loaded:', Object.keys(response.practiceCache).length);
+        }
+    } catch (e) { console.error("Cache load error:", e); }
 });
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
