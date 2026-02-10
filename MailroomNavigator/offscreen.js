@@ -36,6 +36,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               return {
                 id: link.href.split('/').pop(),
                 name: link.textContent.trim().normalize('NFC').replace(/\s+/g, ' '),
+                cdb: (row.querySelector('td:nth-child(3)')?.textContent || '').trim(),
                 ehrType: (row.querySelector('td:nth-child(4)')?.textContent || '').trim()
               };
             }).filter(p => p !== null);
