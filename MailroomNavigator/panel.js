@@ -5,6 +5,35 @@ import * as Navigator from './navigator.js';
 import * as Jobs from './jobs.js';
 import * as Email from './email.js';
 
+let practiceCacheLoadPromise = null;
+
+async function syncPracticeCache({ forceRefresh = false } = {}) {
+    if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
+
+    const hasCache = Object.keys(state.cachedPractices || {}).length > 0;
+    if (hasCache && !forceRefresh) return state.cachedPractices;
+
+    practiceCacheLoadPromise = (async () => {
+        try {
+            if (forceRefresh || !hasCache) {
+                await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+            }
+
+            const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                return response.practiceCache;
+            }
+            return {};
+        } finally {
+            practiceCacheLoadPromise = null;
+        }
+    })();
+
+    return practiceCacheLoadPromise;
+}
+
 // --- 1. Global View Switcher ---
 function showView(viewId) {
     ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView'].forEach(id => {
@@ -47,16 +76,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     Navigator.cleanDuplicateButtons();
 
     resizeToFitContent();
-
-    // B. Initial Data Load
-    try {
-        const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-        if (response && response.practiceCache) {
-            setCachedPractices(response.practiceCache);
-            Navigator.buildCdbIndex();
-            console.log('Cache loaded:', Object.keys(response.practiceCache).length);
-        }
-    } catch (e) { console.error("Cache load error:", e); }
     
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
@@ -66,15 +85,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
     if (pInput) {
-        pInput.addEventListener('input', Navigator.handleNavigatorInput);
-        pInput.addEventListener('focus', Navigator.handleNavigatorInput);
+        pInput.addEventListener('input', async () => {
+            await syncPracticeCache();
+            Navigator.handleNavigatorInput();
+        });
+        pInput.addEventListener('focus', async () => {
+            await syncPracticeCache();
+            Navigator.handleNavigatorInput();
+        });
     }
 
     const cdbInput = document.getElementById('cdbSearchInput');
     if (cdbInput) {
-        cdbInput.addEventListener('input', Navigator.handleCdbInput);
-        cdbInput.addEventListener('focus', Navigator.handleCdbInput);
+        cdbInput.addEventListener('input', async () => {
+            await syncPracticeCache();
+            Navigator.handleCdbInput();
+        });
+        cdbInput.addEventListener('focus', async () => {
+            await syncPracticeCache();
+            Navigator.handleCdbInput();
+        });
     }
+
+    document.getElementById('searchCdbBtn')?.addEventListener('click', async () => {
+        await syncPracticeCache();
+        Navigator.handleCdbInput();
+    });
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -99,12 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         liveRefreshBtn.addEventListener('click', async () => {
             showStatus('Refreshing live data...', 'loading');
             try {
-                await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
-                const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-                if (response && response.practiceCache) {
-                    setCachedPractices(response.practiceCache);
-                    Navigator.buildCdbIndex();
-                }
+                await syncPracticeCache({ forceRefresh: true });
                 if (state.currentSelectedOdsCode) {
                     await Navigator.displayPracticeStatus();
                 }
@@ -184,6 +215,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     showView('practiceNavigatorView');
+
+    // B. Initial Data Load (non-blocking so top navigation responds immediately)
+    try {
+        const cache = await syncPracticeCache();
+        console.log('Cache loaded:', Object.keys(cache || {}).length);
+    } catch (e) { console.error("Cache load error:", e); }
 });
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
@@ -200,12 +237,7 @@ setInterval(async () => {
     isPanelScrapingBusy = true; 
     
     try {
-      await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
-      const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-      if (response && response.practiceCache) {
-        setCachedPractices(response.practiceCache);
-        Navigator.buildCdbIndex();
-      }
+      await syncPracticeCache({ forceRefresh: true });
       // Only refresh the status display if the user isn't busy looking at suggestions
       await Navigator.displayPracticeStatus();
     } catch (e) {
