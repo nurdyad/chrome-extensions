@@ -107,10 +107,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    document.getElementById('searchCdbBtn')?.addEventListener('click', async () => {
+    const handleCdbSearchClick = async () => {
         await syncPracticeCache();
         Navigator.handleCdbInput();
-    });
+    };
+    document.getElementById('searchCdbBtn')?.addEventListener('click', handleCdbSearchClick);
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -219,7 +220,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
     try {
         const cache = await syncPracticeCache();
-        console.log('Cache loaded:', Object.keys(cache || {}).length);
+        const cacheSize = Object.keys(cache || {}).length;
+
+        if (cacheSize === 0) {
+            // Compatibility fallback when background returns cache without scrape refresh
+            const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                console.log('Cache loaded:', Object.keys(response.practiceCache).length);
+                return;
+            }
+        }
+
+        console.log('Cache loaded:', cacheSize);
     } catch (e) { console.error("Cache load error:", e); }
 });
 
