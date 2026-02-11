@@ -103,27 +103,158 @@ async function setupOffscreen() {
     });
 }
 
+async function scrapePracticeListViaTab() {
+    const url = 'https://app.betterletter.ai/admin_panel/practices';
+    const tab = await chrome.tabs.create({ url, active: false });
+
+    try {
+        await new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }, 30000);
+
+            const listener = (tabId, info) => {
+                if (tabId === tab.id && info.status === 'complete') {
+                    clearTimeout(timeout);
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }
+            };
+
+            chrome.tabs.onUpdated.addListener(listener);
+        });
+
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: async () => {
+                const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+                await delay(2000);
+
+                const headerCells = Array.from(document.querySelectorAll('table thead th'));
+                const headers = headerCells.map((th, idx) => ({
+                    idx,
+                    text: (th.textContent || '').trim().toLowerCase()
+                }));
+
+                const findHeaderIndex = (...keywords) => {
+                    const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
+                    return hit ? hit.idx : -1;
+                };
+
+                const fallbackByPosition = {
+                    ods: 1,
+                    cdb: 2,
+                    ehr: 3,
+                    quota: 4,
+                    collected: 5,
+                    service: 6
+                };
+
+                const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
+                const cdbIdx = findHeaderIndex('cdb') >= 0 ? findHeaderIndex('cdb') : fallbackByPosition.cdb;
+                const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
+                const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
+                const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
+                const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
+
+                const rows = Array.from(document.querySelectorAll('table tbody tr'));
+                return rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    const link = row.querySelector('a[href*="/admin_panel/practices/"]');
+                    if (!link) return null;
+
+                    const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
+                    const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
+
+                    const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
+                    const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
+                    const id = hrefId || extractedOds;
+
+                    return {
+                        id,
+                        ods: id,
+                        name: normalize(link.textContent).normalize('NFC'),
+                        cdb: fromIdx(cdbIdx),
+                        ehrType: fromIdx(ehrIdx),
+                        collectionQuota: fromIdx(quotaIdx),
+                        collectedToday: fromIdx(collectedIdx),
+                        serviceLevel: fromIdx(serviceIdx)
+                    };
+                }).filter(p => p && p.id);
+            }
+        });
+
+        return Array.isArray(result) ? result : [];
+    } finally {
+        if (typeof tab?.id === 'number') {
+            await chrome.tabs.remove(tab.id).catch(() => undefined);
+        }
+    }
+}
+
+async function loadCacheFromStorage() {
+    const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
+    if (result.practiceCache && Object.keys(result.practiceCache).length > 0) {
+        practiceCache = result.practiceCache;
+        return result;
+    }
+
+    return result;
+}
+
 async function fetchAndCachePracticeList(purpose = 'background refresh') {
     if (isScrapingActive) return [];
     isScrapingActive = true;
     try {
-        await setupOffscreen();
-        const practicesArray = await chrome.runtime.sendMessage({ 
-            target: 'offscreen', 
-            action: 'scrapePracticeList', 
-            data: { url: 'https://app.betterletter.ai/admin_panel/practices' } 
-        });
+        let practicesArray = [];
+
+        try {
+            await setupOffscreen();
+            practicesArray = await chrome.runtime.sendMessage({
+                target: 'offscreen',
+                action: 'scrapePracticeList',
+                data: { url: 'https://app.betterletter.ai/admin_panel/practices' }
+            });
+        } catch (offscreenErr) {
+            console.warn('[Ghost] Offscreen scrape failed, using tab fallback.', offscreenErr?.message || offscreenErr);
+        }
+
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0 || practicesArray.error) {
+            practicesArray = await scrapePracticeListViaTab();
+        }
 
         if (!practicesArray || practicesArray.error) throw new Error("Scrape failed");
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0) throw new Error('No practices found');
         
-        practiceCache = {}; 
+        const previousCache = practiceCache;
+        const previousByOds = new Map(
+            Object.values(previousCache || {})
+                .filter(practice => practice && practice.ods)
+                .map(practice => [practice.ods, practice])
+        );
+
+        practiceCache = {};
         practicesArray.forEach(p => {
-            practiceCache[`${p.name} (${p.id})`] = { ods: p.id, timestamp: Date.now(), ...p };
+            const previous = previousByOds.get(p.id) || {};
+            const mergedPractice = {
+                ods: p.id,
+                timestamp: Date.now(),
+                ...previous,
+                ...p,
+                cdb: p.cdb || previous.cdb || '',
+                collectionQuota: p.collectionQuota || previous.collectionQuota || '',
+                collectedToday: p.collectedToday || previous.collectedToday || '',
+                serviceLevel: p.serviceLevel || previous.serviceLevel || '',
+                ehrType: p.ehrType || previous.ehrType || ''
+            };
+            practiceCache[`${mergedPractice.name} (${mergedPractice.ods})`] = mergedPractice;
         });
         await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
         return practicesArray;
     } catch (e) {
         console.error("[Ghost] Error:", e.message); // cite: Screenshot 2026-01-28 at 14.12.35.png
+        await loadCacheFromStorage();
         return [];
     } finally {
         isScrapingActive = false;
@@ -132,12 +263,20 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
 
 async function ensureCacheLoaded() {
     if (Object.keys(practiceCache).length > 0) return;
-    const result = await chrome.storage.local.get(['practiceCache', 'cacheTimestamp']);
-    if (result.practiceCache && (Date.now() - result.cacheTimestamp < CACHE_EXPIRY)) {
+
+    const result = await loadCacheFromStorage();
+    if (result.practiceCache && Object.keys(result.practiceCache).length > 0) {
         practiceCache = result.practiceCache;
-    } else {
-        await fetchAndCachePracticeList('initial-load');
+
+        // Do not block UI on cold start if cache is stale; refresh in background.
+        if (!result.cacheTimestamp || (Date.now() - result.cacheTimestamp >= CACHE_EXPIRY)) {
+            fetchAndCachePracticeList('stale-cache-refresh').catch(() => undefined);
+        }
+        return;
     }
+
+    // Truly no cache available, fetch now.
+    await fetchAndCachePracticeList('initial-load');
 }
 
 // --- 4. LISTENERS ---
