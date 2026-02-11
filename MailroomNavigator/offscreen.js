@@ -12,7 +12,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         if (document.body.contains(iframe)) document.body.removeChild(iframe);
-        console.error(`[Ghost Engine] Timeout for ${message.action}`);
         resolve({ error: "Scrape failed: Timeout" });
       }, 30000);
 
@@ -29,16 +28,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Give LiveView 2 seconds to render the table rows
             await new Promise(r => setTimeout(r, 2000));
             
+            const headerCells = Array.from(iframe.contentDocument.querySelectorAll('table thead th'));
+            const headers = headerCells.map((th, idx) => ({
+              idx,
+              text: (th.textContent || '').trim().toLowerCase()
+            }));
+
+            const findHeaderIndex = (...keywords) => {
+              const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
+              return hit ? hit.idx : -1;
+            };
+
+            const fallbackByPosition = {
+              ods: 1,
+              cdb: 2,
+              ehr: 3,
+              quota: 4,
+              collected: 5,
+              service: 6
+            };
+
+            const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
+            const cdbIdx = findHeaderIndex('cdb') >= 0 ? findHeaderIndex('cdb') : fallbackByPosition.cdb;
+            const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
+            const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
+            const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
+            const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
+
             const rows = Array.from(iframe.contentDocument.querySelectorAll('table tbody tr'));
             const data = rows.map(row => {
+              const cells = Array.from(row.querySelectorAll('td'));
               const link = row.querySelector('a[href*="/admin_panel/practices/"]');
               if (!link) return null;
+
+              const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
+              const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
+
+              const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
+              const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
+              const id = hrefId || extractedOds;
+
               return {
-                id: link.href.split('/').pop(),
-                name: link.textContent.trim().normalize('NFC').replace(/\s+/g, ' '),
-                ehrType: (row.querySelector('td:nth-child(4)')?.textContent || '').trim()
+                id,
+                ods: id,
+                name: normalize(link.textContent).normalize('NFC'),
+                cdb: fromIdx(cdbIdx),
+                ehrType: fromIdx(ehrIdx),
+                collectionQuota: fromIdx(quotaIdx),
+                collectedToday: fromIdx(collectedIdx),
+                serviceLevel: fromIdx(serviceIdx)
               };
-            }).filter(p => p !== null);
+            }).filter(p => p && p.id);
 
             document.body.removeChild(iframe);
             resolve(data);
