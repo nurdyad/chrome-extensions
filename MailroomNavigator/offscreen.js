@@ -12,6 +12,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         if (document.body.contains(iframe)) document.body.removeChild(iframe);
+        console.warn(`[Ghost Engine] Timeout for ${message.action}`);
         resolve({ error: "Scrape failed: Timeout" });
       }, 30000);
 
