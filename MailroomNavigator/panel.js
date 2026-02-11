@@ -15,11 +15,17 @@ async function syncPracticeCache({ forceRefresh = false } = {}) {
 
     practiceCacheLoadPromise = (async () => {
         try {
-            if (forceRefresh || !hasCache) {
-                await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+            // Fast path: load currently available cache first (usually from storage/background memory)
+            let response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                if (!forceRefresh) return response.practiceCache;
             }
 
-            const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            // Refresh path: explicit refresh or empty cache fallback
+            await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+            response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
             if (response && response.practiceCache) {
                 setCachedPractices(response.practiceCache);
                 Navigator.buildCdbIndex();

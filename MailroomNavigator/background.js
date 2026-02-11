@@ -142,12 +142,21 @@ async function scrapePracticeListViaTab() {
                     return hit ? hit.idx : -1;
                 };
 
-                const odsIdx = findHeaderIndex('ods');
-                const cdbIdx = findHeaderIndex('cdb');
-                const ehrIdx = findHeaderIndex('ehr');
-                const quotaIdx = findHeaderIndex('quota');
-                const collectedIdx = findHeaderIndex('collected');
-                const serviceIdx = findHeaderIndex('service');
+                const fallbackByPosition = {
+                    ods: 1,
+                    cdb: 2,
+                    ehr: 3,
+                    quota: 4,
+                    collected: 5,
+                    service: 6
+                };
+
+                const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
+                const cdbIdx = findHeaderIndex('cdb') >= 0 ? findHeaderIndex('cdb') : fallbackByPosition.cdb;
+                const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
+                const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
+                const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
+                const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
 
                 const rows = Array.from(document.querySelectorAll('table tbody tr'));
                 return rows.map(row => {
@@ -235,12 +244,20 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
 
 async function ensureCacheLoaded() {
     if (Object.keys(practiceCache).length > 0) return;
+
     const result = await loadCacheFromStorage();
-    if (result.practiceCache && (Date.now() - result.cacheTimestamp < CACHE_EXPIRY)) {
+    if (result.practiceCache && Object.keys(result.practiceCache).length > 0) {
         practiceCache = result.practiceCache;
-    } else {
-        await fetchAndCachePracticeList('initial-load');
+
+        // Do not block UI on cold start if cache is stale; refresh in background.
+        if (!result.cacheTimestamp || (Date.now() - result.cacheTimestamp >= CACHE_EXPIRY)) {
+            fetchAndCachePracticeList('stale-cache-refresh').catch(() => undefined);
+        }
+        return;
     }
+
+    // Truly no cache available, fetch now.
+    await fetchAndCachePracticeList('initial-load');
 }
 
 // --- 4. LISTENERS ---
