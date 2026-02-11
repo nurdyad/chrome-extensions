@@ -85,6 +85,51 @@ function extractNumericId(value) {
     return match ? match[0] : '';
 }
 
+function extractAllNumericIds(value) {
+    const matches = String(value || '').match(/\d+/g) || [];
+    return [...new Set(matches.map(id => id.trim()).filter(Boolean))];
+}
+
+function getDocumentActionUrl(action, id) {
+    if (!id) return '';
+    if (action === 'jobs') return `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`;
+    if (action === 'oban') return `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}&state=available`;
+    if (action === 'log') return `https://app.betterletter.ai/admin_panel/event_log/${id}`;
+    if (action === 'admin') return `https://app.betterletter.ai/admin_panel/letter/${id}`;
+    return '';
+}
+
+function getJobStatusUrl(jobId) {
+    return jobId ? `https://app.betterletter.ai/admin_panel/bots/jobs/${jobId}` : '';
+}
+
+async function openUrlsWithLoading(urls, actionButtons = []) {
+    const cleanUrls = urls.filter(Boolean);
+    if (cleanUrls.length === 0) return;
+
+    actionButtons.forEach(btn => { if (btn) btn.disabled = true; });
+    try {
+        for (const url of cleanUrls) {
+            await chrome.tabs.create({ url });
+            await new Promise(resolve => setTimeout(resolve, 60));
+        }
+    } finally {
+        actionButtons.forEach(btn => { if (btn) btn.disabled = false; });
+    }
+}
+
+function copyUrlsToClipboard(urls, label = 'URLs') {
+    const cleanUrls = urls.filter(Boolean);
+    if (cleanUrls.length === 0) {
+        showToast(`No valid ${label}.`);
+        return;
+    }
+
+    navigator.clipboard.writeText(cleanUrls.join('\n'))
+        .then(() => showToast(`${cleanUrls.length} ${label} copied.`))
+        .catch(() => showToast('Copy failed.'));
+}
+
 function openUrlForId(baseUrl, id, label = 'ID') {
     if (!id) {
         showToast(`No valid ${label}.`);
@@ -241,42 +286,210 @@ document.addEventListener('DOMContentLoaded', async () => {
     // K. JOB PANEL QUICK ACTIONS
     const manualDocIdInput = document.getElementById('manualDocId');
     const jobStatusInput = document.getElementById('jobStatusInput');
+    const bulkIdsInput = document.getElementById('bulkIdsInput');
+    const bulkActionType = document.getElementById('bulkActionType');
 
-    document.getElementById('btnJobs')?.addEventListener('click', () => {
-        const id = extractNumericId(manualDocIdInput?.value);
-        openUrlForId('https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=', id, 'Document ID');
-    });
+    const manualDocValidation = document.getElementById('manualDocValidation');
+    const jobStatusValidation = document.getElementById('jobStatusValidation');
+    const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
-    document.getElementById('btnOban')?.addEventListener('click', () => {
-        const id = extractNumericId(manualDocIdInput?.value);
-        if (!id) {
-            showToast('No valid Document ID.');
-            return;
+    const recentDocIdsChips = document.getElementById('recentDocIdsChips');
+    const recentJobIdsChips = document.getElementById('recentJobIdsChips');
+
+    const btnJobs = document.getElementById('btnJobs');
+    const btnOban = document.getElementById('btnOban');
+    const btnLog = document.getElementById('btnLog');
+    const btnAdmin = document.getElementById('btnAdmin');
+    const openJobStatusBtn = document.getElementById('openJobStatusBtn');
+    const clearJobStatusInputBtn = document.getElementById('clearJobStatusInputBtn');
+
+    const copyJobsUrlBtn = document.getElementById('copyJobsUrlBtn');
+    const copyObanUrlBtn = document.getElementById('copyObanUrlBtn');
+    const copyLogUrlBtn = document.getElementById('copyLogUrlBtn');
+    const copyAdminUrlBtn = document.getElementById('copyAdminUrlBtn');
+    const copyJobStatusUrlBtn = document.getElementById('copyJobStatusUrlBtn');
+
+    const openBulkActionBtn = document.getElementById('openBulkActionBtn');
+    const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
+
+    let recentDocIds = [];
+    let recentJobIds = [];
+
+    const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
+        if (!el) return;
+        el.classList.remove('neutral', 'valid', 'invalid');
+        if (isValid === null) {
+            el.classList.add('neutral');
+            el.textContent = neutralText;
+        } else if (isValid) {
+            el.classList.add('valid');
+            el.textContent = validText;
+        } else {
+            el.classList.add('invalid');
+            el.textContent = invalidText;
         }
-        openTabWithTimeout(`https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}&state=available`);
-    });
+    };
 
-    document.getElementById('btnLog')?.addEventListener('click', () => {
+    const saveRecentIds = async () => {
+        await chrome.storage.local.set({ recentDocIds, recentJobIds });
+    };
+
+    const pushRecentId = async (type, id) => {
+        if (!id) return;
+        if (type === 'doc') {
+            recentDocIds = [id, ...recentDocIds.filter(x => x !== id)].slice(0, 5);
+        } else {
+            recentJobIds = [id, ...recentJobIds.filter(x => x !== id)].slice(0, 5);
+        }
+        await saveRecentIds();
+        renderRecentIdChips();
+    };
+
+    const createChip = (id, type) => {
+        const chip = document.createElement('button');
+        chip.className = 'id-chip';
+        chip.textContent = id;
+        chip.title = type === 'doc' ? 'Open Jobs dashboard for this ID' : 'Open Job status for this ID';
+        chip.addEventListener('click', async () => {
+            if (type === 'doc') {
+                if (manualDocIdInput) manualDocIdInput.value = id;
+                updateDocValidation();
+                await openUrlsWithLoading([getDocumentActionUrl('jobs', id)], [btnJobs]);
+            } else {
+                if (jobStatusInput) jobStatusInput.value = id;
+                updateJobValidation();
+                await openUrlsWithLoading([getJobStatusUrl(id)], [openJobStatusBtn]);
+            }
+        });
+        return chip;
+    };
+
+    const renderRecentIdChips = () => {
+        if (recentDocIdsChips) {
+            recentDocIdsChips.innerHTML = '';
+            recentDocIds.forEach(id => recentDocIdsChips.appendChild(createChip(id, 'doc')));
+        }
+        if (recentJobIdsChips) {
+            recentJobIdsChips.innerHTML = '';
+            recentJobIds.forEach(id => recentJobIdsChips.appendChild(createChip(id, 'job')));
+        }
+    };
+
+    const updateDocValidation = () => {
         const id = extractNumericId(manualDocIdInput?.value);
-        openUrlForId('https://app.betterletter.ai/admin_panel/event_log/', id, 'Document ID');
+        setValidationBadge(
+            manualDocValidation,
+            manualDocIdInput?.value ? Boolean(id) : null,
+            'Enter a numeric Document ID.',
+            `✓ Valid Document ID: ${id}`,
+            '✕ Invalid Document ID.'
+        );
+        return id;
+    };
+
+    const updateJobValidation = () => {
+        const id = extractNumericId(jobStatusInput?.value);
+        setValidationBadge(
+            jobStatusValidation,
+            jobStatusInput?.value ? Boolean(id) : null,
+            'Enter a numeric Job ID.',
+            `✓ Valid Job ID: ${id}`,
+            '✕ Invalid Job ID.'
+        );
+        return id;
+    };
+
+    const updateBulkValidation = () => {
+        const ids = extractAllNumericIds(bulkIdsInput?.value);
+        setValidationBadge(
+            bulkIdsValidation,
+            ids.length > 0 ? true : (bulkIdsInput?.value ? false : null),
+            'No IDs detected yet.',
+            `✓ ${ids.length} IDs ready`,
+            '✕ No valid numeric IDs found.'
+        );
+        return ids;
+    };
+
+    const handleDocAction = async (action, actionButton) => {
+        const id = updateDocValidation();
+        if (!id) return showToast('No valid Document ID.');
+        await pushRecentId('doc', id);
+        await openUrlsWithLoading([getDocumentActionUrl(action, id)], [actionButton]);
+    };
+
+    const handleCopyDocAction = (action) => {
+        const id = updateDocValidation();
+        if (!id) return showToast('No valid Document ID.');
+        copyUrlsToClipboard([getDocumentActionUrl(action, id)], 'URL');
+    };
+
+    const loadRecentIds = async () => {
+        const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
+        recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
+        recentJobIds = Array.isArray(j) ? j.slice(0, 5) : [];
+        renderRecentIdChips();
+    };
+
+    manualDocIdInput?.addEventListener('input', updateDocValidation);
+    jobStatusInput?.addEventListener('input', updateJobValidation);
+    bulkIdsInput?.addEventListener('input', updateBulkValidation);
+
+    btnJobs?.addEventListener('click', () => handleDocAction('jobs', btnJobs));
+    btnOban?.addEventListener('click', () => handleDocAction('oban', btnOban));
+    btnLog?.addEventListener('click', () => handleDocAction('log', btnLog));
+    btnAdmin?.addEventListener('click', () => handleDocAction('admin', btnAdmin));
+
+    copyJobsUrlBtn?.addEventListener('click', () => handleCopyDocAction('jobs'));
+    copyObanUrlBtn?.addEventListener('click', () => handleCopyDocAction('oban'));
+    copyLogUrlBtn?.addEventListener('click', () => handleCopyDocAction('log'));
+    copyAdminUrlBtn?.addEventListener('click', () => handleCopyDocAction('admin'));
+
+    openJobStatusBtn?.addEventListener('click', async () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        await pushRecentId('job', jobId);
+        await openUrlsWithLoading([getJobStatusUrl(jobId)], [openJobStatusBtn]);
     });
 
-    document.getElementById('btnAdmin')?.addEventListener('click', () => {
-        const id = extractNumericId(manualDocIdInput?.value);
-        openUrlForId('https://app.betterletter.ai/admin_panel/letter/', id, 'Document ID');
+    copyJobStatusUrlBtn?.addEventListener('click', () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        copyUrlsToClipboard([getJobStatusUrl(jobId)], 'URL');
     });
 
-    document.getElementById('openJobStatusBtn')?.addEventListener('click', () => {
-        const jobId = extractNumericId(jobStatusInput?.value);
-        openUrlForId('https://app.betterletter.ai/admin_panel/bots/jobs/', jobId, 'Job ID');
-    });
-
-    document.getElementById('clearJobStatusInputBtn')?.addEventListener('click', () => {
+    clearJobStatusInputBtn?.addEventListener('click', () => {
         if (jobStatusInput) {
             jobStatusInput.value = '';
             jobStatusInput.focus();
         }
+        updateJobValidation();
     });
+
+    openBulkActionBtn?.addEventListener('click', async () => {
+        const ids = updateBulkValidation();
+        if (!ids.length) return showToast('No valid IDs found.');
+
+        const action = bulkActionType?.value || 'jobs';
+        const urls = ids.map(id => getDocumentActionUrl(action, id));
+        await Promise.all(ids.map(id => pushRecentId('doc', id)));
+        await openUrlsWithLoading(urls, [openBulkActionBtn]);
+        showToast(`${ids.length} links opened.`);
+    });
+
+    copyBulkActionBtn?.addEventListener('click', () => {
+        const ids = updateBulkValidation();
+        if (!ids.length) return showToast('No valid IDs found.');
+
+        const action = bulkActionType?.value || 'jobs';
+        const urls = ids.map(id => getDocumentActionUrl(action, id));
+        copyUrlsToClipboard(urls, 'URLs');
+    });
+
+    updateDocValidation();
+    updateJobValidation();
+    updateBulkValidation();
+    loadRecentIds();
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
