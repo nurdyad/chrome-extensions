@@ -262,3 +262,74 @@ label {
     padding: 6px;
     }
 }
+
+.validation-badge {
+    margin-top: 6px;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.validation-badge.neutral { background: #eef2f7; color: #5c6b7c; }
+.validation-badge.valid { background: #e8f7ef; color: #1f8f4e; }
+.validation-badge.invalid { background: #fdecec; color: #bd3a3a; }
+
+.copy-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.copy-row.single {
+    grid-template-columns: 1fr;
+}
+
+.btn-ghost {
+    background: #ecf3fb !important;
+    color: #1f5f99 !important;
+    border: 1px solid #c6ddf4 !important;
+}
+
+.bulk-input {
+    min-height: 72px;
+    margin-top: 4px;
+    margin-bottom: 8px;
+}
+
+.bulk-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.bulk-controls select {
+    margin-bottom: 0;
+}
+
+.chips-row {
+    min-height: 28px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.id-chip {
+    border: 1px solid #c9d6e2;
+    background: #fff;
+    color: #34495e;
+    border-radius: 999px;
+    padding: 4px 9px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.id-chip:hover {
+    background: #f0f7ff;
+    border-color: #9dc3e7;
+}

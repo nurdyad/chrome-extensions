@@ -189,6 +189,14 @@
         <div class="input-with-button">
           <input type="text" id="manualDocId" placeholder="Paste or type ID..." autocomplete="off">
         </div>
+        <div id="manualDocValidation" class="validation-badge neutral">Enter a numeric Document ID.</div>
+
+        <div class="copy-row">
+          <button id="copyJobsUrlBtn" class="btn btn-sm btn-ghost">Copy Jobs URL</button>
+          <button id="copyObanUrlBtn" class="btn btn-sm btn-ghost">Copy Oban URL</button>
+          <button id="copyLogUrlBtn" class="btn btn-sm btn-ghost">Copy Log URL</button>
+          <button id="copyAdminUrlBtn" class="btn btn-sm btn-ghost">Copy Admin URL</button>
+        </div>
         
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
             <button id="btnJobs" class="btn btn-sm" style="background: #6c757d;">Jobs</button>
@@ -204,10 +212,39 @@
         <div class="input-with-button">
           <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
         </div>
+        <div id="jobStatusValidation" class="validation-badge neutral">Enter a numeric Job ID.</div>
+        <div class="copy-row single">
+          <button id="copyJobStatusUrlBtn" class="btn btn-sm btn-ghost">Copy Job URL</button>
+        </div>
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
           <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
         </div>
+      </div>
+
+      <div class="section-container">
+        <h3>Bulk ID Actions</h3>
+        <label for="bulkIdsInput">Paste multiple Document IDs (comma/space/new line)</label>
+        <textarea id="bulkIdsInput" class="bulk-input" placeholder="e.g. 12345, 67890"></textarea>
+        <div id="bulkIdsValidation" class="validation-badge neutral">No IDs detected yet.</div>
+        <div class="bulk-controls">
+          <select id="bulkActionType">
+            <option value="jobs">Jobs</option>
+            <option value="oban">Oban</option>
+            <option value="log">Log</option>
+            <option value="admin">Admin</option>
+          </select>
+          <button id="openBulkActionBtn" class="btn btn-sm">Open All</button>
+          <button id="copyBulkActionBtn" class="btn btn-sm">Copy All URLs</button>
+        </div>
+      </div>
+
+      <div class="section-container">
+        <h3>Recent IDs</h3>
+        <label>Recent Document IDs</label>
+        <div id="recentDocIdsChips" class="chips-row"></div>
+        <label style="margin-top: 8px;">Recent Job IDs</label>
+        <div id="recentJobIdsChips" class="chips-row"></div>
       </div>
 
     </div>
