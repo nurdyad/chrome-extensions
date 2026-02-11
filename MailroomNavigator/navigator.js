@@ -181,7 +181,7 @@ export function buildCdbIndex() {
             cdb: p.cdb,
             ods: p.ods,
             name: p.name,
-            label: `${p.cdb} - ${p.name}`
+            label: `${p.name} - ${p.cdb}`
         }));
 }
 
