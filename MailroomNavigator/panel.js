@@ -142,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         liveRefreshBtn.addEventListener('click', async () => {
             showStatus('Refreshing live data...', 'loading');
             try {
-                await syncPracticeCache({ forceRefresh: true });
+                await syncPracticeCache();
                 if (state.currentSelectedOdsCode) {
                     await Navigator.displayPracticeStatus();
                 }
@@ -245,6 +245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
 let isPanelScrapingBusy = false;
+let lastBackgroundRefreshAt = 0;
 
 setInterval(async () => {
   const navView = document.getElementById('practiceNavigatorView');
@@ -254,16 +255,23 @@ setInterval(async () => {
   const isTyping = document.activeElement === document.getElementById('practiceInput');
   
   if (isVisible && !isPanelScrapingBusy && state.currentSelectedOdsCode && !isTyping) {
-    isPanelScrapingBusy = true; 
-    
+    isPanelScrapingBusy = true;
+
     try {
-      await syncPracticeCache({ forceRefresh: true });
-      // Only refresh the status display if the user isn't busy looking at suggestions
+      const now = Date.now();
+      // Force one background refresh at most once per minute to avoid cache churn/timeouts
+      if (now - lastBackgroundRefreshAt > 60000) {
+        await syncPracticeCache({ forceRefresh: true });
+        lastBackgroundRefreshAt = now;
+      } else {
+        await syncPracticeCache();
+      }
+
       await Navigator.displayPracticeStatus();
     } catch (e) {
       console.warn("[Panel] Scan skipped.");
     } finally {
-      setTimeout(() => { isPanelScrapingBusy = false; }, 10000);
+      setTimeout(() => { isPanelScrapingBusy = false; }, 5000);
     }
   }
 }, 5000);

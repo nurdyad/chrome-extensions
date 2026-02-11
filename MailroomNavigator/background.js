@@ -227,9 +227,28 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
         if (!practicesArray || practicesArray.error) throw new Error("Scrape failed");
         if (!Array.isArray(practicesArray) || practicesArray.length === 0) throw new Error('No practices found');
         
-        practiceCache = {}; 
+        const previousCache = practiceCache;
+        const previousByOds = new Map(
+            Object.values(previousCache || {})
+                .filter(practice => practice && practice.ods)
+                .map(practice => [practice.ods, practice])
+        );
+
+        practiceCache = {};
         practicesArray.forEach(p => {
-            practiceCache[`${p.name} (${p.id})`] = { ods: p.id, timestamp: Date.now(), ...p };
+            const previous = previousByOds.get(p.id) || {};
+            const mergedPractice = {
+                ods: p.id,
+                timestamp: Date.now(),
+                ...previous,
+                ...p,
+                cdb: p.cdb || previous.cdb || '',
+                collectionQuota: p.collectionQuota || previous.collectionQuota || '',
+                collectedToday: p.collectedToday || previous.collectedToday || '',
+                serviceLevel: p.serviceLevel || previous.serviceLevel || '',
+                ehrType: p.ehrType || previous.ehrType || ''
+            };
+            practiceCache[`${mergedPractice.name} (${mergedPractice.ods})`] = mergedPractice;
         });
         await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
         return practicesArray;
