@@ -16,7 +16,7 @@ body {
 
 .extension-wrapper {
     display: block;         /* More reliable */
-    width: 460px;           /* Matches window width */
+    width: 100%;
     max-width: 100%;
     min-height: 750px;
     padding: 10px;
