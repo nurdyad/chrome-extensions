@@ -350,10 +350,12 @@ setInterval(async () => {
   }
 }, 5000);
 
+const PANEL_WIDTH = 360;
+
 function resizeToFitContent(extraHeight = 40) {
-  const width = document.documentElement.scrollWidth;
-  const height = document.documentElement.scrollHeight;
-  window.resizeTo(width + 20, height + extraHeight);
+  const contentHeight = document.documentElement.scrollHeight;
+  const targetHeight = Math.max(750, contentHeight + extraHeight);
+  window.resizeTo(PANEL_WIDTH, targetHeight);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
