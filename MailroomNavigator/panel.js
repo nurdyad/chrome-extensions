@@ -125,8 +125,7 @@ function copyUrlsToClipboard(urls, label = 'URLs') {
         return;
     }
 
-    navigator.clipboard.writeText(cleanUrls.join('
-'))
+    navigator.clipboard.writeText(cleanUrls.join('\n'))
         .then(() => showToast(`${cleanUrls.length} ${label} copied.`))
         .catch(() => showToast('Copy failed.'));
 }
