@@ -5,6 +5,54 @@ import * as Navigator from './navigator.js';
 import * as Jobs from './jobs.js';
 import * as Email from './email.js';
 
+let practiceCacheLoadPromise = null;
+let isCdbHydrationTriggered = false;
+
+async function syncPracticeCache({ forceRefresh = false } = {}) {
+    if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
+
+    const hasCache = Object.keys(state.cachedPractices || {}).length > 0;
+    if (hasCache && !forceRefresh) return state.cachedPractices;
+
+    practiceCacheLoadPromise = (async () => {
+        try {
+            // Fast path: load currently available cache first (usually from storage/background memory)
+            let response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                if (!forceRefresh) return response.practiceCache;
+            }
+
+            // Refresh path: explicit refresh or empty cache fallback
+            await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+            response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                return response.practiceCache;
+            }
+            return {};
+        } finally {
+            practiceCacheLoadPromise = null;
+        }
+    })();
+
+    return practiceCacheLoadPromise;
+}
+
+
+async function triggerCdbHydration() {
+    if (isCdbHydrationTriggered) return;
+    isCdbHydrationTriggered = true;
+    try {
+        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: 30 });
+        await syncPracticeCache();
+    } catch (e) {
+        console.warn('[Panel] CDB hydration skipped.');
+    }
+}
+
 // --- 1. Global View Switcher ---
 function showView(viewId) {
     ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView'].forEach(id => {
@@ -30,6 +78,69 @@ function showView(viewId) {
     }
 }
 
+
+function extractNumericId(value) {
+    const raw = (value || '').trim();
+    const match = raw.match(/\d+/);
+    return match ? match[0] : '';
+}
+
+function extractAllNumericIds(value) {
+    const matches = String(value || '').match(/\d+/g) || [];
+    return [...new Set(matches.map(id => id.trim()).filter(Boolean))];
+}
+
+function getDocumentActionUrl(action, id) {
+    if (!id) return '';
+    if (action === 'jobs') return `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`;
+    if (action === 'oban') return `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}&state=available`;
+    if (action === 'log') return `https://app.betterletter.ai/admin_panel/event_log/${id}`;
+    if (action === 'admin') return `https://app.betterletter.ai/admin_panel/letter/${id}`;
+    return '';
+}
+
+function getJobStatusUrl(jobId) {
+    return jobId ? `https://app.betterletter.ai/admin_panel/bots/jobs/${jobId}` : '';
+}
+
+async function openUrlsWithLoading(urls, actionButtons = []) {
+    const cleanUrls = urls.filter(Boolean);
+    if (cleanUrls.length === 0) return;
+
+    actionButtons.forEach(btn => { if (btn) btn.disabled = true; });
+    try {
+        for (const url of cleanUrls) {
+            await chrome.tabs.create({ url });
+            await new Promise(resolve => setTimeout(resolve, 60));
+        }
+    } finally {
+        actionButtons.forEach(btn => { if (btn) btn.disabled = false; });
+    }
+}
+
+function copyUrlsToClipboard(urls, label = 'URLs') {
+    const cleanUrls = urls.filter(Boolean);
+    if (cleanUrls.length === 0) {
+        showToast(`No valid ${label}.`);
+        return;
+    }
+
+    navigator.clipboard.writeText(cleanUrls.join('
+'))
+        .then(() => showToast(`${cleanUrls.length} ${label} copied.`))
+        .catch(() => showToast('Copy failed.'));
+}
+
+function openUrlForId(baseUrl, id, label = 'ID') {
+    if (!id) {
+        showToast(`No valid ${label}.`);
+        return;
+    }
+
+    const url = `${baseUrl}${id}`;
+    openTabWithTimeout(url);
+}
+
 // --- 2. Global Hide Suggestions ---
 function hideSuggestions() {
     setTimeout(() => {
@@ -47,16 +158,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     Navigator.cleanDuplicateButtons();
 
     resizeToFitContent();
-
-    // B. Initial Data Load
-    try {
-        const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-        if (response && response.practiceCache) {
-            setCachedPractices(response.practiceCache);
-            Navigator.buildCdbIndex();
-            console.log('Cache loaded:', Object.keys(response.practiceCache).length);
-        }
-    } catch (e) { console.error("Cache load error:", e); }
     
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
@@ -66,15 +167,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
     if (pInput) {
-        pInput.addEventListener('input', Navigator.handleNavigatorInput);
-        pInput.addEventListener('focus', Navigator.handleNavigatorInput);
+        pInput.addEventListener('input', async () => {
+            await syncPracticeCache();
+            Navigator.handleNavigatorInput();
+        });
+        pInput.addEventListener('focus', async () => {
+            await syncPracticeCache();
+            Navigator.handleNavigatorInput();
+        });
     }
 
     const cdbInput = document.getElementById('cdbSearchInput');
     if (cdbInput) {
-        cdbInput.addEventListener('input', Navigator.handleCdbInput);
-        cdbInput.addEventListener('focus', Navigator.handleCdbInput);
+        cdbInput.addEventListener('input', async () => {
+            await syncPracticeCache();
+            triggerCdbHydration();
+            Navigator.handleCdbInput();
+        });
+        cdbInput.addEventListener('focus', async () => {
+            await syncPracticeCache();
+            triggerCdbHydration();
+            Navigator.handleCdbInput();
+        });
     }
+
+    const handleCdbSearchClick = async () => {
+        await syncPracticeCache();
+        triggerCdbHydration();
+        Navigator.handleCdbInput();
+    };
+    document.getElementById('searchCdbBtn')?.addEventListener('click', handleCdbSearchClick);
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -99,12 +221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         liveRefreshBtn.addEventListener('click', async () => {
             showStatus('Refreshing live data...', 'loading');
             try {
-                await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
-                const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-                if (response && response.practiceCache) {
-                    setCachedPractices(response.practiceCache);
-                    Navigator.buildCdbIndex();
-                }
+                await syncPracticeCache();
                 if (state.currentSelectedOdsCode) {
                     await Navigator.displayPracticeStatus();
                 }
@@ -166,6 +283,215 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById("nameOnlyBtn")?.addEventListener("click", Email.convertEmailsToNamesOnly);
     document.getElementById("copyEmailBtn")?.addEventListener("click", Email.copyEmails);
 
+
+    // K. JOB PANEL QUICK ACTIONS
+    const manualDocIdInput = document.getElementById('manualDocId');
+    const jobStatusInput = document.getElementById('jobStatusInput');
+    const bulkIdsInput = document.getElementById('bulkIdsInput');
+    const bulkActionType = document.getElementById('bulkActionType');
+
+    const manualDocValidation = document.getElementById('manualDocValidation');
+    const jobStatusValidation = document.getElementById('jobStatusValidation');
+    const bulkIdsValidation = document.getElementById('bulkIdsValidation');
+
+    const recentDocIdsChips = document.getElementById('recentDocIdsChips');
+    const recentJobIdsChips = document.getElementById('recentJobIdsChips');
+
+    const btnJobs = document.getElementById('btnJobs');
+    const btnOban = document.getElementById('btnOban');
+    const btnLog = document.getElementById('btnLog');
+    const btnAdmin = document.getElementById('btnAdmin');
+    const openJobStatusBtn = document.getElementById('openJobStatusBtn');
+    const clearJobStatusInputBtn = document.getElementById('clearJobStatusInputBtn');
+
+    const copyJobsUrlBtn = document.getElementById('copyJobsUrlBtn');
+    const copyObanUrlBtn = document.getElementById('copyObanUrlBtn');
+    const copyLogUrlBtn = document.getElementById('copyLogUrlBtn');
+    const copyAdminUrlBtn = document.getElementById('copyAdminUrlBtn');
+    const copyJobStatusUrlBtn = document.getElementById('copyJobStatusUrlBtn');
+
+    const openBulkActionBtn = document.getElementById('openBulkActionBtn');
+    const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
+
+    let recentDocIds = [];
+    let recentJobIds = [];
+
+    const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
+        if (!el) return;
+        el.classList.remove('neutral', 'valid', 'invalid');
+        if (isValid === null) {
+            el.classList.add('neutral');
+            el.textContent = neutralText;
+        } else if (isValid) {
+            el.classList.add('valid');
+            el.textContent = validText;
+        } else {
+            el.classList.add('invalid');
+            el.textContent = invalidText;
+        }
+    };
+
+    const saveRecentIds = async () => {
+        await chrome.storage.local.set({ recentDocIds, recentJobIds });
+    };
+
+    const pushRecentId = async (type, id) => {
+        if (!id) return;
+        if (type === 'doc') {
+            recentDocIds = [id, ...recentDocIds.filter(x => x !== id)].slice(0, 5);
+        } else {
+            recentJobIds = [id, ...recentJobIds.filter(x => x !== id)].slice(0, 5);
+        }
+        await saveRecentIds();
+        renderRecentIdChips();
+    };
+
+    const createChip = (id, type) => {
+        const chip = document.createElement('button');
+        chip.className = 'id-chip';
+        chip.textContent = id;
+        chip.title = type === 'doc' ? 'Open Jobs dashboard for this ID' : 'Open Job status for this ID';
+        chip.addEventListener('click', async () => {
+            if (type === 'doc') {
+                if (manualDocIdInput) manualDocIdInput.value = id;
+                updateDocValidation();
+                await openUrlsWithLoading([getDocumentActionUrl('jobs', id)], [btnJobs]);
+            } else {
+                if (jobStatusInput) jobStatusInput.value = id;
+                updateJobValidation();
+                await openUrlsWithLoading([getJobStatusUrl(id)], [openJobStatusBtn]);
+            }
+        });
+        return chip;
+    };
+
+    const renderRecentIdChips = () => {
+        if (recentDocIdsChips) {
+            recentDocIdsChips.innerHTML = '';
+            recentDocIds.forEach(id => recentDocIdsChips.appendChild(createChip(id, 'doc')));
+        }
+        if (recentJobIdsChips) {
+            recentJobIdsChips.innerHTML = '';
+            recentJobIds.forEach(id => recentJobIdsChips.appendChild(createChip(id, 'job')));
+        }
+    };
+
+    const updateDocValidation = () => {
+        const id = extractNumericId(manualDocIdInput?.value);
+        setValidationBadge(
+            manualDocValidation,
+            manualDocIdInput?.value ? Boolean(id) : null,
+            'Enter a numeric Document ID.',
+            `✓ Valid Document ID: ${id}`,
+            '✕ Invalid Document ID.'
+        );
+        return id;
+    };
+
+    const updateJobValidation = () => {
+        const id = extractNumericId(jobStatusInput?.value);
+        setValidationBadge(
+            jobStatusValidation,
+            jobStatusInput?.value ? Boolean(id) : null,
+            'Enter a numeric Job ID.',
+            `✓ Valid Job ID: ${id}`,
+            '✕ Invalid Job ID.'
+        );
+        return id;
+    };
+
+    const updateBulkValidation = () => {
+        const ids = extractAllNumericIds(bulkIdsInput?.value);
+        setValidationBadge(
+            bulkIdsValidation,
+            ids.length > 0 ? true : (bulkIdsInput?.value ? false : null),
+            'No IDs detected yet.',
+            `✓ ${ids.length} IDs ready`,
+            '✕ No valid numeric IDs found.'
+        );
+        return ids;
+    };
+
+    const handleDocAction = async (action, actionButton) => {
+        const id = updateDocValidation();
+        if (!id) return showToast('No valid Document ID.');
+        await pushRecentId('doc', id);
+        await openUrlsWithLoading([getDocumentActionUrl(action, id)], [actionButton]);
+    };
+
+    const handleCopyDocAction = (action) => {
+        const id = updateDocValidation();
+        if (!id) return showToast('No valid Document ID.');
+        copyUrlsToClipboard([getDocumentActionUrl(action, id)], 'URL');
+    };
+
+    const loadRecentIds = async () => {
+        const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
+        recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
+        recentJobIds = Array.isArray(j) ? j.slice(0, 5) : [];
+        renderRecentIdChips();
+    };
+
+    manualDocIdInput?.addEventListener('input', updateDocValidation);
+    jobStatusInput?.addEventListener('input', updateJobValidation);
+    bulkIdsInput?.addEventListener('input', updateBulkValidation);
+
+    btnJobs?.addEventListener('click', () => handleDocAction('jobs', btnJobs));
+    btnOban?.addEventListener('click', () => handleDocAction('oban', btnOban));
+    btnLog?.addEventListener('click', () => handleDocAction('log', btnLog));
+    btnAdmin?.addEventListener('click', () => handleDocAction('admin', btnAdmin));
+
+    copyJobsUrlBtn?.addEventListener('click', () => handleCopyDocAction('jobs'));
+    copyObanUrlBtn?.addEventListener('click', () => handleCopyDocAction('oban'));
+    copyLogUrlBtn?.addEventListener('click', () => handleCopyDocAction('log'));
+    copyAdminUrlBtn?.addEventListener('click', () => handleCopyDocAction('admin'));
+
+    openJobStatusBtn?.addEventListener('click', async () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        await pushRecentId('job', jobId);
+        await openUrlsWithLoading([getJobStatusUrl(jobId)], [openJobStatusBtn]);
+    });
+
+    copyJobStatusUrlBtn?.addEventListener('click', () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        copyUrlsToClipboard([getJobStatusUrl(jobId)], 'URL');
+    });
+
+    clearJobStatusInputBtn?.addEventListener('click', () => {
+        if (jobStatusInput) {
+            jobStatusInput.value = '';
+            jobStatusInput.focus();
+        }
+        updateJobValidation();
+    });
+
+    openBulkActionBtn?.addEventListener('click', async () => {
+        const ids = updateBulkValidation();
+        if (!ids.length) return showToast('No valid IDs found.');
+
+        const action = bulkActionType?.value || 'jobs';
+        const urls = ids.map(id => getDocumentActionUrl(action, id));
+        await Promise.all(ids.map(id => pushRecentId('doc', id)));
+        await openUrlsWithLoading(urls, [openBulkActionBtn]);
+        showToast(`${ids.length} links opened.`);
+    });
+
+    copyBulkActionBtn?.addEventListener('click', () => {
+        const ids = updateBulkValidation();
+        if (!ids.length) return showToast('No valid IDs found.');
+
+        const action = bulkActionType?.value || 'jobs';
+        const urls = ids.map(id => getDocumentActionUrl(action, id));
+        copyUrlsToClipboard(urls, 'URLs');
+    });
+
+    updateDocValidation();
+    updateJobValidation();
+    updateBulkValidation();
+    loadRecentIds();
+
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
         // List of all inputs that should NOT hide the dropdown when clicked
@@ -184,10 +510,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     showView('practiceNavigatorView');
+
+    // B. Initial Data Load (non-blocking so top navigation responds immediately)
+    try {
+        const cache = await syncPracticeCache();
+        const cacheSize = Object.keys(cache || {}).length;
+
+        if (cacheSize === 0) {
+            // Compatibility fallback when background returns cache without scrape refresh
+            const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            if (response && response.practiceCache) {
+                setCachedPractices(response.practiceCache);
+                Navigator.buildCdbIndex();
+                console.log('Cache loaded:', Object.keys(response.practiceCache).length);
+                return;
+            }
+        }
+
+        console.log('Cache loaded:', cacheSize);
+    } catch (e) { console.error("Cache load error:", e); }
 });
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
 let isPanelScrapingBusy = false;
+let lastBackgroundRefreshAt = 0;
 
 setInterval(async () => {
   const navView = document.getElementById('practiceNavigatorView');
@@ -197,31 +543,31 @@ setInterval(async () => {
   const isTyping = document.activeElement === document.getElementById('practiceInput');
   
   if (isVisible && !isPanelScrapingBusy && state.currentSelectedOdsCode && !isTyping) {
-    isPanelScrapingBusy = true; 
-    
+    isPanelScrapingBusy = true;
+
     try {
-      await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
-      const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-      if (response && response.practiceCache) {
-        setCachedPractices(response.practiceCache);
-        Navigator.buildCdbIndex();
+      const now = Date.now();
+      // Force one background refresh at most once per minute to avoid cache churn/timeouts
+      if (now - lastBackgroundRefreshAt > 60000) {
+        await syncPracticeCache({ forceRefresh: true });
+        lastBackgroundRefreshAt = now;
+      } else {
+        await syncPracticeCache();
       }
-      // Only refresh the status display if the user isn't busy looking at suggestions
+
       await Navigator.displayPracticeStatus();
     } catch (e) {
       console.warn("[Panel] Scan skipped.");
     } finally {
-      setTimeout(() => { isPanelScrapingBusy = false; }, 10000);
+      setTimeout(() => { isPanelScrapingBusy = false; }, 5000);
     }
   }
 }, 5000);
 
-function resizeToFitContent(extraHeight = 40) {
-  const width = document.documentElement.scrollWidth;
-  const height = document.documentElement.scrollHeight;
-  window.resizeTo(width + 20, height + extraHeight);
-}
+const PANEL_WIDTH = 360;
 
-window.addEventListener('DOMContentLoaded', () => {
-  resizeToFitContent(40, 750); // You can tweak the 700px value
-});
+function resizeToFitContent(extraHeight = 40) {
+  const contentHeight = document.documentElement.scrollHeight;
+  const targetHeight = Math.max(750, contentHeight + extraHeight);
+  window.resizeTo(PANEL_WIDTH, targetHeight);
+}
