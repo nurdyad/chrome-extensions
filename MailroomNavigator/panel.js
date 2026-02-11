@@ -78,6 +78,23 @@ function showView(viewId) {
     }
 }
 
+
+function extractNumericId(value) {
+    const raw = (value || '').trim();
+    const match = raw.match(/\d+/);
+    return match ? match[0] : '';
+}
+
+function openUrlForId(baseUrl, id, label = 'ID') {
+    if (!id) {
+        showToast(`No valid ${label}.`);
+        return;
+    }
+
+    const url = `${baseUrl}${id}`;
+    openTabWithTimeout(url);
+}
+
 // --- 2. Global Hide Suggestions ---
 function hideSuggestions() {
     setTimeout(() => {
@@ -219,6 +236,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById("convertEmailBtn")?.addEventListener("click", Email.convertEmails);
     document.getElementById("nameOnlyBtn")?.addEventListener("click", Email.convertEmailsToNamesOnly);
     document.getElementById("copyEmailBtn")?.addEventListener("click", Email.copyEmails);
+
+
+    // K. JOB PANEL QUICK ACTIONS
+    const manualDocIdInput = document.getElementById('manualDocId');
+    const jobStatusInput = document.getElementById('jobStatusInput');
+
+    document.getElementById('btnJobs')?.addEventListener('click', () => {
+        const id = extractNumericId(manualDocIdInput?.value);
+        openUrlForId('https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=', id, 'Document ID');
+    });
+
+    document.getElementById('btnOban')?.addEventListener('click', () => {
+        const id = extractNumericId(manualDocIdInput?.value);
+        if (!id) {
+            showToast('No valid Document ID.');
+            return;
+        }
+        openTabWithTimeout(`https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}&state=available`);
+    });
+
+    document.getElementById('btnLog')?.addEventListener('click', () => {
+        const id = extractNumericId(manualDocIdInput?.value);
+        openUrlForId('https://app.betterletter.ai/admin_panel/event_log/', id, 'Document ID');
+    });
+
+    document.getElementById('btnAdmin')?.addEventListener('click', () => {
+        const id = extractNumericId(manualDocIdInput?.value);
+        openUrlForId('https://app.betterletter.ai/admin_panel/letter/', id, 'Document ID');
+    });
+
+    document.getElementById('openJobStatusBtn')?.addEventListener('click', () => {
+        const jobId = extractNumericId(jobStatusInput?.value);
+        openUrlForId('https://app.betterletter.ai/admin_panel/bots/jobs/', jobId, 'Job ID');
+    });
+
+    document.getElementById('clearJobStatusInputBtn')?.addEventListener('click', () => {
+        if (jobStatusInput) {
+            jobStatusInput.value = '';
+            jobStatusInput.focus();
+        }
+    });
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
