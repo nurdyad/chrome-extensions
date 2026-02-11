@@ -26,6 +26,25 @@ export function normalizePracticeSelection(input) {
     const p = state.cachedPractices[input];
     return { name: p.name, ods: p.ods, display: input };
   }
+
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    const fromKey = state.cachedPractices[trimmed];
+    if (fromKey) {
+      return { name: fromKey.name, ods: fromKey.ods, display: trimmed };
+    }
+
+    const byName = Object.values(state.cachedPractices).find(practice =>
+      practice?.name?.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (byName) {
+      return {
+        name: byName.name,
+        ods: byName.ods,
+        display: `${byName.name} (${byName.ods})`
+      };
+    }
+  }
   if (typeof input === 'string' && /^[A-Z]\d{5}$/.test(input.trim())) {
     return { name: '', ods: input.trim(), display: input.trim() };
   }
@@ -162,7 +181,7 @@ export function buildCdbIndex() {
             cdb: p.cdb,
             ods: p.ods,
             name: p.name,
-            label: `${p.cdb} - ${p.name}`
+            label: `${p.name} - ${p.cdb}`
         }));
 }
 
@@ -178,7 +197,7 @@ export function handleCdbInput() {
     // Show top 15 if empty, otherwise filter by typing
     let matches = !query 
         ? allCdbItems.slice(0, 30) // Increased to show more initial options
-        : allCdbItems.filter(item => item.cdb.includes(query)).slice(0, 15);
+        : allCdbItems.filter(item => item.cdb.toLowerCase().includes(query)).slice(0, 15);
 
     if (matches.length === 0) {
         listEl.innerHTML = '';
@@ -201,12 +220,9 @@ export function handleCdbInput() {
         li.addEventListener('mousedown', (e) => {
             e.stopPropagation(); // Stops the global listener from seeing this click
             e.preventDefault(); // This stops the "blur" event from hiding the list
-            const practiceObj = state.cachedPractices[`${item.name} (${item.ods})`];
-            if (practiceObj) {
-                setSelectedPractice(practiceObj);
-                inputEl.value = item.cdb;
-                listEl.style.display = 'none';
-            }
+            setSelectedPractice({ name: item.name, ods: item.ods });
+            inputEl.value = item.cdb;
+            listEl.style.display = 'none';
         });
         listEl.appendChild(li);
     });
