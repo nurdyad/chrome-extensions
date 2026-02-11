@@ -40,12 +40,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               return hit ? hit.idx : -1;
             };
 
-            const odsIdx = findHeaderIndex('ods');
-            const cdbIdx = findHeaderIndex('cdb');
-            const ehrIdx = findHeaderIndex('ehr');
-            const quotaIdx = findHeaderIndex('quota');
-            const collectedIdx = findHeaderIndex('collected');
-            const serviceIdx = findHeaderIndex('service');
+            const fallbackByPosition = {
+              ods: 1,
+              cdb: 2,
+              ehr: 3,
+              quota: 4,
+              collected: 5,
+              service: 6
+            };
+
+            const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
+            const cdbIdx = findHeaderIndex('cdb') >= 0 ? findHeaderIndex('cdb') : fallbackByPosition.cdb;
+            const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
+            const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
+            const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
+            const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
 
             const rows = Array.from(iframe.contentDocument.querySelectorAll('table tbody tr'));
             const data = rows.map(row => {
