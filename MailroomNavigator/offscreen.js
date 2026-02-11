@@ -42,7 +42,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             const fallbackByPosition = {
               ods: 1,
-              cdb: 2,
               ehr: 3,
               quota: 4,
               collected: 5,
@@ -50,7 +49,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             };
 
             const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
-            const cdbIdx = findHeaderIndex('cdb') >= 0 ? findHeaderIndex('cdb') : fallbackByPosition.cdb;
+            const cdbIdx = findHeaderIndex('cdb');
             const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
             const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
             const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;

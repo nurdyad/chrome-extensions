@@ -6,6 +6,7 @@ import * as Jobs from './jobs.js';
 import * as Email from './email.js';
 
 let practiceCacheLoadPromise = null;
+let isCdbHydrationTriggered = false;
 
 async function syncPracticeCache({ forceRefresh = false } = {}) {
     if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
@@ -38,6 +39,18 @@ async function syncPracticeCache({ forceRefresh = false } = {}) {
     })();
 
     return practiceCacheLoadPromise;
+}
+
+
+async function triggerCdbHydration() {
+    if (isCdbHydrationTriggered) return;
+    isCdbHydrationTriggered = true;
+    try {
+        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: 30 });
+        await syncPracticeCache();
+    } catch (e) {
+        console.warn('[Panel] CDB hydration skipped.');
+    }
 }
 
 // --- 1. Global View Switcher ---
@@ -105,16 +118,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (cdbInput) {
         cdbInput.addEventListener('input', async () => {
             await syncPracticeCache();
+            triggerCdbHydration();
             Navigator.handleCdbInput();
         });
         cdbInput.addEventListener('focus', async () => {
             await syncPracticeCache();
+            triggerCdbHydration();
             Navigator.handleCdbInput();
         });
     }
 
     const handleCdbSearchClick = async () => {
         await syncPracticeCache();
+        triggerCdbHydration();
         Navigator.handleCdbInput();
     };
     document.getElementById('searchCdbBtn')?.addEventListener('click', handleCdbSearchClick);
