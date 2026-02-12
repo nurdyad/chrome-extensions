@@ -312,6 +312,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const openBulkActionBtn = document.getElementById('openBulkActionBtn');
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
 
+    const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
+    const runAddWorkflowGroupsToolBtn = document.getElementById('runAddWorkflowGroupsToolBtn');
+    const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
+
     let recentDocIds = [];
     let recentJobIds = [];
 
@@ -424,6 +428,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         copyUrlsToClipboard([getDocumentActionUrl(action, id)], 'URL');
     };
 
+    const getBestBetterLetterTab = async () => {
+        const betterLetterTabs = await chrome.tabs.query({ url: 'https://app.betterletter.ai/*' });
+        if (!betterLetterTabs.length) return null;
+
+        const windows = await chrome.windows.getAll();
+        const windowById = new Map(windows.map(win => [win.id, win]));
+
+        const scoreTab = (tab) => {
+            const win = windowById.get(tab.windowId);
+            const isNormalWindow = win?.type === 'normal';
+            const isFocusedWindow = Boolean(win?.focused);
+
+            let score = 0;
+            if (isNormalWindow) score += 100;
+            if (isFocusedWindow) score += 50;
+            if (tab.active) score += 25;
+
+            const lastAccessed = Number(tab.lastAccessed || 0);
+            if (lastAccessed > 0) {
+                const ageMs = Math.max(0, Date.now() - lastAccessed);
+                // 0-20 recency boost (most recently used tabs get higher score).
+                score += Math.max(0, 20 - Math.floor(ageMs / 60000));
+            }
+
+            return score;
+        };
+
+        return betterLetterTabs
+            .slice()
+            .sort((a, b) => scoreTab(b) - scoreTab(a))[0] || null;
+    };
+
+    const runBookmarkletTool = async (toolName) => {
+        try {
+            const tab = await getBestBetterLetterTab();
+            if (!tab?.id) {
+                showToast('Open a BetterLetter tab first.');
+                return;
+            }
+
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['bookmarklet_tools.js']
+            });
+
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: (name) => {
+                    if (!window.mailroomBookmarkletTools) {
+                        alert('Bookmarklet tools failed to load.');
+                        return;
+                    }
+                    window.mailroomBookmarkletTools.run(name);
+                },
+                args: [toolName]
+            });
+
+            showToast('Tool executed.');
+        } catch (err) {
+            console.error('Bookmarklet tool failed:', err);
+            showToast('Tool failed to run.');
+        }
+    };
+
     const loadRecentIds = async () => {
         const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
         recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
@@ -485,6 +553,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const urls = ids.map(id => getDocumentActionUrl(action, id));
         copyUrlsToClipboard(urls, 'URLs');
     });
+
+    runUuidPickerToolBtn?.addEventListener('click', () => runBookmarkletTool('uuidPicker'));
+    runAddWorkflowGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('addWorkflowGroups'));
+    runListDocmanGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('listDocmanGroups'));
 
     updateDocValidation();
     updateJobValidation();
