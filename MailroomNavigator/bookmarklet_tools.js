@@ -12,16 +12,18 @@
 
     const getRowData = (uuid) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+      const normalizedUuid = String(uuid || '').toLowerCase();
       let node;
       while ((node = walker.nextNode())) {
-        if (node.textContent.includes(uuid)) {
+        const textContent = String(node.textContent || '');
+        if (textContent.toLowerCase().includes(normalizedUuid)) {
           const parentRow = node.parentElement?.closest('tr');
           let dateStr = 'N/A';
           if (parentRow) {
             const cells = parentRow.querySelectorAll('td');
             if (cells.length >= 8) dateStr = cells[7].textContent.trim();
           }
-          return { raw: node.textContent.trim(), date: dateStr };
+          return { raw: textContent.trim(), date: dateStr };
         }
       }
       return { raw: uuid, date: 'N/A' };
