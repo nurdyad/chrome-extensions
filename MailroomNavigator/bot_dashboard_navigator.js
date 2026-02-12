@@ -8,6 +8,11 @@
     let activeMetaElement = null;
     let isMouseInDocPanel = false;
     let isMouseInMetaPanel = false;
+    let metaHideTimer = null;
+    let metaReanchorTimer = null;
+
+    const META_CLOSE_DELAY_MS = 120;
+    const META_REANCHOR_DELAY_MS = 90;
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -218,6 +223,9 @@
     function showMetaPanel(el, actions = []) {
         if (!actions.length) return;
 
+        clearTimeout(metaHideTimer);
+        clearTimeout(metaReanchorTimer);
+
         activeMetaElement = el;
         createFloatingMetaPanel();
         floatingMetaPanel.innerHTML = '';
@@ -229,17 +237,51 @@
         floatingMetaPanel.style.display = 'flex';
     }
 
+    function isPointerInsideMetaRegion() {
+        if (!activeMetaElement) return false;
+
+        const hoverEl = document.querySelectorAll(':hover');
+        return Array.from(hoverEl).some(node =>
+            node === activeMetaElement ||
+            node === floatingMetaPanel ||
+            activeMetaElement.contains?.(node) ||
+            floatingMetaPanel?.contains?.(node)
+        );
+    }
+
     function hideMetaPanel() {
-        setTimeout(() => {
+        clearTimeout(metaHideTimer);
+        metaHideTimer = setTimeout(() => {
             if (!isMouseInMetaPanel && activeMetaElement) {
-                const hoverEl = document.querySelectorAll(':hover');
-                const isStillHovering = Array.from(hoverEl).some(node => node === activeMetaElement || node === floatingMetaPanel);
-                if (!isStillHovering) {
+                if (!isPointerInsideMetaRegion()) {
                     if (floatingMetaPanel) floatingMetaPanel.style.display = 'none';
                     activeMetaElement = null;
                 }
             }
-        }, 250);
+        }, META_CLOSE_DELAY_MS);
+    }
+
+    function scheduleMetaPanelForCell(cell, builder, label) {
+        clearTimeout(metaReanchorTimer);
+
+        if (activeMetaElement === cell) {
+            const rowData = getRowDataFromElement(cell);
+            if (!rowData) return;
+            showMetaPanel(cell, builder(rowData, label));
+            return;
+        }
+
+        metaReanchorTimer = setTimeout(() => {
+            if (isMouseInMetaPanel) return;
+            const hoverEl = document.querySelectorAll(':hover');
+            const isStillHoveringCell = Array.from(hoverEl).some(node => node === cell || cell.contains(node));
+            if (!isStillHoveringCell) return;
+
+            const rowData = getRowDataFromElement(cell);
+            if (!rowData) return;
+
+            showMetaPanel(cell, builder(rowData, label));
+        }, META_REANCHOR_DELAY_MS);
     }
 
     function makeCopyAction(value, label) {
@@ -300,10 +342,7 @@
                 cell.dataset.blMetaAction = 'true';
                 cell.style.borderBottom = '1px dotted #6c757d';
                 cell.addEventListener('mouseenter', () => {
-                    const rowData = getRowDataFromElement(cell);
-                    if (!rowData) return;
-                    const actions = builder(rowData, label);
-                    showMetaPanel(cell, actions);
+                    scheduleMetaPanelForCell(cell, builder, label);
                 });
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
