@@ -240,11 +240,30 @@
       </div>
 
       <div class="section-container">
+        <h3>Bulk Workflow Groups</h3>
+        <label for="workflowNamesInput">Paste workflow names (one per line, or paste Airtable rows)</label>
+        <textarea id="workflowNamesInput" class="bulk-input" placeholder="e.g.
+Springwell Practice
+Riverside Surgery"></textarea>
+        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
+          <label style="margin: 0;"><input type="checkbox" id="workflowSkipDuplicates" checked> Skip existing workflow names</label>
+          <label style="margin: 0;"><input type="checkbox" id="workflowTitleCase"> Convert names to Title Case</label>
+        </div>
+        <div id="workflowStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Ready.</div>
+        <div id="workflowProgressTrack" style="width:100%; height:8px; background:#e5e7eb; border-radius:6px; overflow:hidden; margin-top:8px; display:none;">
+          <div id="workflowProgressBar" style="height:100%; width:0%; background:#16a34a; transition: width 0.2s;"></div>
+        </div>
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="runWorkflowBulkBtn" class="btn btn-sm">Run Bulk Create</button>
+          <button id="testWorkflowParseBtn" class="btn btn-sm">Test Parse</button>
+        </div>
+      </div>
+
+      <div class="section-container">
         <h3>Bookmarklet Tools</h3>
         <label>Run on the active BetterLetter tab</label>
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr; gap: 8px;">
           <button id="runUuidPickerToolBtn" class="btn btn-sm">UUID Picker</button>
-          <button id="runAddWorkflowGroupsToolBtn" class="btn btn-sm">Add Workflow Groups (Bulk)</button>
           <button id="runListDocmanGroupsToolBtn" class="btn btn-sm">Get Docman Group Names</button>
         </div>
       </div>
