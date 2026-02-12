@@ -14,6 +14,7 @@
 
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
+    const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -45,8 +46,8 @@
     function createButton({ label, color, title, onClick, icon }) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.title = title || label;
-        btn.innerHTML = icon || label;
+        btn.title = title || label || '';
+        btn.innerHTML = icon || label || '';
         Object.assign(btn.style, {
             background: color,
             color: '#fff',
@@ -109,25 +110,39 @@
             }
         });
 
-        const copyBtn = createButton({
+        const copyFilterBtn = createButton({
             color: '#f0f0f0',
             title: 'Copy as document_id = ...',
-            icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+            icon: COPY_ICON_SVG,
             onClick: (btn) => {
                 const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
                 if (!docId) return;
                 copyToClipboard(`document_id = ${docId}`, () => flashButton(btn));
             }
         });
-        copyBtn.style.color = '#333';
-        copyBtn.style.border = '1px solid #ccc';
+        copyFilterBtn.style.color = '#333';
+        copyFilterBtn.style.border = '1px solid #ccc';
+
+        const copyIdBtn = createButton({
+            color: '#f0f0f0',
+            title: 'Copy document ID',
+            icon: `${COPY_ICON_SVG}<span>ID</span>`,
+            onClick: (btn) => {
+                const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
+                if (!docId) return;
+                copyToClipboard(docId, () => flashButton(btn));
+            }
+        });
+        copyIdBtn.style.color = '#333';
+        copyIdBtn.style.border = '1px solid #ccc';
 
         floatingNavPanel.append(
             createNavBtn('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`),
             createNavBtn('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`),
             createNavBtn('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`),
             createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`),
-            copyBtn
+            copyFilterBtn,
+            copyIdBtn
         );
 
         document.body.appendChild(floatingNavPanel);
@@ -253,6 +268,63 @@
         };
     }
 
+    function getAnchorElementFromPointerEvent(cell, event) {
+        if (!(cell instanceof Element)) return null;
+
+        if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+            const pointed = document.elementFromPoint(event.clientX, event.clientY);
+            if (pointed instanceof Element && cell.contains(pointed)) {
+                const interactive = pointed.closest('a, button, [role="button"]');
+                if (interactive && cell.contains(interactive)) return interactive;
+                return pointed;
+            }
+        }
+
+        const hovered = Array.from(cell.querySelectorAll(':hover')).pop();
+        if (hovered instanceof Element) {
+            const interactive = hovered.closest('a, button, [role="button"]');
+            if (interactive && cell.contains(interactive)) return interactive;
+            return hovered;
+        }
+
+        return cell;
+    }
+
+
+    function positionMetaPanel(panel, cell, anchorRect) {
+        const viewportPadding = 8;
+        const cellRect = cell.getBoundingClientRect();
+        let left = anchorRect.left + window.scrollX;
+        let top = anchorRect.bottom + window.scrollY + 2;
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+        panel.style.display = 'flex';
+        panel.style.visibility = 'hidden';
+
+        const panelRect = panel.getBoundingClientRect();
+        const minLeft = cellRect.left + window.scrollX;
+        const maxLeft = cellRect.right + window.scrollX - panelRect.width;
+
+        if (panelRect.width <= cellRect.width && maxLeft >= minLeft) {
+            left = Math.min(Math.max(left, minLeft), maxLeft);
+        } else {
+            const viewportMinLeft = window.scrollX + viewportPadding;
+            const viewportMaxLeft = window.scrollX + window.innerWidth - panelRect.width - viewportPadding;
+            left = Math.min(Math.max(left, viewportMinLeft), viewportMaxLeft);
+        }
+
+        const viewportBottom = window.scrollY + window.innerHeight - viewportPadding;
+        if (top + panelRect.height > viewportBottom) {
+            const aboveTop = anchorRect.top + window.scrollY - panelRect.height - 2;
+            top = Math.max(window.scrollY + viewportPadding, aboveTop);
+        }
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+        panel.style.visibility = 'visible';
+    }
+
     function showMetaPanel(el, actions = [], anchorElement = null) {
         if (!actions.length) return;
 
@@ -263,12 +335,29 @@
         activeMetaAnchorElement = anchorElement;
         createFloatingMetaPanel();
         floatingMetaPanel.innerHTML = '';
-        actions.forEach(action => floatingMetaPanel.appendChild(action));
+
+        const appendedActionLabels = new Set();
+        actions.forEach(action => {
+            const dedupeKey = `${action?.title || ''}|${action?.textContent || ''}`;
+            if (appendedActionLabels.has(dedupeKey)) return;
+            appendedActionLabels.add(dedupeKey);
+            floatingMetaPanel.appendChild(action);
+        });
 
         const anchorRect = getMetaAnchorRect(el, anchorElement || activeMetaAnchorElement);
-        floatingMetaPanel.style.left = `${anchorRect.left + window.scrollX}px`;
-        floatingMetaPanel.style.top = `${anchorRect.bottom + window.scrollY + 2}px`;
-        floatingMetaPanel.style.display = 'flex';
+        positionMetaPanel(floatingMetaPanel, el, anchorRect);
+    }
+
+    function isPointerInsideMetaRegion() {
+        if (!activeMetaElement) return false;
+
+        const hoverEl = document.querySelectorAll(':hover');
+        return Array.from(hoverEl).some(node =>
+            node === activeMetaElement ||
+            node === floatingMetaPanel ||
+            activeMetaElement.contains?.(node) ||
+            floatingMetaPanel?.contains?.(node)
+        );
     }
 
     function isPointerInsideMetaRegion() {
@@ -319,11 +408,16 @@
         }, META_REANCHOR_DELAY_MS);
     }
 
-    function makeCopyAction(value, label) {
+    function makeCopyAction(value, options) {
+        const config = typeof options === 'string'
+            ? { label: `Copy ${options}`, title: `Copy ${options}` }
+            : options;
+
         return createButton({
-            label: `Copy ${label}`,
-            color: '#495057',
-            title: `Copy ${label}`,
+            label: config.label,
+            icon: config.icon,
+            color: config.color || '#495057',
+            title: config.title || config.label || 'Copy',
             onClick: (btn) => {
                 if (!value) return;
                 copyToClipboard(value, () => flashButton(btn));
@@ -377,17 +471,27 @@
                 cell.dataset.blMetaAction = 'true';
                 cell.style.borderBottom = '1px dotted #6c757d';
                 cell.addEventListener('mouseenter', (event) => {
-                    const anchorElement = event.target instanceof Element ? event.target : cell;
+                    const anchorElement = getAnchorElementFromPointerEvent(cell, event);
                     scheduleMetaPanelForCell(cell, builder, label, anchorElement);
                 });
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
 
-            bindCell('jobType', (rowData) => [makeCopyAction(rowData.jobType, 'job type')]);
+            bindCell('jobType', (rowData) => [makeCopyAction(rowData.jobType, { title: 'Copy job type', icon: COPY_ICON_SVG })]);
             bindCell('practice', (rowData) => {
                 const actions = [];
-                if (rowData.practiceName) actions.push(makeCopyAction(rowData.practiceName, 'practice name'));
-                if (rowData.odsCode) actions.push(makeCopyAction(rowData.odsCode, 'ODS code'));
+                if (rowData.practiceName) {
+                    actions.push(makeCopyAction(rowData.practiceName, {
+                        title: 'Copy practice name',
+                        icon: `${COPY_ICON_SVG}<span>Practice</span>`
+                    }));
+                }
+                if (rowData.odsCode) {
+                    actions.push(makeCopyAction(rowData.odsCode, {
+                        title: 'Copy ODS code',
+                        icon: `${COPY_ICON_SVG}<span>ODS</span>`
+                    }));
+                }
                 if (rowData.odsCode) actions.push(makePracticeEhrAction(rowData.odsCode));
                 return actions;
             });
