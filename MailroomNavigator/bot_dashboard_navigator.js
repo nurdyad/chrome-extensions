@@ -6,8 +6,14 @@
     let floatingMetaPanel = null;
     let activeDocIdElement = null;
     let activeMetaElement = null;
+    let activeMetaAnchorElement = null;
     let isMouseInDocPanel = false;
     let isMouseInMetaPanel = false;
+    let metaHideTimer = null;
+    let metaReanchorTimer = null;
+
+    const META_CLOSE_DELAY_MS = 120;
+    const META_REANCHOR_DELAY_MS = 90;
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -52,7 +58,9 @@
             fontWeight: 'bold',
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '4px'
+            gap: '4px',
+            whiteSpace: 'nowrap',
+            lineHeight: '1.2'
         });
 
         btn.onclick = (e) => {
@@ -82,7 +90,10 @@
             borderRadius: '4px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
             fontFamily: 'system-ui, -apple-system, sans-serif',
-            pointerEvents: 'auto'
+            pointerEvents: 'auto',
+            flexWrap: 'nowrap',
+            alignItems: 'center',
+            whiteSpace: 'nowrap'
         });
 
         floatingNavPanel.addEventListener('mouseenter', () => { isMouseInDocPanel = true; });
@@ -141,7 +152,10 @@
             borderRadius: '4px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
             fontFamily: 'system-ui, -apple-system, sans-serif',
-            pointerEvents: 'auto'
+            pointerEvents: 'auto',
+            flexWrap: 'nowrap',
+            alignItems: 'center',
+            whiteSpace: 'nowrap'
         });
 
         floatingMetaPanel.addEventListener('mouseenter', () => { isMouseInMetaPanel = true; });
@@ -180,12 +194,14 @@
 
         const practiceCellText = getText('practice');
         const odsCode = practiceCellText.match(/\b[A-Z]\d{5}\b/)?.[0] || '';
+        const practiceName = collapseText(practiceCellText.replace(odsCode, '')) || practiceCellText;
 
         return {
             row,
             document: getText('document'),
             jobType: getText('jobType'),
             practice: practiceCellText,
+            practiceName,
             jobId: getText('jobId'),
             added: getText('added'),
             status: getText('status'),
@@ -215,31 +231,121 @@
         }, 250);
     }
 
-    function showMetaPanel(el, actions = []) {
+    function getMetaAnchorRect(cell, anchorElement) {
+        if (anchorElement && anchorElement instanceof Element && cell.contains(anchorElement)) {
+            const interactiveAnchor = anchorElement.closest('a, button, [role="button"]');
+            if (interactiveAnchor && cell.contains(interactiveAnchor)) {
+                return interactiveAnchor.getBoundingClientRect();
+            }
+            return anchorElement.getBoundingClientRect();
+        }
+
+        const firstVisibleChild = Array.from(cell.children).find(child => {
+            const childRect = child.getBoundingClientRect();
+            return childRect.width > 0 && childRect.height > 0;
+        });
+        if (firstVisibleChild) return firstVisibleChild.getBoundingClientRect();
+
+        const cellRect = cell.getBoundingClientRect();
+        return {
+            left: cellRect.left,
+            bottom: cellRect.top + Math.min(cellRect.height, 26)
+        };
+    }
+
+    function getAnchorElementFromPointerEvent(cell, event) {
+        if (!(cell instanceof Element)) return null;
+
+        if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+            const pointed = document.elementFromPoint(event.clientX, event.clientY);
+            if (pointed instanceof Element && cell.contains(pointed)) {
+                const interactive = pointed.closest('a, button, [role="button"]');
+                if (interactive && cell.contains(interactive)) return interactive;
+                return pointed;
+            }
+        }
+
+        const hovered = Array.from(cell.querySelectorAll(':hover')).pop();
+        if (hovered instanceof Element) {
+            const interactive = hovered.closest('a, button, [role="button"]');
+            if (interactive && cell.contains(interactive)) return interactive;
+            return hovered;
+        }
+
+        return cell;
+    }
+
+    function showMetaPanel(el, actions = [], anchorElement = null) {
         if (!actions.length) return;
 
+        clearTimeout(metaHideTimer);
+        clearTimeout(metaReanchorTimer);
+
         activeMetaElement = el;
+        activeMetaAnchorElement = anchorElement;
         createFloatingMetaPanel();
         floatingMetaPanel.innerHTML = '';
-        actions.forEach(action => floatingMetaPanel.appendChild(action));
 
-        const rect = el.getBoundingClientRect();
-        floatingMetaPanel.style.left = `${rect.left + window.scrollX}px`;
-        floatingMetaPanel.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        const appendedActionLabels = new Set();
+        actions.forEach(action => {
+            const dedupeKey = `${action?.title || ''}|${action?.textContent || ''}`;
+            if (appendedActionLabels.has(dedupeKey)) return;
+            appendedActionLabels.add(dedupeKey);
+            floatingMetaPanel.appendChild(action);
+        });
+
+        const anchorRect = getMetaAnchorRect(el, anchorElement || activeMetaAnchorElement);
+        floatingMetaPanel.style.left = `${anchorRect.left + window.scrollX}px`;
+        floatingMetaPanel.style.top = `${anchorRect.bottom + window.scrollY + 2}px`;
         floatingMetaPanel.style.display = 'flex';
     }
 
+    function isPointerInsideMetaRegion() {
+        if (!activeMetaElement) return false;
+
+        const hoverEl = document.querySelectorAll(':hover');
+        return Array.from(hoverEl).some(node =>
+            node === activeMetaElement ||
+            node === floatingMetaPanel ||
+            activeMetaElement.contains?.(node) ||
+            floatingMetaPanel?.contains?.(node)
+        );
+    }
+
     function hideMetaPanel() {
-        setTimeout(() => {
+        clearTimeout(metaHideTimer);
+        metaHideTimer = setTimeout(() => {
             if (!isMouseInMetaPanel && activeMetaElement) {
-                const hoverEl = document.querySelectorAll(':hover');
-                const isStillHovering = Array.from(hoverEl).some(node => node === activeMetaElement || node === floatingMetaPanel);
-                if (!isStillHovering) {
+                if (!isPointerInsideMetaRegion()) {
                     if (floatingMetaPanel) floatingMetaPanel.style.display = 'none';
                     activeMetaElement = null;
+                    activeMetaAnchorElement = null;
                 }
             }
-        }, 250);
+        }, META_CLOSE_DELAY_MS);
+    }
+
+    function scheduleMetaPanelForCell(cell, builder, label, anchorElement) {
+        clearTimeout(metaReanchorTimer);
+
+        if (activeMetaElement === cell) {
+            const rowData = getRowDataFromElement(cell);
+            if (!rowData) return;
+            showMetaPanel(cell, builder(rowData, label), anchorElement);
+            return;
+        }
+
+        metaReanchorTimer = setTimeout(() => {
+            if (isMouseInMetaPanel) return;
+            const hoverEl = document.querySelectorAll(':hover');
+            const isStillHoveringCell = Array.from(hoverEl).some(node => node === cell || cell.contains(node));
+            if (!isStillHoveringCell) return;
+
+            const rowData = getRowDataFromElement(cell);
+            if (!rowData) return;
+
+            showMetaPanel(cell, builder(rowData, label), anchorElement);
+        }, META_REANCHOR_DELAY_MS);
     }
 
     function makeCopyAction(value, label) {
@@ -299,18 +405,18 @@
 
                 cell.dataset.blMetaAction = 'true';
                 cell.style.borderBottom = '1px dotted #6c757d';
-                cell.addEventListener('mouseenter', () => {
-                    const rowData = getRowDataFromElement(cell);
-                    if (!rowData) return;
-                    const actions = builder(rowData, label);
-                    showMetaPanel(cell, actions);
+                cell.addEventListener('mouseenter', (event) => {
+                    const anchorElement = getAnchorElementFromPointerEvent(cell, event);
+                    scheduleMetaPanelForCell(cell, builder, label, anchorElement);
                 });
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
 
             bindCell('jobType', (rowData) => [makeCopyAction(rowData.jobType, 'job type')]);
             bindCell('practice', (rowData) => {
-                const actions = [makeCopyAction(rowData.practice, 'practice')];
+                const actions = [];
+                if (rowData.practiceName) actions.push(makeCopyAction(rowData.practiceName, 'practice name'));
+                if (rowData.odsCode) actions.push(makeCopyAction(rowData.odsCode, 'ODS code'));
                 if (rowData.odsCode) actions.push(makePracticeEhrAction(rowData.odsCode));
                 return actions;
             });
