@@ -434,6 +434,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const windows = await chrome.windows.getAll();
         const windowById = new Map(windows.map(win => [win.id, win]));
+        const now = Date.now();
 
         const scoreTab = (tab) => {
             const win = windowById.get(tab.windowId);
@@ -447,7 +448,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const lastAccessed = Number(tab.lastAccessed || 0);
             if (lastAccessed > 0) {
-                const ageMs = Math.max(0, Date.now() - lastAccessed);
+                const ageMs = Math.max(0, now - lastAccessed);
                 // 0-20 recency boost (most recently used tabs get higher score).
                 score += Math.max(0, 20 - Math.floor(ageMs / 60000));
             }
@@ -457,7 +458,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         return betterLetterTabs
             .slice()
-            .sort((a, b) => scoreTab(b) - scoreTab(a))[0] || null;
+            .sort((a, b) => {
+                const scoreDiff = scoreTab(b) - scoreTab(a);
+                if (scoreDiff !== 0) return scoreDiff;
+
+                const lastAccessedDiff = Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0);
+                if (lastAccessedDiff !== 0) return lastAccessedDiff;
+
+                return Number(b.id || 0) - Number(a.id || 0);
+            })[0] || null;
     };
 
     const runBookmarkletTool = async (toolName) => {
