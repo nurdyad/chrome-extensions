@@ -220,6 +220,37 @@
         }, 250);
     }
 
+    function getHoveredDescendant(cell) {
+        const hoverChain = Array.from(document.querySelectorAll(':hover'));
+        for (let i = hoverChain.length - 1; i >= 0; i -= 1) {
+            const node = hoverChain[i];
+            if (!(node instanceof Element)) continue;
+            if (node !== cell && cell.contains(node)) return node;
+        }
+        return null;
+    }
+
+    function getMetaAnchorRect(cell) {
+        const hoveredDescendant = getHoveredDescendant(cell);
+        const hoveredInteractiveAnchor = hoveredDescendant?.closest?.('a, button, [role="button"]');
+        if (hoveredInteractiveAnchor && cell.contains(hoveredInteractiveAnchor)) {
+            return hoveredInteractiveAnchor.getBoundingClientRect();
+        }
+        if (hoveredDescendant) return hoveredDescendant.getBoundingClientRect();
+
+        const firstVisibleChild = Array.from(cell.children).find(child => {
+            const childRect = child.getBoundingClientRect();
+            return childRect.width > 0 && childRect.height > 0;
+        });
+        if (firstVisibleChild) return firstVisibleChild.getBoundingClientRect();
+
+        const cellRect = cell.getBoundingClientRect();
+        return {
+            left: cellRect.left,
+            bottom: cellRect.top + Math.min(cellRect.height, 26)
+        };
+    }
+
     function showMetaPanel(el, actions = []) {
         if (!actions.length) return;
 
@@ -231,9 +262,9 @@
         floatingMetaPanel.innerHTML = '';
         actions.forEach(action => floatingMetaPanel.appendChild(action));
 
-        const rect = el.getBoundingClientRect();
-        floatingMetaPanel.style.left = `${rect.left + window.scrollX}px`;
-        floatingMetaPanel.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        const anchorRect = getMetaAnchorRect(el);
+        floatingMetaPanel.style.left = `${anchorRect.left + window.scrollX}px`;
+        floatingMetaPanel.style.top = `${anchorRect.bottom + window.scrollY + 2}px`;
         floatingMetaPanel.style.display = 'flex';
     }
 
