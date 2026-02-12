@@ -360,6 +360,18 @@
         );
     }
 
+    function isPointerInsideMetaRegion() {
+        if (!activeMetaElement) return false;
+
+        const hoverEl = document.querySelectorAll(':hover');
+        return Array.from(hoverEl).some(node =>
+            node === activeMetaElement ||
+            node === floatingMetaPanel ||
+            activeMetaElement.contains?.(node) ||
+            floatingMetaPanel?.contains?.(node)
+        );
+    }
+
     function hideMetaPanel() {
         clearTimeout(metaHideTimer);
         metaHideTimer = setTimeout(() => {
