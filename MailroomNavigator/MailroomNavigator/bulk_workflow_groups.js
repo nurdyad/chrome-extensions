@@ -18,7 +18,15 @@
     inputElement.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
-  const findAddButton = () => document.querySelector('[phx-click="add_workflow_group"]');
+  const findAddButton = () => {
+    const byAttribute = document.querySelector('[phx-click="add_workflow_group"]');
+    if (byAttribute) return byAttribute;
+
+    const byText = Array.from(document.querySelectorAll('button')).find((button) =>
+      /add\s+custom\s+workflow\s+group/i.test(button.textContent || '')
+    );
+    return byText || null;
+  };
 
   const getLastInput = (selector) => {
     const nodes = document.querySelectorAll(selector);
@@ -28,8 +36,12 @@
   const findSaveForRow = (labelInput) => {
     if (!labelInput) return null;
 
-    const scope = labelInput.closest('section') || labelInput.closest('form') || labelInput.closest('div');
+    const row = labelInput.closest('tr') || labelInput.closest('.grid') || labelInput.closest('div');
+    const scope = row || labelInput.closest('section') || labelInput.closest('form') || labelInput.closest('div');
     if (!scope) return null;
+
+    const saveByAttr = scope.querySelector('[phx-click*="save"]');
+    if (saveByAttr) return saveByAttr;
 
     const button = Array.from(scope.querySelectorAll('button')).find((btn) => /save/i.test(btn.textContent || ''));
     if (button) return button;
@@ -38,7 +50,7 @@
     if (!polyline) return null;
 
     const svg = polyline.closest('svg');
-    return svg?.closest('button') || svg?.closest('span') || svg?.parentElement || null;
+    return svg?.closest('button') || svg?.closest('[role="button"]') || svg?.closest('span') || svg?.parentElement || null;
   };
 
   const emitProgress = (current, total) => {
@@ -78,7 +90,10 @@
 
         const finalName = mergedOptions.titleCase ? toTitleCase(candidateName) : candidateName;
 
-        const alreadyExists = document.body?.innerText?.includes(finalName);
+        const existingDocmanValues = Array.from(document.querySelectorAll('input[name="form-[docman_group]"]'))
+          .map((input) => String(input?.value || '').trim().toLowerCase())
+          .filter(Boolean);
+        const alreadyExists = existingDocmanValues.includes(finalName.trim().toLowerCase());
         if (alreadyExists && mergedOptions.skipDuplicates) {
           result.skipped += 1;
           emitProgress(result.created + result.skipped + result.errors.length, names.length);

@@ -313,8 +313,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
 
     const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
-    const runAddWorkflowGroupsToolBtn = document.getElementById('runAddWorkflowGroupsToolBtn');
     const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
+
+    const workflowNamesInput = document.getElementById('workflowNamesInput');
+    const workflowSkipDuplicates = document.getElementById('workflowSkipDuplicates');
+    const workflowTitleCase = document.getElementById('workflowTitleCase');
+    const workflowStatus = document.getElementById('workflowStatus');
+    const workflowProgressTrack = document.getElementById('workflowProgressTrack');
+    const workflowProgressBar = document.getElementById('workflowProgressBar');
+    const runWorkflowBulkBtn = document.getElementById('runWorkflowBulkBtn');
+    const testWorkflowParseBtn = document.getElementById('testWorkflowParseBtn');
 
     let recentDocIds = [];
     let recentJobIds = [];
@@ -429,44 +437,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const getBestBetterLetterTab = async () => {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab?.url?.startsWith('https://app.betterletter.ai/')) {
+            return activeTab;
+        }
+
         const betterLetterTabs = await chrome.tabs.query({ url: 'https://app.betterletter.ai/*' });
         if (!betterLetterTabs.length) return null;
-
-        const windows = await chrome.windows.getAll();
-        const windowById = new Map(windows.map(win => [win.id, win]));
-        const now = Date.now();
-
-        const scoreTab = (tab) => {
-            const win = windowById.get(tab.windowId);
-            const isNormalWindow = win?.type === 'normal';
-            const isFocusedWindow = Boolean(win?.focused);
-
-            let score = 0;
-            if (isNormalWindow) score += 100;
-            if (isFocusedWindow) score += 50;
-            if (tab.active) score += 25;
-
-            const lastAccessed = Number(tab.lastAccessed || 0);
-            if (lastAccessed > 0) {
-                const ageMs = Math.max(0, now - lastAccessed);
-                // 0-20 recency boost (most recently used tabs get higher score).
-                score += Math.max(0, 20 - Math.floor(ageMs / 60000));
-            }
-
-            return score;
-        };
 
         return betterLetterTabs
             .slice()
             .sort((a, b) => {
-                const scoreDiff = scoreTab(b) - scoreTab(a);
-                if (scoreDiff !== 0) return scoreDiff;
+                const activeDiff = Number(Boolean(b.active)) - Number(Boolean(a.active));
+                if (activeDiff !== 0) return activeDiff;
 
                 const lastAccessedDiff = Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0);
                 if (lastAccessedDiff !== 0) return lastAccessedDiff;
 
                 return Number(b.id || 0) - Number(a.id || 0);
             })[0] || null;
+    };
+
+    const tryAutoSelectPracticeFromActiveTab = async () => {
+        try {
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const url = activeTab?.url || '';
+            if (!url.startsWith('https://app.betterletter.ai/')) return;
+
+            const odsFromPracticePath = url.match(/\/admin_panel\/practices\/([A-Za-z]\d{5})/);
+            const odsFromQuery = url.match(/[?&]practice_ids=([A-Za-z]\d{5})/) || url.match(/[?&]practice=([A-Za-z]\d{5})/);
+            const candidate = (odsFromPracticePath?.[1] || odsFromQuery?.[1] || '').toUpperCase();
+            if (!/^[A-Z]\d{5}$/.test(candidate)) return;
+
+            Navigator.setSelectedPractice(candidate, { updateInput: true, triggerStatus: false });
+        } catch (error) {
+            console.warn('[Panel] Could not auto-select practice from active tab.');
+        }
     };
 
     const runBookmarkletTool = async (toolName) => {
@@ -501,12 +507,174 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    const parseWorkflowNames = (rawValue) => String(rawValue || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            if (line.includes('\t')) return line.split('\t')[0].trim();
+            const commaCount = (line.match(/,/g) || []).length;
+            if (commaCount >= 2) return line.split(',')[0].trim();
+            return line;
+        })
+        .filter(Boolean);
+
+    const formatEta = (ms) => {
+        if (!Number.isFinite(ms) || ms <= 0) return '—';
+        const seconds = Math.ceil(ms / 1000);
+        if (seconds < 60) return `${seconds}s`;
+        const mins = Math.floor(seconds / 60);
+        const remaining = seconds % 60;
+        return `${mins}m ${remaining}s`;
+    };
+
+    let workflowRunState = {
+        running: false,
+        startedAt: 0,
+        total: 0
+    };
+
+    const updateWorkflowStatus = (message, tone = null) => {
+        if (!workflowStatus) return;
+        workflowStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') workflowStatus.classList.add('valid');
+        else if (tone === 'invalid') workflowStatus.classList.add('invalid');
+        else workflowStatus.classList.add('neutral');
+        workflowStatus.textContent = message;
+    };
+
+    const updateWorkflowProgress = (current, total) => {
+        if (!workflowProgressTrack || !workflowProgressBar) return;
+        workflowProgressTrack.style.display = 'block';
+        const boundedTotal = Math.max(total || 0, 1);
+        const ratio = Math.min(Math.max(current, 0), boundedTotal) / boundedTotal;
+        workflowProgressBar.style.width = `${Math.round(ratio * 100)}%`;
+
+        if (!workflowRunState.running) return;
+
+        const elapsed = Date.now() - workflowRunState.startedAt;
+        const avgPerItem = elapsed / Math.max(current, 1);
+        const remaining = Math.round(avgPerItem * (workflowRunState.total - current));
+        updateWorkflowStatus(`Creating ${current} / ${workflowRunState.total}… · ETA ${formatEta(remaining)}`);
+    };
+
+    chrome.runtime.onMessage.addListener((message) => {
+        if (!workflowRunState.running) return;
+        if (message?.type === 'BL_WORKFLOW_PROGRESS') {
+            updateWorkflowProgress(message.current, message.total);
+        }
+    });
+
+    const runBulkWorkflowCreation = async () => {
+        const names = parseWorkflowNames(workflowNamesInput?.value);
+        if (!names.length) {
+            updateWorkflowStatus('Paste at least one workflow group name first.', 'invalid');
+            return;
+        }
+
+        if (names.length > 30) {
+            const ok = window.confirm(`You are about to create ${names.length} workflow groups. Continue?`);
+            if (!ok) return;
+        }
+
+        try {
+            if (runWorkflowBulkBtn) {
+                runWorkflowBulkBtn.disabled = true;
+                runWorkflowBulkBtn.textContent = 'Running…';
+            }
+            workflowRunState = { running: true, startedAt: Date.now(), total: names.length };
+            updateWorkflowStatus(`Starting… (0 / ${names.length})`);
+            updateWorkflowProgress(0, names.length);
+
+            chrome.storage.sync.set({
+                workflowSkipDuplicates: workflowSkipDuplicates?.checked ?? true,
+                workflowTitleCase: workflowTitleCase?.checked ?? false
+            });
+
+            const tab = await getBestBetterLetterTab();
+            if (!tab?.id) {
+                updateWorkflowStatus('Open a BetterLetter tab first.', 'invalid');
+                return;
+            }
+
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['bulk_workflow_groups.js']
+            });
+
+            const result = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: (payload) => {
+                    if (typeof window.__BL_BULK_WORKFLOW_RUN__ !== 'function') {
+                        return { ok: false, error: 'Bulk workflow runner failed to load.' };
+                    }
+                    return window.__BL_BULK_WORKFLOW_RUN__(payload);
+                },
+                args: [{
+                    names,
+                    options: {
+                        skipDuplicates: workflowSkipDuplicates?.checked ?? true,
+                        titleCase: workflowTitleCase?.checked ?? false
+                    }
+                }]
+            });
+
+            const res = result?.[0]?.result;
+            if (res?.ok) {
+                updateWorkflowStatus(`Done ✅
+Created: ${res.created}
+Skipped: ${res.skipped}
+Errors: ${res.errors.length}`, res.errors.length ? 'neutral' : 'valid');
+                updateWorkflowProgress(names.length, names.length);
+                if (res.errors.length) {
+                    console.warn('[Workflow bulk] Errors:', res.errors);
+                } else if (workflowNamesInput) {
+                    workflowNamesInput.value = '';
+                }
+            } else {
+                updateWorkflowStatus(`Failed ❌
+${res?.error || 'Unknown error'}`, 'invalid');
+            }
+        } catch (error) {
+            console.error('Bulk workflow creation failed:', error);
+            updateWorkflowStatus(`Error ❌
+${error?.message || String(error)}`, 'invalid');
+        } finally {
+            workflowRunState.running = false;
+            if (runWorkflowBulkBtn) {
+                runWorkflowBulkBtn.disabled = false;
+                runWorkflowBulkBtn.textContent = 'Run Bulk Create';
+            }
+        }
+    };
+
     const loadRecentIds = async () => {
         const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
         recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
         recentJobIds = Array.isArray(j) ? j.slice(0, 5) : [];
         renderRecentIdChips();
     };
+
+    chrome.storage.sync.get({ workflowSkipDuplicates: true, workflowTitleCase: false }, (saved) => {
+        if (workflowSkipDuplicates) workflowSkipDuplicates.checked = Boolean(saved.workflowSkipDuplicates);
+        if (workflowTitleCase) workflowTitleCase.checked = Boolean(saved.workflowTitleCase);
+    });
+
+    workflowNamesInput?.addEventListener('input', () => {
+        const parsed = parseWorkflowNames(workflowNamesInput.value);
+        updateWorkflowStatus(parsed.length ? `${parsed.length} workflow names parsed.` : 'Ready.');
+    });
+
+    testWorkflowParseBtn?.addEventListener('click', () => {
+        const parsed = parseWorkflowNames(workflowNamesInput?.value);
+        if (!parsed.length) {
+            updateWorkflowStatus('No workflow names parsed.', 'invalid');
+            return;
+        }
+        updateWorkflowStatus(`Parsed ${parsed.length} names\n- ${parsed.slice(0, 12).join('\n- ')}${parsed.length > 12 ? '\n...' : ''}`);
+    });
+
+    runWorkflowBulkBtn?.addEventListener('click', runBulkWorkflowCreation);
 
     manualDocIdInput?.addEventListener('input', updateDocValidation);
     jobStatusInput?.addEventListener('input', updateJobValidation);
@@ -564,7 +732,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     runUuidPickerToolBtn?.addEventListener('click', () => runBookmarkletTool('uuidPicker'));
-    runAddWorkflowGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('addWorkflowGroups'));
     runListDocmanGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('listDocmanGroups'));
 
     updateDocValidation();
@@ -589,6 +756,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    await tryAutoSelectPracticeFromActiveTab();
+
     showView('practiceNavigatorView');
 
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
@@ -608,6 +777,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         console.log('Cache loaded:', cacheSize);
+        await tryAutoSelectPracticeFromActiveTab();
     } catch (e) { console.error("Cache load error:", e); }
 });
 
