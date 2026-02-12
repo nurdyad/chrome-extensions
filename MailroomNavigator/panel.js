@@ -312,6 +312,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const openBulkActionBtn = document.getElementById('openBulkActionBtn');
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
 
+    const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
+    const runAddWorkflowGroupsToolBtn = document.getElementById('runAddWorkflowGroupsToolBtn');
+    const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
+
     let recentDocIds = [];
     let recentJobIds = [];
 
@@ -424,6 +428,41 @@ document.addEventListener('DOMContentLoaded', async () => {
         copyUrlsToClipboard([getDocumentActionUrl(action, id)], 'URL');
     };
 
+    const runBookmarkletTool = async (toolName) => {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) {
+                showToast('No active tab found.');
+                return;
+            }
+
+            if (!tab.url || !tab.url.startsWith('https://app.betterletter.ai/')) {
+                showToast('Open a BetterLetter page first.');
+                return;
+            }
+
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['bookmarklet_tools.js']
+            });
+
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: (name) => {
+                    if (!window.mailroomBookmarkletTools) {
+                        alert('Bookmarklet tools failed to load.');
+                        return;
+                    }
+                    window.mailroomBookmarkletTools.run(name);
+                },
+                args: [toolName]
+            });
+        } catch (err) {
+            console.error('Bookmarklet tool failed:', err);
+            showToast('Tool failed to run.');
+        }
+    };
+
     const loadRecentIds = async () => {
         const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
         recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
@@ -485,6 +524,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const urls = ids.map(id => getDocumentActionUrl(action, id));
         copyUrlsToClipboard(urls, 'URLs');
     });
+
+    runUuidPickerToolBtn?.addEventListener('click', () => runBookmarkletTool('uuidPicker'));
+    runAddWorkflowGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('addWorkflowGroups'));
+    runListDocmanGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('listDocmanGroups'));
 
     updateDocValidation();
     updateJobValidation();
