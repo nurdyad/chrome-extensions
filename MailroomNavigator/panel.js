@@ -570,3 +570,7 @@ function resizeToFitContent(extraHeight = 40) {
   const targetHeight = Math.max(750, contentHeight + extraHeight);
   window.resizeTo(PANEL_WIDTH, targetHeight);
 }
+
+window.addEventListener('DOMContentLoaded', () => {
+  resizeToFitContent(40, 750); // You can tweak the 700px value
+});
