@@ -220,9 +220,23 @@
         }, 250);
     }
 
+    function getHoveredDescendant(cell) {
+        const hoverChain = Array.from(document.querySelectorAll(':hover'));
+        for (let i = hoverChain.length - 1; i >= 0; i -= 1) {
+            const node = hoverChain[i];
+            if (!(node instanceof Element)) continue;
+            if (node !== cell && cell.contains(node)) return node;
+        }
+        return null;
+    }
+
     function getMetaAnchorRect(cell) {
-        const interactiveAnchor = cell.querySelector('a, button, [role="button"]');
-        if (interactiveAnchor) return interactiveAnchor.getBoundingClientRect();
+        const hoveredDescendant = getHoveredDescendant(cell);
+        const hoveredInteractiveAnchor = hoveredDescendant?.closest?.('a, button, [role="button"]');
+        if (hoveredInteractiveAnchor && cell.contains(hoveredInteractiveAnchor)) {
+            return hoveredInteractiveAnchor.getBoundingClientRect();
+        }
+        if (hoveredDescendant) return hoveredDescendant.getBoundingClientRect();
 
         const firstVisibleChild = Array.from(cell.children).find(child => {
             const childRect = child.getBoundingClientRect();
