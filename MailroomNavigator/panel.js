@@ -428,16 +428,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         copyUrlsToClipboard([getDocumentActionUrl(action, id)], 'URL');
     };
 
-    const runBookmarkletTool = async (toolName) => {
-        try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) {
-                showToast('No active tab found.');
-                return;
+    const getBestBetterLetterTab = async () => {
+        const betterLetterTabs = await chrome.tabs.query({ url: 'https://app.betterletter.ai/*' });
+        if (!betterLetterTabs.length) return null;
+
+        const windows = await chrome.windows.getAll();
+        const windowById = new Map(windows.map(win => [win.id, win]));
+
+        const scoreTab = (tab) => {
+            const win = windowById.get(tab.windowId);
+            const isNormalWindow = win?.type === 'normal';
+            const isFocusedWindow = Boolean(win?.focused);
+
+            let score = 0;
+            if (isNormalWindow) score += 100;
+            if (isFocusedWindow) score += 50;
+            if (tab.active) score += 25;
+
+            const lastAccessed = Number(tab.lastAccessed || 0);
+            if (lastAccessed > 0) {
+                const ageMs = Math.max(0, Date.now() - lastAccessed);
+                // 0-20 recency boost (most recently used tabs get higher score).
+                score += Math.max(0, 20 - Math.floor(ageMs / 60000));
             }
 
-            if (!tab.url || !tab.url.startsWith('https://app.betterletter.ai/')) {
-                showToast('Open a BetterLetter page first.');
+            return score;
+        };
+
+        return betterLetterTabs
+            .slice()
+            .sort((a, b) => scoreTab(b) - scoreTab(a))[0] || null;
+    };
+
+    const runBookmarkletTool = async (toolName) => {
+        try {
+            const tab = await getBestBetterLetterTab();
+            if (!tab?.id) {
+                showToast('Open a BetterLetter tab first.');
                 return;
             }
 
@@ -457,6 +484,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 },
                 args: [toolName]
             });
+
+            showToast('Tool executed.');
         } catch (err) {
             console.error('Bookmarklet tool failed:', err);
             showToast('Tool failed to run.');
