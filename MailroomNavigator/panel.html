@@ -29,10 +29,13 @@
       </button>
       <button id="emailFormatterGlobalToggleBtn" class="btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-          <polyline points="22,6 12,13 2,6"></polyline>
+          <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+          <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+          <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+          <path d="M14 17h7"></path>
+          <path d="M17.5 14v7"></path>
         </svg>
-        Email
+        Others
       </button>
     </div>
 
@@ -164,12 +167,6 @@
         <label for="cdbSearchInput">Search by Practice CDB</label>
         <div class="input-with-button" style="margin-bottom: 0;">
           <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
-          <button id="searchCdbBtn" class="btn btn-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </button>
         </div>
         <ul id="cdbSuggestions"></ul> 
       </div>
@@ -213,8 +210,9 @@
           <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
         </div>
         <div id="jobStatusValidation" class="validation-badge neutral">Enter a numeric Job ID.</div>
-        <div class="copy-row single">
-          <button id="copyJobStatusUrlBtn" class="btn btn-sm btn-ghost">Copy Job URL</button>
+        <div class="copy-row">
+          <button id="copyJobStatusUrlBtn" class="btn btn-sm btn-ghost">Copy Job ID</button>
+          <button id="copyJobStatusLinkBtn" class="btn btn-sm btn-ghost">Copy Job Link</button>
         </div>
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
@@ -235,12 +233,60 @@
             <option value="admin">Admin</option>
           </select>
           <button id="openBulkActionBtn" class="btn btn-sm">Open All</button>
-          <button id="copyBulkActionBtn" class="btn btn-sm">Copy All URLs</button>
+          <button id="copyBulkActionBtn" class="btn btn-sm btn-icon-only" title="Copy all links" aria-label="Copy all links">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path>
+              <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path>
+            </svg>
+          </button>
         </div>
       </div>
 
       <div class="section-container">
-        <h3>Bulk Workflow Groups</h3>
+        <h3>Recent IDs</h3>
+        <label>Recent Document IDs</label>
+        <div id="recentDocIdsChips" class="chips-row"></div>
+        <label style="margin-top: 8px;">Recent Job IDs</label>
+        <div id="recentJobIdsChips" class="chips-row"></div>
+      </div>
+
+    </div>
+
+    <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
+
+      <div class="section-container">
+        <h3>Email Formatter</h3>
+        <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
+        <div class="button-grid" style="margin-bottom: 12px;">
+          <button id="convertEmailBtn" class="btn btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+            </svg>
+            Convert
+          </button>
+          <button id="nameOnlyBtn" class="btn btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            Name
+          </button>
+        </div>
+        <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
+        <button id="copyEmailBtn" class="btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          Copy
+        </button>
+      </div>
+
+      <div class="section-container" style="margin-top: 12px;">
+        <h3>Custom Workflow Groups</h3>
         <label for="workflowNamesInput">Paste workflow names (one per line, or paste Airtable rows)</label>
         <textarea id="workflowNamesInput" class="bulk-input" placeholder="e.g.
 John Smith
@@ -267,45 +313,10 @@ Mike Drinkwater"></textarea>
           <button id="runListDocmanGroupsToolBtn" class="btn btn-sm">Get Docman Group Names</button>
         </div>
       </div>
-
-      <div class="section-container">
-        <h3>Recent IDs</h3>
-        <label>Recent Document IDs</label>
-        <div id="recentDocIdsChips" class="chips-row"></div>
-        <label style="margin-top: 8px;">Recent Job IDs</label>
-        <div id="recentJobIdsChips" class="chips-row"></div>
-      </div>
-
-    </div>
-
-    <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
-      
-      <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
-      <div class="button-grid" style="margin-bottom: 12px;">
-        <button id="convertEmailBtn" class="btn btn-sm">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-          </svg>
-          Convert
-        </button>
-        <button id="nameOnlyBtn" class="btn btn-sm">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
-          </svg>
-          Name
-        </button>
-      </div>
-      <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
-      <button id="copyEmailBtn" class="btn">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-        Copy
-      </button>
     </div>
 
   </div> 
+  <div id="toast" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="panel.js"></script>
 </body>
 </html>

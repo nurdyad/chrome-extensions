@@ -8,6 +8,8 @@ let practiceCache = {};
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; 
 let popupWindowId = null; 
 let isScrapingActive = false; 
+const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
+const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
 
 // --- 2. TAB RE-USE & LIVEVIEW CLICKING ---
 
@@ -103,70 +105,62 @@ async function setupOffscreen() {
     });
 }
 
-
-async function waitForTabComplete(tabId, timeoutMs = 30000) {
-    await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-            chrome.tabs.onUpdated.removeListener(listener);
-            resolve();
-        }, timeoutMs);
-
-        const listener = (updatedTabId, info) => {
-            if (updatedTabId === tabId && info.status === 'complete') {
-                clearTimeout(timeout);
-                chrome.tabs.onUpdated.removeListener(listener);
-                resolve();
-            }
-        };
-
-        chrome.tabs.onUpdated.addListener(listener);
+async function findAnyBetterLetterTab() {
+    const activeCurrentWindow = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+        url: BETTERLETTER_TAB_PATTERN
     });
+    if (activeCurrentWindow.length > 0) return activeCurrentWindow[0];
+
+    const allBetterLetterTabs = await chrome.tabs.query({ url: BETTERLETTER_TAB_PATTERN });
+    return allBetterLetterTabs[0] || null;
+}
+
+async function runInExistingBetterLetterTab(func, args = []) {
+    const tab = await findAnyBetterLetterTab();
+    if (!tab?.id) return null;
+
+    try {
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func,
+            args
+        });
+        return result;
+    } catch (e) {
+        return null;
+    }
 }
 
 async function fetchPracticeCdbByOds(odsCode) {
-    const url = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
-    const tab = await chrome.tabs.create({ url, active: false });
+    const normalizedOds = String(odsCode || '').trim();
+    if (!normalizedOds) return '';
 
-    try {
-        await waitForTabComplete(tab.id, 30000);
+    const cdbFromSessionFetch = await runInExistingBetterLetterTab(async (targetOds) => {
+        try {
+            const response = await fetch(`/admin_panel/practices/${encodeURIComponent(targetOds)}`, {
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!response.ok) return '';
 
-        const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: async () => {
-                const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+            const html = await response.text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const cdbInput = doc.getElementById('ehr_settings[practice_cdb]') ||
+                doc.querySelector("input[name='ehr_settings[practice_cdb]']");
 
-                const clickEhrTab = () => {
-                    const tabEl = document.querySelector("[data-test-id='tab-ehr_settings']");
-                    if (!tabEl) return;
-                    ['mousedown', 'mouseup', 'click'].forEach(type =>
-                        tabEl.dispatchEvent(new MouseEvent(type, { bubbles: true }))
-                    );
-                };
-
-                clickEhrTab();
-
-                for (let i = 0; i < 15; i += 1) {
-                    const cdbInput = document.getElementById('ehr_settings[practice_cdb]') ||
-                        document.querySelector("input[name='ehr_settings[practice_cdb]']");
-                    if (cdbInput) {
-                        return (cdbInput.value || '').trim();
-                    }
-                    await delay(300);
-                    clickEhrTab();
-                }
-
-                return '';
-            }
-        });
-
-        return typeof result === 'string' ? result : '';
-    } catch (e) {
-        return '';
-    } finally {
-        if (typeof tab?.id === 'number') {
-            await chrome.tabs.remove(tab.id).catch(() => undefined);
+            return (cdbInput?.value || '').trim();
+        } catch (e) {
+            return '';
         }
+    }, [normalizedOds]);
+
+    if (typeof cdbFromSessionFetch === 'string' && cdbFromSessionFetch.trim()) {
+        return cdbFromSessionFetch.trim();
     }
+
+    return '';
 }
 
 async function hydrateMissingCdbs(limit = 25) {
@@ -198,77 +192,78 @@ async function hydrateMissingCdbs(limit = 25) {
 }
 
 async function scrapePracticeListViaTab() {
-    const url = 'https://app.betterletter.ai/admin_panel/practices';
-    const tab = await chrome.tabs.create({ url, active: false });
+    // Disabled by design to avoid opening hidden/background tabs in any Chrome window.
+    return [];
+}
 
-    try {
-        await waitForTabComplete(tab.id, 30000);
+async function scrapePracticeListViaSessionTab() {
+    const result = await runInExistingBetterLetterTab(async () => {
+        try {
+            const response = await fetch('/admin_panel/practices', {
+                credentials: 'include',
+                cache: 'no-store'
+            });
 
-        const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: async () => {
-                const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-                await delay(2000);
+            if (!response.ok) return [];
 
-                const headerCells = Array.from(document.querySelectorAll('table thead th'));
-                const headers = headerCells.map((th, idx) => ({
-                    idx,
-                    text: (th.textContent || '').trim().toLowerCase()
-                }));
+            const html = await response.text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const headerCells = Array.from(doc.querySelectorAll('table thead th'));
+            const headers = headerCells.map((th, idx) => ({
+                idx,
+                text: (th.textContent || '').trim().toLowerCase()
+            }));
 
-                const findHeaderIndex = (...keywords) => {
-                    const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
-                    return hit ? hit.idx : -1;
+            const findHeaderIndex = (...keywords) => {
+                const hit = headers.find(h => keywords.every(k => h.text.includes(k)));
+                return hit ? hit.idx : -1;
+            };
+
+            const fallbackByPosition = {
+                ods: 1,
+                ehr: 3,
+                quota: 4,
+                collected: 5,
+                service: 6
+            };
+
+            const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
+            const cdbIdx = findHeaderIndex('cdb');
+            const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
+            const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
+            const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
+            const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
+
+            const rows = Array.from(doc.querySelectorAll('table tbody tr'));
+            return rows.map(row => {
+                const cells = Array.from(row.querySelectorAll('td'));
+                const link = row.querySelector('a[href*="/admin_panel/practices/"]');
+                if (!link) return null;
+
+                const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
+                const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
+
+                const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
+                const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
+                const id = hrefId || extractedOds;
+
+                return {
+                    id,
+                    ods: id,
+                    name: normalize(link.textContent).normalize('NFC'),
+                    cdb: fromIdx(cdbIdx),
+                    ehrType: fromIdx(ehrIdx),
+                    collectionQuota: fromIdx(quotaIdx),
+                    collectedToday: fromIdx(collectedIdx),
+                    serviceLevel: fromIdx(serviceIdx)
                 };
-
-                const fallbackByPosition = {
-                    ods: 1,
-                    ehr: 3,
-                    quota: 4,
-                    collected: 5,
-                    service: 6
-                };
-
-                const odsIdx = findHeaderIndex('ods') >= 0 ? findHeaderIndex('ods') : fallbackByPosition.ods;
-                const cdbIdx = findHeaderIndex('cdb');
-                const ehrIdx = findHeaderIndex('ehr') >= 0 ? findHeaderIndex('ehr') : fallbackByPosition.ehr;
-                const quotaIdx = findHeaderIndex('quota') >= 0 ? findHeaderIndex('quota') : fallbackByPosition.quota;
-                const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
-                const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
-
-                const rows = Array.from(document.querySelectorAll('table tbody tr'));
-                return rows.map(row => {
-                    const cells = Array.from(row.querySelectorAll('td'));
-                    const link = row.querySelector('a[href*="/admin_panel/practices/"]');
-                    if (!link) return null;
-
-                    const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ');
-                    const fromIdx = (idx) => (idx >= 0 ? normalize(cells[idx]?.textContent || '') : '');
-
-                    const hrefId = (link.getAttribute('href') || '').split('/').pop() || '';
-                    const extractedOds = fromIdx(odsIdx).match(/[A-Z]\d{5}/)?.[0] || '';
-                    const id = hrefId || extractedOds;
-
-                    return {
-                        id,
-                        ods: id,
-                        name: normalize(link.textContent).normalize('NFC'),
-                        cdb: fromIdx(cdbIdx),
-                        ehrType: fromIdx(ehrIdx),
-                        collectionQuota: fromIdx(quotaIdx),
-                        collectedToday: fromIdx(collectedIdx),
-                        serviceLevel: fromIdx(serviceIdx)
-                    };
-                }).filter(p => p && p.id);
-            }
-        });
-
-        return Array.isArray(result) ? result : [];
-    } finally {
-        if (typeof tab?.id === 'number') {
-            await chrome.tabs.remove(tab.id).catch(() => undefined);
+            }).filter(p => p && p.id);
+        } catch (e) {
+            return [];
         }
-    }
+    });
+
+    return Array.isArray(result) ? result : [];
 }
 
 async function loadCacheFromStorage() {
@@ -285,25 +280,28 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
     if (isScrapingActive) return [];
     isScrapingActive = true;
     try {
-        let practicesArray = [];
+        let practicesArray = await scrapePracticeListViaSessionTab();
 
-        try {
-            await setupOffscreen();
-            practicesArray = await chrome.runtime.sendMessage({
-                target: 'offscreen',
-                action: 'scrapePracticeList',
-                data: { url: 'https://app.betterletter.ai/admin_panel/practices' }
-            });
-        } catch (offscreenErr) {
-            console.warn('[Ghost] Offscreen scrape failed, using tab fallback.', offscreenErr?.message || offscreenErr);
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
+            try {
+                await setupOffscreen();
+                const offscreenResult = await chrome.runtime.sendMessage({
+                    target: 'offscreen',
+                    action: 'scrapePracticeList',
+                    data: { url: `${BETTERLETTER_ORIGIN}/admin_panel/practices` }
+                });
+                if (Array.isArray(offscreenResult)) {
+                    practicesArray = offscreenResult;
+                }
+            } catch (e) {
+                // Offscreen context can fail in some Chromium builds; continue fallback chain.
+            }
         }
 
-        if (!Array.isArray(practicesArray) || practicesArray.length === 0 || practicesArray.error) {
-            practicesArray = await scrapePracticeListViaTab();
+        if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
+            await loadCacheFromStorage();
+            return Object.values(practiceCache || {});
         }
-
-        if (!practicesArray || practicesArray.error) throw new Error("Scrape failed");
-        if (!Array.isArray(practicesArray) || practicesArray.length === 0) throw new Error('No practices found');
         
         const previousCache = practiceCache;
         const previousByOds = new Map(
@@ -335,9 +333,8 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
 
         return practicesArray;
     } catch (e) {
-        console.error("[Ghost] Error:", e.message); // cite: Screenshot 2026-01-28 at 14.12.35.png
         await loadCacheFromStorage();
-        return [];
+        return Object.values(practiceCache || {});
     } finally {
         isScrapingActive = false;
     }

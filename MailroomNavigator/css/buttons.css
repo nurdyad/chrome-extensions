@@ -113,3 +113,17 @@
     transform: translateY(-2px);
 }
 
+#copyBulkActionBtn.btn-icon-only {
+    min-width: 42px;
+    width: 42px;
+    padding: 6px 5px;
+    gap: 3px;
+    background: #ecf3fb;
+    color: #1f5f99;
+    border: 1px solid #c6ddf4;
+}
+
+#copyBulkActionBtn.btn-icon-only:hover:not(:disabled) {
+    background: #dcecff;
+    border-color: #9ec6ef;
+}
