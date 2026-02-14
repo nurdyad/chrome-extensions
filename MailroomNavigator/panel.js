@@ -189,13 +189,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             Navigator.handleCdbInput();
         });
     }
-
-    const handleCdbSearchClick = async () => {
-        await syncPracticeCache();
-        triggerCdbHydration();
-        Navigator.handleCdbInput();
-    };
-    document.getElementById('searchCdbBtn')?.addEventListener('click', handleCdbSearchClick);
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -308,6 +301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const copyLogUrlBtn = document.getElementById('copyLogUrlBtn');
     const copyAdminUrlBtn = document.getElementById('copyAdminUrlBtn');
     const copyJobStatusUrlBtn = document.getElementById('copyJobStatusUrlBtn');
+    const copyJobStatusLinkBtn = document.getElementById('copyJobStatusLinkBtn');
 
     const openBulkActionBtn = document.getElementById('openBulkActionBtn');
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
@@ -700,7 +694,13 @@ ${error?.message || String(error)}`, 'invalid');
     copyJobStatusUrlBtn?.addEventListener('click', () => {
         const jobId = updateJobValidation();
         if (!jobId) return showToast('No valid Job ID.');
-        copyUrlsToClipboard([getJobStatusUrl(jobId)], 'URL');
+        copyUrlsToClipboard([jobId], 'Job ID');
+    });
+
+    copyJobStatusLinkBtn?.addEventListener('click', () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        copyUrlsToClipboard([getJobStatusUrl(jobId)], 'Job URL');
     });
 
     clearJobStatusInputBtn?.addEventListener('click', () => {

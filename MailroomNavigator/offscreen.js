@@ -3,33 +3,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'offscreen') return false;
 
   const handle = async () => {
-    console.log(`[Ghost Engine] Received task: ${message.action}`);
+    if (!message?.data?.url) {
+      return { error: 'Scrape failed: Missing URL' };
+    }
+
     const iframe = document.createElement('iframe');
     iframe.src = message.data.url;
     iframe.style.display = 'none';
     document.body.appendChild(iframe);
 
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        iframe.onload = null;
+        iframe.onerror = null;
         if (document.body.contains(iframe)) document.body.removeChild(iframe);
-        console.warn(`[Ghost Engine] Timeout for ${message.action}`);
-        resolve({ error: "Scrape failed: Timeout" });
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => {
+        finish({ error: 'Scrape failed: Timeout' });
       }, 30000);
 
-      iframe.onload = async () => {
-        // Double-check contentDocument to avoid the null error seen in your logs
-        if (!iframe.contentDocument || !iframe.contentDocument.body) {
-           return; // Keep waiting for the next load event if Phoenix isn't ready
-        }
+      iframe.onerror = () => {
+        finish({ error: 'Scrape failed: Frame load error' });
+      };
 
-        clearTimeout(timeout);
+      iframe.onload = async () => {
+        const frameDoc = iframe.contentDocument;
+        if (!frameDoc || !frameDoc.body) return;
+
+        const frameUrl = frameDoc.location?.href || '';
+        if (frameUrl.startsWith('chrome-error://')) {
+          finish({ error: 'Scrape failed: Frame error page' });
+          return;
+        }
 
         try {
           if (message.action === 'scrapePracticeList') {
-            // Give LiveView 2 seconds to render the table rows
             await new Promise(r => setTimeout(r, 2000));
-            
-            const headerCells = Array.from(iframe.contentDocument.querySelectorAll('table thead th'));
+
+            const headerCells = Array.from(frameDoc.querySelectorAll('table thead th'));
             const headers = headerCells.map((th, idx) => ({
               idx,
               text: (th.textContent || '').trim().toLowerCase()
@@ -55,7 +72,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const collectedIdx = findHeaderIndex('collected') >= 0 ? findHeaderIndex('collected') : fallbackByPosition.collected;
             const serviceIdx = findHeaderIndex('service') >= 0 ? findHeaderIndex('service') : fallbackByPosition.service;
 
-            const rows = Array.from(iframe.contentDocument.querySelectorAll('table tbody tr'));
+            const rows = Array.from(frameDoc.querySelectorAll('table tbody tr'));
             const data = rows.map(row => {
               const cells = Array.from(row.querySelectorAll('td'));
               const link = row.querySelector('a[href*="/admin_panel/practices/"]');
@@ -80,14 +97,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               };
             }).filter(p => p && p.id);
 
-            document.body.removeChild(iframe);
-            resolve(data);
-          } 
-          // Add logic for scrapeCDB here if needed in the future
+            finish(data);
+            return;
+          }
+
+          finish({ error: `Scrape failed: Unsupported action ${message.action}` });
         } catch (err) {
-          console.error(`[Ghost Engine] Internal Error: ${err.message}`);
-          if (document.body.contains(iframe)) document.body.removeChild(iframe);
-          resolve({ error: `Scrape failed: ${err.message}` });
+          finish({ error: `Scrape failed: ${err.message}` });
         }
       };
     });

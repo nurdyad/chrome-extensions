@@ -1,4 +1,6 @@
 // utils.js
+let toastHideTimer = null;
+let toastFadeTimer = null;
 
 // Delays a function call (prevents rapid firing)
 export function debounce(func, timeout = 300) {
@@ -26,21 +28,38 @@ export function toggleLoadingState(element, isLoading) {
 
 // Shows a popup message (toast)
 export function showToast(message) {
-    const toastEl = document.getElementById("toast");
-    if (!toastEl) {
-        console.warn("Toast element not found in DOM.");
-        return;
+    let toastEl = document.getElementById("toast");
+    if (!toastEl && document.body) {
+        toastEl = document.createElement("div");
+        toastEl.id = "toast";
+        toastEl.setAttribute("aria-live", "polite");
+        toastEl.setAttribute("aria-atomic", "true");
+        toastEl.style.display = "none";
+        document.body.appendChild(toastEl);
     }
+    if (!toastEl) return;
+
+    if (toastHideTimer) {
+        clearTimeout(toastHideTimer);
+        toastHideTimer = null;
+    }
+    if (toastFadeTimer) {
+        clearTimeout(toastFadeTimer);
+        toastFadeTimer = null;
+    }
+
     toastEl.textContent = message;
     toastEl.classList.add("show"); // Uses the CSS class for animation
     toastEl.style.display = "block"; // Ensure it's visible
     
     // Hide after 2 seconds
-    setTimeout(() => {
+    toastHideTimer = setTimeout(() => {
         toastEl.classList.remove("show");
-        setTimeout(() => {
+        toastFadeTimer = setTimeout(() => {
             toastEl.style.display = "none";
+            toastFadeTimer = null;
         }, 300); // Wait for fade out
+        toastHideTimer = null;
     }, 2000);
 }
 
