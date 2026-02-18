@@ -6,10 +6,15 @@
 // --- 1. Global State ---
 let practiceCache = {}; 
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; 
-let popupWindowId = null; 
 let isScrapingActive = false; 
 const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
 const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
+const CACHE_REQUIRED_ACTIONS = new Set([
+    'getPracticeCache',
+    'requestActiveScrape',
+    'getPracticeStatus',
+    'hydratePracticeCdb'
+]);
 
 // --- 2. TAB RE-USE & LIVEVIEW CLICKING ---
 
@@ -103,6 +108,27 @@ async function setupOffscreen() {
         reasons: ['DOM_SCRAPING'],
         justification: 'Silent data sync.'
     });
+}
+
+function isBetterLetterUrl(url) {
+    return typeof url === 'string' && url.startsWith(`${BETTERLETTER_ORIGIN}/`);
+}
+
+function getTabUrl(tab) {
+    if (typeof tab?.url === 'string') return tab.url;
+    if (typeof tab?.pendingUrl === 'string') return tab.pendingUrl;
+    return '';
+}
+
+async function setTargetTabId(tabId) {
+    if (typeof tabId !== 'number') return;
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!isBetterLetterUrl(getTabUrl(tab))) return;
+        await chrome.storage.local.set({ targetTabId: tabId });
+    } catch (e) {
+        // Ignore missing/closed tabs.
+    }
 }
 
 async function findAnyBetterLetterTab() {
@@ -358,29 +384,232 @@ async function ensureCacheLoaded() {
     await fetchAndCachePracticeList('initial-load');
 }
 
+function openPanelPopup() {
+    chrome.windows.create({
+        url: chrome.runtime.getURL('panel.html'),
+        type: 'popup',
+        width: 330,
+        height: 750,
+        focused: true
+    });
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 2500) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            if (tab?.status === 'complete') return true;
+        } catch (e) {
+            return false;
+        }
+        await wait(120);
+    }
+    return false;
+}
+
+async function toggleSidebarPanel(tabId) {
+    await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (panelUrl) => {
+            const ROOT_ID = 'bl-allinone-sidebar-panel';
+            const STYLE_ID = 'bl-allinone-sidebar-style';
+            const PANEL_WIDTH = 360;
+            const HANDLE_WIDTH = 24;
+            const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
+
+            const mountOrToggleSidebar = () => {
+                if (!document.documentElement) return;
+
+                const existingPanel = document.getElementById(ROOT_ID);
+                if (existingPanel) {
+                    const shouldExpand = existingPanel.classList.contains('collapsed');
+                    existingPanel.classList.toggle('collapsed', !shouldExpand);
+                    const toggleButton = existingPanel.querySelector('[data-role="toggle"]');
+                    if (toggleButton) {
+                        toggleButton.textContent = shouldExpand ? '▶' : '◀';
+                        toggleButton.setAttribute('aria-label', shouldExpand ? 'Collapse panel' : 'Expand panel');
+                    }
+                    return;
+                }
+
+                if (!document.getElementById(STYLE_ID)) {
+                    const styleEl = document.createElement('style');
+                    styleEl.id = STYLE_ID;
+                    styleEl.textContent = `
+                        #${ROOT_ID} {
+                            position: fixed;
+                            top: 0;
+                            right: 0;
+                            width: ${PANEL_WIDTH}px;
+                            height: 100vh;
+                            z-index: 2147483647;
+                            background: #f7f8fb;
+                            border-left: 1px solid rgba(15, 23, 42, 0.16);
+                            box-shadow: -10px 0 28px rgba(15, 23, 42, 0.18);
+                            transform: translateX(0);
+                            transition: transform 0.22s ease;
+                        }
+
+                        #${ROOT_ID}.collapsed {
+                            transform: translateX(100%);
+                        }
+
+                        #${ROOT_ID} .bl-sidebar-toggle {
+                            position: absolute;
+                            left: -${HANDLE_WIDTH}px;
+                            top: 50%;
+                            transform: translateY(-50%);
+                            width: ${HANDLE_WIDTH}px;
+                            height: 56px;
+                            border: 1px solid rgba(15, 23, 42, 0.16);
+                            border-right: none;
+                            border-radius: 8px 0 0 8px;
+                            background: #ffffff;
+                            color: #1f2937;
+                            cursor: pointer;
+                            font-size: 15px;
+                            font-weight: 700;
+                            line-height: 1;
+                            padding: 0;
+                        }
+
+                        #${ROOT_ID} .bl-sidebar-toggle:hover {
+                            background: #f3f4f6;
+                        }
+
+                        #${ROOT_ID} iframe {
+                            width: 100%;
+                            height: 100%;
+                            border: 0;
+                            display: block;
+                            background: #f7f8fb;
+                        }
+                    `;
+                    document.documentElement.appendChild(styleEl);
+                }
+
+                const panelEl = document.createElement('div');
+                panelEl.id = ROOT_ID;
+                panelEl.classList.add('collapsed');
+
+                const toggleButton = document.createElement('button');
+                toggleButton.type = 'button';
+                toggleButton.className = 'bl-sidebar-toggle';
+                toggleButton.dataset.role = 'toggle';
+                toggleButton.textContent = '◀';
+                toggleButton.setAttribute('aria-label', 'Expand panel');
+
+                const iframe = document.createElement('iframe');
+                iframe.src = panelUrl;
+                iframe.title = 'BetterLetter Panel';
+
+                toggleButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const isCollapsed = panelEl.classList.toggle('collapsed');
+                    toggleButton.textContent = isCollapsed ? '◀' : '▶';
+                    toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+                });
+
+                panelEl.append(toggleButton, iframe);
+                (document.body || document.documentElement).appendChild(panelEl);
+            };
+
+            if (!document.body && document.readyState === 'loading') {
+                if (window[PENDING_KEY]) return;
+                window[PENDING_KEY] = true;
+                document.addEventListener('DOMContentLoaded', () => {
+                    window[PENDING_KEY] = false;
+                    mountOrToggleSidebar();
+                }, { once: true });
+                return;
+            }
+
+            mountOrToggleSidebar();
+        },
+        args: [chrome.runtime.getURL('panel.html')]
+    });
+}
+
 // --- 4. LISTENERS ---
 
-chrome.action.onClicked.addListener(async () => {
-    if (popupWindowId !== null) {
-        try { await chrome.windows.update(popupWindowId, { focused: true }); return; } catch (e) { popupWindowId = null; }
+chrome.action.onClicked.addListener(async (tab) => {
+    const tabId = tab?.id;
+    const clickedTabUrl = getTabUrl(tab);
+    await setTargetTabId(tabId);
+
+    if (typeof tabId !== 'number') {
+        openPanelPopup();
+        return;
     }
-    chrome.windows.create({
-        url: chrome.runtime.getURL("panel.html"),
-        type: "popup",
-        width: 330, height: 750, focused: true
-    }, (win) => { popupWindowId = win.id; });
+
+    if (!isBetterLetterUrl(clickedTabUrl)) {
+        // Outside BetterLetter we still allow the popup window.
+        openPanelPopup();
+        return;
+    }
+
+    try {
+        await toggleSidebarPanel(tabId);
+    } catch (error) {
+        // BetterLetter page is still loading. Wait briefly and retry sidebar injection.
+        await waitForTabComplete(tabId, 3000);
+        try {
+            await toggleSidebarPanel(tabId);
+        } catch (retryError) {
+            // Last resort keeps extension usable if scripting is blocked unexpectedly.
+            openPanelPopup();
+        }
+    }
 });
 
-chrome.windows.onRemoved.addListener((windowId) => {
-    if (windowId === popupWindowId) popupWindowId = null;
+chrome.tabs.onActivated.addListener((activeInfo) => {
+    setTargetTabId(activeInfo?.tabId).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (!changeInfo?.url && changeInfo?.status !== 'complete') return;
+    const maybeUrl = typeof changeInfo?.url === 'string' ? changeInfo.url : getTabUrl(tab);
+    if (!isBetterLetterUrl(maybeUrl)) return;
+    chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.target === 'offscreen') return false;
 
     const handle = async () => {
-        await ensureCacheLoaded();
+        if (message?.type === 'mailroom_doc_clicked' && message?.data) {
+            const payload = { clickedMailroomDocData: message.data };
+            const senderTabId = sender?.tab?.id;
+            if (typeof senderTabId === 'number' && isBetterLetterUrl(sender?.tab?.url || '')) {
+                payload.targetTabId = senderTabId;
+            }
+            await chrome.storage.local.set(payload);
+            return { success: true };
+        }
+
+        if (CACHE_REQUIRED_ACTIONS.has(message?.action)) {
+            await ensureCacheLoaded();
+        }
+
         if (message.action === 'getPracticeCache') return { practiceCache };
+        if (message.action === 'openUrlInNewTab') {
+            const targetUrl = String(message.url || '').trim();
+            if (!isBetterLetterUrl(targetUrl)) {
+                return { success: false, error: 'Invalid URL for tab open.' };
+            }
+            const tabOptions = { url: targetUrl, active: true };
+            if (typeof sender?.tab?.windowId === 'number') {
+                tabOptions.windowId = sender.tab.windowId;
+            }
+            await chrome.tabs.create(tabOptions);
+            return { success: true };
+        }
         if (message.action === 'openPractice') return await handleOpenPractice(message.input, message.settingType);
         if (message.action === 'requestActiveScrape') {
             const data = await fetchAndCachePracticeList('manual-refresh');

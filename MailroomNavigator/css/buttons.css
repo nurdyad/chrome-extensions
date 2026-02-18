@@ -79,12 +79,6 @@
 #rejectedBtn:hover:not(:disabled) { 
     background-color: #c0392b; 
 }
-#searchCdbBtn { 
-    background-color: var(--info-color); 
-}
-#searchCdbBtn:hover:not(:disabled) { 
-    background-color: #2980b9; 
-}
 #collectionBtn { 
     background-color: var(--collection-color); 
 }
