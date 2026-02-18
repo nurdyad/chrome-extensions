@@ -67,11 +67,8 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
       if (el) el.value = normalized.display;
   }
 
-  // Hide all suggestion lists
-  ['suggestions', 'cdbSuggestions'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.style.display = 'none';
-  });
+  hidePracticeSuggestions();
+  hideCdbSuggestions();
 
   setNavigatorButtonsState(true);
   if (triggerStatus) displayPracticeStatus();
@@ -85,6 +82,20 @@ export function clearSelectedPractice() {
   setNavigatorButtonsState(false);
   const statusDisplayEl = document.getElementById('statusDisplay');
   if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+  hidePracticeSuggestions();
+}
+
+export function hidePracticeSuggestions() {
+    const listEl = document.getElementById('suggestions');
+    if (!listEl) return;
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+}
+
+export function hideCdbSuggestions() {
+    const listEl = document.getElementById('cdbSuggestions');
+    if (!listEl) return;
+    listEl.style.display = 'none';
 }
 
 // --- 4. Enable/Disable Buttons ---
@@ -146,7 +157,7 @@ export async function displayPracticeStatus() {
 }
 
 // --- 7. Handle Autocomplete ---
-export function handleNavigatorInput() {
+export function handleNavigatorInput({ showOnEmpty = false } = {}) {
     const inputEl = document.getElementById('practiceInput');
     const listEl = document.getElementById('suggestions');
     if (!inputEl || !listEl) return;
@@ -154,7 +165,16 @@ export function handleNavigatorInput() {
     const query = inputEl.value.toLowerCase().trim();
     const allNames = Object.keys(state.cachedPractices);
 
-    let matches = !query ? allNames : allNames.filter(name => name.toLowerCase().includes(query)).slice(0, 8);
+    if (!query && !showOnEmpty) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+
+    // Show all practice names when empty (if explicitly requested), and all filtered matches when typing.
+    let matches = !query
+        ? allNames
+        : allNames.filter(name => name.toLowerCase().includes(query));
 
     if (matches.length === 0) {
         listEl.style.display = 'none';
@@ -194,10 +214,10 @@ export function handleCdbInput() {
     const query = inputEl.value.trim().toLowerCase();
     const allCdbItems = state.cachedCdbIndex || [];
 
-    // Show top 15 if empty, otherwise filter by typing
+    // Show all known CDB items; list is scrollable in the panel.
     let matches = !query 
-        ? allCdbItems.slice(0, 30) // Increased to show more initial options
-        : allCdbItems.filter(item => item.cdb.toLowerCase().includes(query)).slice(0, 15);
+        ? allCdbItems
+        : allCdbItems.filter(item => item.cdb.toLowerCase().includes(query));
 
     if (matches.length === 0) {
         listEl.innerHTML = '';
