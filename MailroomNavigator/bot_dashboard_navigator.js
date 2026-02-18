@@ -7,6 +7,7 @@
     let activeDocIdElement = null;
     let activeMetaElement = null;
     let activeMetaAnchorElement = null;
+    let activeMetaAnchorPoint = null;
     let isMouseInDocPanel = false;
     let isMouseInMetaPanel = false;
     let metaHideTimer = null;
@@ -15,6 +16,7 @@
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    const LINK_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path></svg>';
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -41,6 +43,21 @@
         const originalBg = btn.style.background;
         btn.style.background = '#d4edda';
         setTimeout(() => { btn.style.background = originalBg; }, 900);
+    }
+
+    function openUrlInNewTab(url) {
+        const normalizedUrl = collapseText(url);
+        if (!normalizedUrl) return;
+
+        try {
+            chrome.runtime.sendMessage({ action: 'openUrlInNewTab', url: normalizedUrl }, (response) => {
+                if (chrome.runtime.lastError || !response?.success) {
+                    window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+                }
+            });
+        } catch (e) {
+            window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+        }
     }
 
     function createButton({ label, color, title, onClick, icon }) {
@@ -106,7 +123,7 @@
             onClick: () => {
                 const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
                 if (!docId) return;
-                window.open(getUrl(docId), '_blank');
+                openUrlInNewTab(getUrl(docId));
             }
         });
 
@@ -246,13 +263,31 @@
         }, 250);
     }
 
-    function getMetaAnchorRect(cell, anchorElement) {
+    function getMetaAnchorRect(cell, anchorElement, anchorPoint = null) {
         if (anchorElement && anchorElement instanceof Element && cell.contains(anchorElement)) {
             const interactiveAnchor = anchorElement.closest('a, button, [role="button"]');
             if (interactiveAnchor && cell.contains(interactiveAnchor)) {
                 return interactiveAnchor.getBoundingClientRect();
             }
+
+            // If the pointer is on plain text (no interactive child), prefer point anchoring.
+            if (anchorPoint && Number.isFinite(anchorPoint.clientX) && Number.isFinite(anchorPoint.clientY)) {
+                return {
+                    left: anchorPoint.clientX,
+                    top: anchorPoint.clientY,
+                    bottom: anchorPoint.clientY
+                };
+            }
+
             return anchorElement.getBoundingClientRect();
+        }
+
+        if (anchorPoint && Number.isFinite(anchorPoint.clientX) && Number.isFinite(anchorPoint.clientY)) {
+            return {
+                left: anchorPoint.clientX,
+                top: anchorPoint.clientY,
+                bottom: anchorPoint.clientY
+            };
         }
 
         const firstVisibleChild = Array.from(cell.children).find(child => {
@@ -290,6 +325,12 @@
         return cell;
     }
 
+    function getAnchorPointFromPointerEvent(event) {
+        if (!event) return null;
+        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return null;
+        return { clientX: event.clientX, clientY: event.clientY };
+    }
+
 
     function positionMetaPanel(panel, cell, anchorRect) {
         const viewportPadding = 8;
@@ -325,7 +366,7 @@
         panel.style.visibility = 'visible';
     }
 
-    function showMetaPanel(el, actions = [], anchorElement = null) {
+    function showMetaPanel(el, actions = [], anchorElement = null, anchorPoint = null) {
         if (!actions.length) return;
 
         clearTimeout(metaHideTimer);
@@ -333,6 +374,7 @@
 
         activeMetaElement = el;
         activeMetaAnchorElement = anchorElement;
+        activeMetaAnchorPoint = anchorPoint;
         createFloatingMetaPanel();
         floatingMetaPanel.innerHTML = '';
 
@@ -344,20 +386,12 @@
             floatingMetaPanel.appendChild(action);
         });
 
-        const anchorRect = getMetaAnchorRect(el, anchorElement || activeMetaAnchorElement);
-        positionMetaPanel(floatingMetaPanel, el, anchorRect);
-    }
-
-    function isPointerInsideMetaRegion() {
-        if (!activeMetaElement) return false;
-
-        const hoverEl = document.querySelectorAll(':hover');
-        return Array.from(hoverEl).some(node =>
-            node === activeMetaElement ||
-            node === floatingMetaPanel ||
-            activeMetaElement.contains?.(node) ||
-            floatingMetaPanel?.contains?.(node)
+        const anchorRect = getMetaAnchorRect(
+            el,
+            anchorElement || activeMetaAnchorElement,
+            anchorPoint || activeMetaAnchorPoint
         );
+        positionMetaPanel(floatingMetaPanel, el, anchorRect);
     }
 
     function isPointerInsideMetaRegion() {
@@ -380,18 +414,19 @@
                     if (floatingMetaPanel) floatingMetaPanel.style.display = 'none';
                     activeMetaElement = null;
                     activeMetaAnchorElement = null;
+                    activeMetaAnchorPoint = null;
                 }
             }
         }, META_CLOSE_DELAY_MS);
     }
 
-    function scheduleMetaPanelForCell(cell, builder, label, anchorElement) {
+    function scheduleMetaPanelForCell(cell, builder, label, anchorElement, anchorPoint) {
         clearTimeout(metaReanchorTimer);
 
         if (activeMetaElement === cell) {
             const rowData = getRowDataFromElement(cell);
             if (!rowData) return;
-            showMetaPanel(cell, builder(rowData, label), anchorElement);
+            showMetaPanel(cell, builder(rowData, label), anchorElement, anchorPoint);
             return;
         }
 
@@ -404,7 +439,7 @@
             const rowData = getRowDataFromElement(cell);
             if (!rowData) return;
 
-            showMetaPanel(cell, builder(rowData, label), anchorElement);
+            showMetaPanel(cell, builder(rowData, label), anchorElement, anchorPoint);
         }, META_REANCHOR_DELAY_MS);
     }
 
@@ -435,6 +470,12 @@
                 chrome.runtime.sendMessage({ action: 'openPractice', input: odsCode, settingType: 'ehr_settings' });
             }
         });
+    }
+
+    function getJobUrl(jobId) {
+        const normalizedId = collapseText(jobId);
+        if (!normalizedId) return '';
+        return `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(normalizedId)}`;
     }
 
     function attachDocListeners() {
@@ -472,7 +513,8 @@
                 cell.style.borderBottom = '1px dotted #6c757d';
                 cell.addEventListener('mouseenter', (event) => {
                     const anchorElement = getAnchorElementFromPointerEvent(cell, event);
-                    scheduleMetaPanelForCell(cell, builder, label, anchorElement);
+                    const anchorPoint = getAnchorPointFromPointerEvent(event);
+                    scheduleMetaPanelForCell(cell, builder, label, anchorElement, anchorPoint);
                 });
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
@@ -495,7 +537,17 @@
                 if (rowData.odsCode) actions.push(makePracticeEhrAction(rowData.odsCode));
                 return actions;
             });
-            bindCell('jobId', (rowData) => [makeCopyAction(rowData.jobId, 'job ID')]);
+            bindCell('jobId', (rowData) => {
+                const jobUrl = getJobUrl(rowData.jobId);
+                const actions = [makeCopyAction(rowData.jobId, 'job ID')];
+                if (jobUrl) {
+                    actions.push(makeCopyAction(jobUrl, {
+                        title: 'Copy job link',
+                        icon: `${LINK_ICON_SVG}<span>Link</span>`
+                    }));
+                }
+                return actions;
+            });
             bindCell('added', (rowData) => [makeCopyAction(rowData.added, 'added date')]);
             bindCell('status', (rowData) => [makeCopyAction(rowData.status, 'status')]);
 

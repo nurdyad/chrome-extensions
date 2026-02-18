@@ -8,7 +8,7 @@ import * as Email from './email.js';
 let practiceCacheLoadPromise = null;
 let isCdbHydrationTriggered = false;
 
-async function syncPracticeCache({ forceRefresh = false } = {}) {
+async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = {}) {
     if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
 
     const hasCache = Object.keys(state.cachedPractices || {}).length > 0;
@@ -21,18 +21,22 @@ async function syncPracticeCache({ forceRefresh = false } = {}) {
             if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                 setCachedPractices(response.practiceCache);
                 Navigator.buildCdbIndex();
-                if (!forceRefresh) return response.practiceCache;
+                if (!forceRefresh || !allowScrape) return response.practiceCache;
             }
+
+            if (!allowScrape) return state.cachedPractices;
 
             // Refresh path: explicit refresh or empty cache fallback
             await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
             response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-            if (response && response.practiceCache) {
+            if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                 setCachedPractices(response.practiceCache);
                 Navigator.buildCdbIndex();
                 return response.practiceCache;
             }
-            return {};
+            return state.cachedPractices;
+        } catch (e) {
+            return state.cachedPractices;
         } finally {
             practiceCacheLoadPromise = null;
         }
@@ -46,8 +50,8 @@ async function triggerCdbHydration() {
     if (isCdbHydrationTriggered) return;
     isCdbHydrationTriggered = true;
     try {
-        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: 30 });
-        await syncPracticeCache();
+        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: 200 });
+        await syncPracticeCache({ forceRefresh: true, allowScrape: false });
     } catch (e) {
         console.warn('[Panel] CDB hydration skipped.');
     }
@@ -165,29 +169,63 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
+    let practiceFocusFromDirectInputPointer = false;
+    let isPracticeWarmupRunning = false;
+    const warmPracticeCache = (showOnEmptyAfterLoad = false) => {
+        if (isPracticeWarmupRunning) return;
+        if (Object.keys(state.cachedPractices || {}).length > 0) return;
+        isPracticeWarmupRunning = true;
+        syncPracticeCache()
+            .then(() => {
+                Navigator.handleNavigatorInput({ showOnEmpty: showOnEmptyAfterLoad });
+            })
+            .catch(() => undefined)
+            .finally(() => { isPracticeWarmupRunning = false; });
+    };
+
+    const refreshPracticeSuggestions = () => {
+        Navigator.handleNavigatorInput();
+        warmPracticeCache();
+    };
+
     if (pInput) {
-        pInput.addEventListener('input', async () => {
-            await syncPracticeCache();
-            Navigator.handleNavigatorInput();
+        pInput.addEventListener('mousedown', () => {
+            // Distinguish direct input clicks from label-driven focus.
+            practiceFocusFromDirectInputPointer = true;
         });
-        pInput.addEventListener('focus', async () => {
-            await syncPracticeCache();
-            Navigator.handleNavigatorInput();
+        pInput.addEventListener('input', refreshPracticeSuggestions);
+        pInput.addEventListener('focus', () => {
+            const hasTypedQuery = Boolean(pInput.value && pInput.value.trim());
+            const showOnEmpty = practiceFocusFromDirectInputPointer || hasTypedQuery;
+
+            if (showOnEmpty) {
+                Navigator.handleNavigatorInput({ showOnEmpty: true });
+            } else {
+                Navigator.hidePracticeSuggestions();
+            }
+
+            warmPracticeCache(showOnEmpty);
+            practiceFocusFromDirectInputPointer = false;
+        });
+        pInput.addEventListener('blur', () => {
+            practiceFocusFromDirectInputPointer = false;
         });
     }
 
     const cdbInput = document.getElementById('cdbSearchInput');
+    const refreshCdbSuggestions = () => {
+        Navigator.handleCdbInput();
+        syncPracticeCache()
+            .then(async () => {
+                await triggerCdbHydration();
+                Navigator.handleCdbInput();
+            })
+            .catch(() => undefined);
+    };
+
     if (cdbInput) {
-        cdbInput.addEventListener('input', async () => {
-            await syncPracticeCache();
-            triggerCdbHydration();
-            Navigator.handleCdbInput();
-        });
-        cdbInput.addEventListener('focus', async () => {
-            await syncPracticeCache();
-            triggerCdbHydration();
-            Navigator.handleCdbInput();
-        });
+        cdbInput.addEventListener('input', refreshCdbSuggestions);
+        cdbInput.addEventListener('focus', refreshCdbSuggestions);
     }
     
     // --- Create New Practice Button---
@@ -201,29 +239,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     
     // 1. Reset Button
-    document.getElementById('resetSettingsBtn')?.addEventListener('click', () => {
-        if (pInput) pInput.value = '';
+    const resetSettingsBtn = document.getElementById('resetSettingsBtn');
+    resetSettingsBtn?.addEventListener('mousedown', (e) => {
+        // Keep input focus stable when clicking the reset icon button.
+        e.preventDefault();
+    });
+    resetSettingsBtn?.addEventListener('click', () => {
+        if (pInput) {
+            pInput.value = '';
+            pInput.focus();
+        }
         Navigator.clearSelectedPractice();
         showStatus('Settings reset.', 'success');
     });
     
-    // 2. Manual Refresh Button
-    const liveRefreshBtn = document.getElementById('resetSettingsBtn')?.nextElementSibling;
-    if (liveRefreshBtn) {
-        liveRefreshBtn.addEventListener('click', async () => {
-            showStatus('Refreshing live data...', 'loading');
-            try {
-                await syncPracticeCache();
-                if (state.currentSelectedOdsCode) {
-                    await Navigator.displayPracticeStatus();
-                }
-                showStatus('Data updated!', 'success');
-            } catch (e) {
-                showStatus('Refresh failed.', 'error');
-            }
-        });
-    }
-
     // E. Global URL Opening Helper
     const openUrl = (suffix) => {
         try {
@@ -815,13 +844,14 @@ setInterval(async () => {
 }, 5000);
 
 const PANEL_WIDTH = 360;
+const PANEL_HEIGHT = 750;
 
-function resizeToFitContent(extraHeight = 40) {
-  const contentHeight = document.documentElement.scrollHeight;
-  const targetHeight = Math.max(750, contentHeight + extraHeight);
-  window.resizeTo(PANEL_WIDTH, targetHeight);
+function resizeToFitContent() {
+  // Only popup windows can be resized; ignore when embedded in a sidebar iframe.
+  if (window.top !== window) return;
+  try {
+    window.resizeTo(PANEL_WIDTH, PANEL_HEIGHT);
+  } catch (e) {
+    // Ignore resize errors in contexts that disallow script-driven resize.
+  }
 }
-
-window.addEventListener('DOMContentLoaded', () => {
-  resizeToFitContent(40, 750); // You can tweak the 700px value
-});
