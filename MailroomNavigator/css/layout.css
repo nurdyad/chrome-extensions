@@ -348,3 +348,167 @@ label {
     background: #f0f7ff;
     border-color: #9dc3e7;
 }
+
+.recent-id-meta-list {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.recent-id-meta-card {
+    border: 1px solid #d6e1ed;
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: #f7fbff;
+    font-size: 11px;
+    line-height: 1.35;
+    color: #374b5f;
+}
+
+.recent-id-meta-title {
+    font-weight: 600;
+    color: #1f5f99;
+    margin-bottom: 2px;
+}
+
+.recent-id-meta-empty {
+    font-size: 11px;
+    color: #6d8196;
+    font-style: italic;
+}
+
+.bookmarklet-tool-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(17, 24, 39, 0.48);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    z-index: 2147483647;
+}
+
+.bookmarklet-tool-modal.is-open {
+    display: flex;
+}
+
+.bookmarklet-tool-modal-card {
+    width: min(540px, 100%);
+    max-height: calc(100vh - 20px);
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 20px 38px rgba(15, 23, 42, 0.35);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.bookmarklet-tool-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid #d9e3ef;
+}
+
+.bookmarklet-tool-modal-header h3 {
+    margin: 0;
+    font-size: 17px;
+    color: #1f3349;
+}
+
+.bookmarklet-tool-modal-header h3::after {
+    display: none;
+}
+
+.bookmarklet-tool-close-btn {
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+}
+
+.bookmarklet-tool-modal-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 12px 0 12px;
+}
+
+.bookmarklet-tool-modal-body {
+    padding: 10px 12px 12px 12px;
+    overflow: auto;
+    min-height: 120px;
+}
+
+.bookmarklet-tool-chip {
+    border: 1px solid #c6d8ea;
+    border-radius: 8px;
+    background: #f7fbff;
+    color: #1f456b;
+    font-size: 11px;
+    padding: 4px 8px;
+    font-weight: 600;
+}
+
+.bookmarklet-tool-input {
+    flex: 1 1 140px;
+    min-width: 120px;
+    margin: 0;
+    height: 34px;
+}
+
+.bookmarklet-tool-btn {
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid #bfd7ef;
+    background: #ecf5ff;
+    color: #16558d;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 0 10px;
+    cursor: pointer;
+}
+
+.bookmarklet-tool-btn.active {
+    background: #2f8fcb;
+    border-color: #2f8fcb;
+    color: #fff;
+}
+
+.bookmarklet-tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bookmarklet-tool-item {
+    border: 1px solid #d7e4f0;
+    border-radius: 8px;
+    padding: 8px;
+    background: #fbfdff;
+    cursor: pointer;
+}
+
+.bookmarklet-tool-item:hover {
+    background: #f1f8ff;
+}
+
+.bookmarklet-tool-item-main {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11px;
+    color: #0f4f82;
+    word-break: break-all;
+}
+
+.bookmarklet-tool-item-meta {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #60788f;
+}

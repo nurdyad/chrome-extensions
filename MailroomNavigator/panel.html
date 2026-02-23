@@ -183,8 +183,11 @@
             <span id="pasteStatus" style="font-size: 10px; color: #28a745; font-weight: normal; opacity: 0; transition: opacity 0.3s;">Pasted!</span>
         </div>
         
-        <div class="input-with-button">
-          <input type="text" id="manualDocId" placeholder="Paste or type ID..." autocomplete="off">
+        <div class="search-container dashboard-id-search">
+          <div class="input-with-button" style="margin-bottom: 0;">
+            <input type="text" id="manualDocId" placeholder="Paste or type ID..." autocomplete="off">
+          </div>
+          <div id="docIdAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
         </div>
         <div id="manualDocValidation" class="validation-badge neutral">Enter a numeric Document ID.</div>
 
@@ -206,10 +209,13 @@
       <div class="section-container">
         <h3>Single ID Status Check</h3>
         <label for="jobStatusInput">Job ID:</label>
-        <div class="input-with-button">
-          <input id="jobStatusInput" placeholder="Enter Job ID..." autocomplete="off">
+        <div class="search-container dashboard-id-search">
+          <div class="input-with-button" style="margin-bottom: 0;">
+            <input id="jobStatusInput" placeholder="Enter Job ID (UUID or numeric)..." autocomplete="off">
+          </div>
+          <div id="jobIdAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
         </div>
-        <div id="jobStatusValidation" class="validation-badge neutral">Enter a numeric Job ID.</div>
+        <div id="jobStatusValidation" class="validation-badge neutral">Enter a Job ID (UUID or numeric).</div>
         <div class="copy-row">
           <button id="copyJobStatusUrlBtn" class="btn btn-sm btn-ghost">Copy Job ID</button>
           <button id="copyJobStatusLinkBtn" class="btn btn-sm btn-ghost">Copy Job Link</button>
@@ -217,6 +223,7 @@
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
           <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
+          <button id="openProblemReviewBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #0f766e;">Open Problem Review</button>
         </div>
       </div>
 
@@ -250,8 +257,10 @@
         <h3>Recent IDs</h3>
         <label>Recent Document IDs</label>
         <div id="recentDocIdsChips" class="chips-row"></div>
+        <div id="recentDocMetaList" class="recent-id-meta-list"></div>
         <label style="margin-top: 8px;">Recent Job IDs</label>
         <div id="recentJobIdsChips" class="chips-row"></div>
+        <div id="recentJobMetaList" class="recent-id-meta-list"></div>
       </div>
 
     </div>
@@ -315,7 +324,17 @@ Mike Drinkwater"></textarea>
       </div>
     </div>
 
-  </div> 
+  </div>
+  <div id="bookmarkletToolModal" class="bookmarklet-tool-modal" aria-hidden="true">
+    <div class="bookmarklet-tool-modal-card" role="dialog" aria-modal="true" aria-labelledby="bookmarkletToolModalTitle">
+      <div class="bookmarklet-tool-modal-header">
+        <h3 id="bookmarkletToolModalTitle">Tool</h3>
+        <button id="bookmarkletToolModalCloseBtn" class="bookmarklet-tool-close-btn" type="button" aria-label="Close">×</button>
+      </div>
+      <div id="bookmarkletToolModalActions" class="bookmarklet-tool-modal-actions"></div>
+      <div id="bookmarkletToolModalBody" class="bookmarklet-tool-modal-body"></div>
+    </div>
+  </div>
   <div id="toast" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="panel.js"></script>
 </body>
