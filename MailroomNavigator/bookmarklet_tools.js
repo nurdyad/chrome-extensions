@@ -1,4 +1,39 @@
 (function () {
+  const SIDEBAR_ROOT_ID = 'bl-allinone-sidebar-panel';
+  const BASE_RIGHT_GAP = 20;
+  const FLOATING_PANEL_Z = '2147483647';
+
+  function getSidebarOffsetRight() {
+    const sidebar = document.getElementById(SIDEBAR_ROOT_ID);
+    if (!sidebar || sidebar.classList.contains('collapsed')) return BASE_RIGHT_GAP;
+
+    const rect = sidebar.getBoundingClientRect();
+    const width = Math.max(0, Math.ceil(rect.width || 0));
+    if (!width) return BASE_RIGHT_GAP;
+    return width + BASE_RIGHT_GAP + 12;
+  }
+
+  function positionFloatingPanel(panelEl, { topPx = 20, widthPx = 380, heightCss = '85vh' } = {}) {
+    if (!panelEl) return;
+
+    const rightPx = getSidebarOffsetRight();
+    panelEl.style.position = 'fixed';
+    panelEl.style.top = `${topPx}px`;
+    panelEl.style.right = `${rightPx}px`;
+    panelEl.style.left = 'auto';
+    panelEl.style.width = `${widthPx}px`;
+    panelEl.style.height = heightCss;
+    panelEl.style.maxHeight = heightCss;
+    panelEl.style.zIndex = FLOATING_PANEL_Z;
+
+    // Keep the panel usable on narrow screens.
+    if (window.innerWidth - rightPx < Math.min(widthPx + 20, 320)) {
+      panelEl.style.left = '10px';
+      panelEl.style.right = '10px';
+      panelEl.style.width = 'auto';
+    }
+  }
+
   function uuidPickerTool() {
     const existingPanel = document.getElementById('uuid-picker-v6');
     if (existingPanel) existingPanel.remove();
@@ -37,7 +72,8 @@
     let currentMode = 'SQL';
     const div = document.createElement('div');
     div.id = 'uuid-picker-v6';
-    div.style = 'position:fixed; top:20px; right:20px; width:380px; max-height:85vh; overflow:hidden; background:white; border:1px solid #ccc; border-radius:12px; display:flex; flex-direction:column; z-index:999999; box-shadow:0 10px 40px rgba(0,0,0,0.25); font-family: sans-serif;';
+    div.style = 'overflow:hidden; background:white; border:1px solid #ccc; border-radius:12px; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.25); font-family: sans-serif;';
+    positionFloatingPanel(div, { topPx: 20, widthPx: 380, heightCss: '85vh' });
 
     div.innerHTML = `
       <div style="padding:15px; border-bottom:1px solid #eee; background:#fff; position:relative;">
@@ -219,17 +255,12 @@
 
     const panel = document.createElement('div');
     panel.id = 'docman-groups-panel-v1';
-    panel.style.position = 'fixed';
-    panel.style.top = '80px';
-    panel.style.right = '20px';
-    panel.style.width = '350px';
-    panel.style.height = '70vh';
     panel.style.background = 'white';
-    panel.style.zIndex = '999999';
     panel.style.boxShadow = '0 10px 30px rgba(0,0,0,0.25)';
     panel.style.borderRadius = '8px';
     panel.style.display = 'flex';
     panel.style.flexDirection = 'column';
+    positionFloatingPanel(panel, { topPx: 80, widthPx: 350, heightCss: '70vh' });
     panel.innerHTML = `<div style="padding:12px;font-weight:600;border-bottom:1px solid #eee;display:flex;justify-content:space-between;">Docman Groups <span id="closeDG" style="cursor:pointer;font-size:18px;">×</span></div><textarea style="flex:1;border:none;padding:12px;font-family:monospace;font-size:13px;resize:none;">${uniqueGroups.join('\n')}</textarea>`;
     document.body.appendChild(panel);
 

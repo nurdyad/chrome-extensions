@@ -394,25 +394,7 @@ function openPanelPopup() {
     });
 }
 
-function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForTabComplete(tabId, timeoutMs = 2500) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-        try {
-            const tab = await chrome.tabs.get(tabId);
-            if (tab?.status === 'complete') return true;
-        } catch (e) {
-            return false;
-        }
-        await wait(120);
-    }
-    return false;
-}
-
-async function toggleSidebarPanel(tabId) {
+async function ensureSidebarPanelMounted(tabId) {
     await chrome.scripting.executeScript({
         target: { tabId },
         func: (panelUrl) => {
@@ -422,17 +404,16 @@ async function toggleSidebarPanel(tabId) {
             const HANDLE_WIDTH = 24;
             const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
 
-            const mountOrToggleSidebar = () => {
+            const mountSidebar = () => {
                 if (!document.documentElement) return;
 
                 const existingPanel = document.getElementById(ROOT_ID);
                 if (existingPanel) {
-                    const shouldExpand = existingPanel.classList.contains('collapsed');
-                    existingPanel.classList.toggle('collapsed', !shouldExpand);
                     const toggleButton = existingPanel.querySelector('[data-role="toggle"]');
                     if (toggleButton) {
-                        toggleButton.textContent = shouldExpand ? '▶' : '◀';
-                        toggleButton.setAttribute('aria-label', shouldExpand ? 'Collapse panel' : 'Expand panel');
+                        const isCollapsed = existingPanel.classList.contains('collapsed');
+                        toggleButton.textContent = isCollapsed ? '◀' : '▶';
+                        toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
                     }
                     return;
                 }
@@ -525,51 +506,39 @@ async function toggleSidebarPanel(tabId) {
                 window[PENDING_KEY] = true;
                 document.addEventListener('DOMContentLoaded', () => {
                     window[PENDING_KEY] = false;
-                    mountOrToggleSidebar();
+                    mountSidebar();
                 }, { once: true });
                 return;
             }
 
-            mountOrToggleSidebar();
+            mountSidebar();
         },
         args: [chrome.runtime.getURL('panel.html')]
     });
 }
 
+async function ensureSidebarHandleForBetterLetterTab(tabId) {
+    if (typeof tabId !== 'number') return;
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!isBetterLetterUrl(getTabUrl(tab))) return;
+        await ensureSidebarPanelMounted(tabId);
+    } catch (e) {
+        // Ignore tabs that are gone/restricted or not scriptable yet.
+    }
+}
+
 // --- 4. LISTENERS ---
 
 chrome.action.onClicked.addListener(async (tab) => {
-    const tabId = tab?.id;
-    const clickedTabUrl = getTabUrl(tab);
-    await setTargetTabId(tabId);
-
-    if (typeof tabId !== 'number') {
-        openPanelPopup();
-        return;
-    }
-
-    if (!isBetterLetterUrl(clickedTabUrl)) {
-        // Outside BetterLetter we still allow the popup window.
-        openPanelPopup();
-        return;
-    }
-
-    try {
-        await toggleSidebarPanel(tabId);
-    } catch (error) {
-        // BetterLetter page is still loading. Wait briefly and retry sidebar injection.
-        await waitForTabComplete(tabId, 3000);
-        try {
-            await toggleSidebarPanel(tabId);
-        } catch (retryError) {
-            // Last resort keeps extension usable if scripting is blocked unexpectedly.
-            openPanelPopup();
-        }
-    }
+    await setTargetTabId(tab?.id);
+    openPanelPopup();
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
-    setTargetTabId(activeInfo?.tabId).catch(() => undefined);
+    const tabId = activeInfo?.tabId;
+    setTargetTabId(tabId).catch(() => undefined);
+    ensureSidebarHandleForBetterLetterTab(tabId).catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -577,6 +546,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const maybeUrl = typeof changeInfo?.url === 'string' ? changeInfo.url : getTabUrl(tab);
     if (!isBetterLetterUrl(maybeUrl)) return;
     chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
+    ensureSidebarHandleForBetterLetterTab(tabId).catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
