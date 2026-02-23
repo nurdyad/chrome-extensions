@@ -89,6 +89,30 @@ function extractNumericId(value) {
     return match ? match[0] : '';
 }
 
+function extractJobId(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const urlMatch = raw.match(/\/admin_panel\/bots\/jobs\/([^/?#\s]+)/i);
+    if (urlMatch?.[1]) {
+        try {
+            return decodeURIComponent(urlMatch[1]).trim();
+        } catch (e) {
+            return urlMatch[1].trim();
+        }
+    }
+
+    const uuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    if (uuidMatch) return uuidMatch[0];
+
+    const numericMatch = raw.match(/\b\d+\b/);
+    if (numericMatch) return numericMatch[0];
+
+    // Allow direct opaque IDs (for non-numeric/non-UUID job keys) when pasted as a single token.
+    if (/^[A-Za-z0-9_-]{8,}$/.test(raw)) return raw;
+    return '';
+}
+
 function extractAllNumericIds(value) {
     const matches = String(value || '').match(/\d+/g) || [];
     return [...new Set(matches.map(id => id.trim()).filter(Boolean))];
@@ -104,7 +128,36 @@ function getDocumentActionUrl(action, id) {
 }
 
 function getJobStatusUrl(jobId) {
-    return jobId ? `https://app.betterletter.ai/admin_panel/bots/jobs/${jobId}` : '';
+    const normalized = String(jobId || '').trim();
+    return normalized ? `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(normalized)}` : '';
+}
+
+function getProblemReviewUrl(jobId) {
+    const normalized = String(jobId || '').trim();
+    return normalized
+        ? `https://app.betterletter.ai/admin_panel/error_fixer/problem_linked_to_problem_review/${encodeURIComponent(normalized)}`
+        : '';
+}
+
+function getTabUrl(tab) {
+    if (typeof tab?.url === 'string') return tab.url;
+    if (typeof tab?.pendingUrl === 'string') return tab.pendingUrl;
+    return '';
+}
+
+function isBotsDashboardUrl(url) {
+    const normalized = String(url || '');
+    return normalized.startsWith('https://app.betterletter.ai/admin_panel/bots/dashboard');
+}
+
+function collapseText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function truncateText(value, max = 90) {
+    const clean = collapseText(value);
+    if (clean.length <= max) return clean;
+    return `${clean.slice(0, Math.max(0, max - 1))}…`;
 }
 
 async function openUrlsWithLoading(urls, actionButtons = []) {
@@ -147,7 +200,14 @@ function openUrlForId(baseUrl, id, label = 'ID') {
 // --- 2. Global Hide Suggestions ---
 function hideSuggestions() {
     setTimeout(() => {
-        const ids = ['suggestions', 'cdbSuggestions', 'autocompleteResults', 'practiceAutocompleteResultsContainer', 'jobIdAutocompleteResultsContainer'];
+        const ids = [
+            'suggestions',
+            'cdbSuggestions',
+            'autocompleteResults',
+            'practiceAutocompleteResultsContainer',
+            'docIdAutocompleteResultsContainer',
+            'jobIdAutocompleteResultsContainer'
+        ];
         ids.forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
@@ -315,14 +375,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const jobStatusValidation = document.getElementById('jobStatusValidation');
     const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
+    const docIdAutocompleteResultsContainer = document.getElementById('docIdAutocompleteResultsContainer');
+    const jobIdAutocompleteResultsContainer = document.getElementById('jobIdAutocompleteResultsContainer');
+
     const recentDocIdsChips = document.getElementById('recentDocIdsChips');
     const recentJobIdsChips = document.getElementById('recentJobIdsChips');
+    const recentDocMetaList = document.getElementById('recentDocMetaList');
+    const recentJobMetaList = document.getElementById('recentJobMetaList');
 
     const btnJobs = document.getElementById('btnJobs');
     const btnOban = document.getElementById('btnOban');
     const btnLog = document.getElementById('btnLog');
     const btnAdmin = document.getElementById('btnAdmin');
     const openJobStatusBtn = document.getElementById('openJobStatusBtn');
+    const openProblemReviewBtn = document.getElementById('openProblemReviewBtn');
     const clearJobStatusInputBtn = document.getElementById('clearJobStatusInputBtn');
 
     const copyJobsUrlBtn = document.getElementById('copyJobsUrlBtn');
@@ -337,6 +403,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
     const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
+    const bookmarkletToolModal = document.getElementById('bookmarkletToolModal');
+    const bookmarkletToolModalTitle = document.getElementById('bookmarkletToolModalTitle');
+    const bookmarkletToolModalActions = document.getElementById('bookmarkletToolModalActions');
+    const bookmarkletToolModalBody = document.getElementById('bookmarkletToolModalBody');
+    const bookmarkletToolModalCloseBtn = document.getElementById('bookmarkletToolModalCloseBtn');
 
     const workflowNamesInput = document.getElementById('workflowNamesInput');
     const workflowSkipDuplicates = document.getElementById('workflowSkipDuplicates');
@@ -349,6 +420,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let recentDocIds = [];
     let recentJobIds = [];
+    let recentDocSuggestionMeta = {};
+    let recentJobSuggestionMeta = {};
+    let dashboardRows = [];
+    let dashboardRowsByDocId = new Map();
+    let dashboardRowsByJobId = new Map();
+    let dashboardRowsLoadPromise = null;
+    let dashboardRowsLoadedAt = 0;
+    let dashboardRowsSourceTabId = null;
+    const DASHBOARD_SUGGESTION_STALE_MS = 45000;
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -365,20 +445,136 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    const closeBookmarkletToolModal = () => {
+        if (!bookmarkletToolModal) return;
+        bookmarkletToolModal.classList.remove('is-open');
+        bookmarkletToolModal.setAttribute('aria-hidden', 'true');
+        if (bookmarkletToolModalActions) bookmarkletToolModalActions.innerHTML = '';
+        if (bookmarkletToolModalBody) bookmarkletToolModalBody.innerHTML = '';
+    };
+
+    const openBookmarkletToolModal = (title) => {
+        if (!bookmarkletToolModal) return false;
+        if (bookmarkletToolModalTitle) bookmarkletToolModalTitle.textContent = title || 'Tool';
+        if (bookmarkletToolModalActions) bookmarkletToolModalActions.innerHTML = '';
+        if (bookmarkletToolModalBody) bookmarkletToolModalBody.innerHTML = '';
+        bookmarkletToolModal.classList.add('is-open');
+        bookmarkletToolModal.setAttribute('aria-hidden', 'false');
+        return true;
+    };
+
+    bookmarkletToolModalCloseBtn?.addEventListener('click', closeBookmarkletToolModal);
+    bookmarkletToolModal?.addEventListener('mousedown', (event) => {
+        if (event.target === bookmarkletToolModal) closeBookmarkletToolModal();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && bookmarkletToolModal?.classList.contains('is-open')) {
+            closeBookmarkletToolModal();
+        }
+    });
+
+    const normalizeSuggestionMetaMap = (rawMap = {}) => {
+        if (!rawMap || typeof rawMap !== 'object') return {};
+        const normalized = {};
+        Object.entries(rawMap).forEach(([id, meta]) => {
+            if (!id || !meta || typeof meta !== 'object') return;
+            normalized[String(id).trim()] = {
+                documentId: String(meta.documentId || '').trim(),
+                jobType: String(meta.jobType || '').trim(),
+                practiceName: String(meta.practiceName || '').trim(),
+                jobId: String(meta.jobId || '').trim(),
+                latestError: String(meta.latestError || '').trim(),
+                attemptCount: Number.isFinite(Number(meta.attemptCount)) ? Number(meta.attemptCount) : null
+            };
+        });
+        return normalized;
+    };
+
     const saveRecentIds = async () => {
-        await chrome.storage.local.set({ recentDocIds, recentJobIds });
+        await chrome.storage.local.set({
+            recentDocIds,
+            recentJobIds,
+            recentDocSuggestionMeta,
+            recentJobSuggestionMeta
+        });
     };
 
     const pushRecentId = async (type, id) => {
-        if (!id) return;
+        const normalized = String(id || '').trim();
+        if (!normalized) return;
         if (type === 'doc') {
-            recentDocIds = [id, ...recentDocIds.filter(x => x !== id)].slice(0, 5);
+            recentDocIds = [normalized, ...recentDocIds.filter(x => x !== normalized)].slice(0, 5);
         } else {
-            recentJobIds = [id, ...recentJobIds.filter(x => x !== id)].slice(0, 5);
+            recentJobIds = [normalized, ...recentJobIds.filter(x => x !== normalized)].slice(0, 5);
         }
         await saveRecentIds();
         renderRecentIdChips();
     };
+
+    const recordSuggestionSelection = async (type, row) => {
+        if (!row) return;
+        const id = type === 'doc' ? String(row.documentId || '').trim() : String(row.jobId || '').trim();
+        if (!id) return;
+
+        const metaEntry = {
+            documentId: String(row.documentId || '').trim(),
+            jobType: String(row.jobType || '').trim(),
+            practiceName: String(row.practiceName || row.practice || '').trim(),
+            jobId: String(row.jobId || '').trim(),
+            latestError: String(row.latestError || row.status || '').trim(),
+            attemptCount: Number.isFinite(Number(row.attemptCount)) ? Number(row.attemptCount) : null
+        };
+
+        if (type === 'doc') {
+            recentDocSuggestionMeta = { ...recentDocSuggestionMeta, [id]: metaEntry };
+        } else {
+            recentJobSuggestionMeta = { ...recentJobSuggestionMeta, [id]: metaEntry };
+        }
+
+        await saveRecentIds();
+        renderRecentIdChips();
+    };
+
+    const normalizeDashboardRow = (row) => {
+        const documentId = extractNumericId(row?.documentId || row?.document || '');
+        const jobId = extractJobId(row?.jobId || '');
+        const parsedAttemptCount = Number.parseInt(row?.attemptCount, 10);
+        const statusText = collapseText(row?.status || '');
+        const latestError = collapseText(row?.latestError || '') || statusText;
+        return {
+            documentId,
+            jobType: collapseText(row?.jobType || ''),
+            practiceName: collapseText(row?.practiceName || row?.practice || ''),
+            practice: collapseText(row?.practice || ''),
+            odsCode: collapseText(row?.odsCode || ''),
+            jobId,
+            status: statusText,
+            latestError,
+            attemptCount: Number.isFinite(parsedAttemptCount) ? parsedAttemptCount : null,
+            added: collapseText(row?.added || '')
+        };
+    };
+
+    const indexDashboardRows = (rows) => {
+        dashboardRows = Array.isArray(rows)
+            ? rows.map(normalizeDashboardRow).filter((row) => row.documentId || row.jobId)
+            : [];
+
+        dashboardRowsByDocId = new Map();
+        dashboardRowsByJobId = new Map();
+
+        dashboardRows.forEach((row) => {
+            if (row.documentId && !dashboardRowsByDocId.has(row.documentId)) {
+                dashboardRowsByDocId.set(row.documentId, row);
+            }
+            if (row.jobId && !dashboardRowsByJobId.has(row.jobId)) {
+                dashboardRowsByJobId.set(row.jobId, row);
+            }
+        });
+    };
+
+    const getRowForDocId = (id) => dashboardRowsByDocId.get(String(id || '').trim()) || null;
+    const getRowForJobId = (id) => dashboardRowsByJobId.get(String(id || '').trim()) || null;
 
     const createChip = (id, type) => {
         const chip = document.createElement('button');
@@ -389,14 +585,55 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (type === 'doc') {
                 if (manualDocIdInput) manualDocIdInput.value = id;
                 updateDocValidation();
+                hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
                 await openUrlsWithLoading([getDocumentActionUrl('jobs', id)], [btnJobs]);
             } else {
                 if (jobStatusInput) jobStatusInput.value = id;
                 updateJobValidation();
+                hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
                 await openUrlsWithLoading([getJobStatusUrl(id)], [openJobStatusBtn]);
             }
         });
         return chip;
+    };
+
+    const renderRecentMetaList = (container, ids, type) => {
+        if (!container) return;
+        container.innerHTML = '';
+        container.style.display = 'none';
+        const metaMap = type === 'doc' ? recentDocSuggestionMeta : recentJobSuggestionMeta;
+
+        const createLine = (label, value) => {
+            const line = document.createElement('div');
+            line.textContent = `${label}: ${value || '—'}`;
+            return line;
+        };
+
+        ids.forEach((id) => {
+            const row = metaMap[String(id || '').trim()];
+            if (!row || typeof row !== 'object') return;
+
+            const card = document.createElement('div');
+            card.className = 'recent-id-meta-card';
+
+            const title = document.createElement('div');
+            title.className = 'recent-id-meta-title';
+            title.textContent = type === 'doc'
+                ? `Document ${row.documentId || id}`
+                : `Job ${row.jobId || row.documentId || id}`;
+
+            card.appendChild(title);
+            card.appendChild(createLine('Job type', row.jobType || 'N/A'));
+            card.appendChild(createLine('Practice', row.practiceName || 'N/A'));
+            card.appendChild(createLine('Job ID', row.jobId || 'N/A'));
+            card.appendChild(createLine('Latest error', truncateText(row.latestError || row.status || 'N/A', 140)));
+            card.appendChild(createLine('Attempts', row.attemptCount ?? 'N/A'));
+            container.appendChild(card);
+        });
+
+        if (container.children.length > 0) {
+            container.style.display = 'flex';
+        }
     };
 
     const renderRecentIdChips = () => {
@@ -408,28 +645,39 @@ document.addEventListener('DOMContentLoaded', async () => {
             recentJobIdsChips.innerHTML = '';
             recentJobIds.forEach(id => recentJobIdsChips.appendChild(createChip(id, 'job')));
         }
+        renderRecentMetaList(recentDocMetaList, recentDocIds, 'doc');
+        renderRecentMetaList(recentJobMetaList, recentJobIds, 'job');
     };
 
     const updateDocValidation = () => {
         const id = extractNumericId(manualDocIdInput?.value);
+        const row = id ? getRowForDocId(id) : null;
+        const metaText = row
+            ? ` · ${row.jobType || 'job'} · ${truncateText(row.practiceName || row.practice, 40)}`
+            : '';
+
         setValidationBadge(
             manualDocValidation,
             manualDocIdInput?.value ? Boolean(id) : null,
             'Enter a numeric Document ID.',
-            `✓ Valid Document ID: ${id}`,
+            `✓ Valid Document ID: ${id}${metaText}`,
             '✕ Invalid Document ID.'
         );
         return id;
     };
 
     const updateJobValidation = () => {
-        const id = extractNumericId(jobStatusInput?.value);
+        const id = extractJobId(jobStatusInput?.value);
+        const row = id ? getRowForJobId(id) : null;
+        const statusText = row ? truncateText(row.latestError || row.status || 'Status available', 70) : '';
+        const attemptsText = Number.isFinite(row?.attemptCount) ? ` · ${row.attemptCount} attempts` : '';
+
         setValidationBadge(
             jobStatusValidation,
             jobStatusInput?.value ? Boolean(id) : null,
-            'Enter a numeric Job ID.',
-            `✓ Valid Job ID: ${id}`,
-            '✕ Invalid Job ID.'
+            'Enter a Job ID (UUID or numeric).',
+            `✓ Valid Job ID: ${id}${statusText ? ` · ${statusText}` : ''}${attemptsText}`,
+            '✕ Invalid Job ID (UUID or numeric).'
         );
         return id;
     };
@@ -446,9 +694,124 @@ document.addEventListener('DOMContentLoaded', async () => {
         return ids;
     };
 
+    const hideDashboardAutocomplete = (container) => {
+        if (!container) return;
+        container.style.display = 'none';
+        container.innerHTML = '';
+    };
+
+    const renderDashboardAutocomplete = ({ container, rows, mode, onSelect }) => {
+        if (!container) return;
+        container.innerHTML = '';
+        if (!rows.length) {
+            container.style.display = 'none';
+            return;
+        }
+
+        const countHeader = document.createElement('div');
+        countHeader.className = 'suggestion-count';
+        countHeader.textContent = `${rows.length} dashboard suggestion${rows.length === 1 ? '' : 's'}`;
+        container.appendChild(countHeader);
+
+        rows.forEach((row) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item dashboard-autocomplete-item';
+
+            const main = document.createElement('div');
+            main.className = 'suggestion-main';
+            main.textContent = mode === 'doc'
+                ? `Doc ${row.documentId || '—'} · ${row.jobType || 'Unknown job type'}`
+                : `Job ${row.jobId || '—'} · Doc ${row.documentId || '—'}`;
+
+            const meta = document.createElement('div');
+            meta.className = 'suggestion-meta';
+            meta.textContent = `${row.practiceName || row.practice || 'Unknown practice'}${row.odsCode ? ` (${row.odsCode})` : ''}${Number.isFinite(row.attemptCount) ? ` · ${row.attemptCount} attempts` : ''}`;
+
+            const status = document.createElement('div');
+            status.className = 'suggestion-status';
+            status.textContent = truncateText(row.latestError || row.status || 'No status message found.', 130);
+
+            item.append(main, meta, status);
+            item.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onSelect(row);
+            });
+
+            container.appendChild(item);
+        });
+
+        container.style.display = 'block';
+    };
+
+    const getDashboardMatches = (query, mode) => {
+        const normalizedQuery = collapseText(query).toLowerCase();
+        const source = dashboardRows.filter((row) => mode === 'doc' ? Boolean(row.documentId) : Boolean(row.jobId));
+
+        const filtered = normalizedQuery
+            ? source.filter((row) => {
+                const haystack = [
+                    row.documentId,
+                    row.jobId,
+                    row.jobType,
+                    row.practiceName,
+                    row.practice,
+                    row.latestError,
+                    row.status
+                ].map(value => String(value || '').toLowerCase());
+                return haystack.some(value => value.includes(normalizedQuery));
+            })
+            : source;
+
+        const keyFor = (row) => mode === 'doc' ? row.documentId : row.jobId;
+        const seen = new Set();
+        const uniqueRows = [];
+        for (const row of filtered) {
+            const key = keyFor(row);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            uniqueRows.push(row);
+            if (uniqueRows.length >= 50) break;
+        }
+        return uniqueRows;
+    };
+
+    const showDocIdSuggestions = () => {
+        const matches = getDashboardMatches(manualDocIdInput?.value, 'doc');
+        renderDashboardAutocomplete({
+            container: docIdAutocompleteResultsContainer,
+            rows: matches,
+            mode: 'doc',
+            onSelect: (row) => {
+                if (!manualDocIdInput) return;
+                manualDocIdInput.value = row.documentId || '';
+                recordSuggestionSelection('doc', row).catch(() => undefined);
+                updateDocValidation();
+                hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
+            }
+        });
+    };
+
+    const showJobIdSuggestions = () => {
+        const matches = getDashboardMatches(jobStatusInput?.value, 'job');
+        renderDashboardAutocomplete({
+            container: jobIdAutocompleteResultsContainer,
+            rows: matches,
+            mode: 'job',
+            onSelect: (row) => {
+                if (!jobStatusInput) return;
+                jobStatusInput.value = row.jobId || '';
+                recordSuggestionSelection('job', row).catch(() => undefined);
+                updateJobValidation();
+                hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
+            }
+        });
+    };
+
     const handleDocAction = async (action, actionButton) => {
         const id = updateDocValidation();
         if (!id) return showToast('No valid Document ID.');
+        hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
         await pushRecentId('doc', id);
         await openUrlsWithLoading([getDocumentActionUrl(action, id)], [actionButton]);
     };
@@ -461,7 +824,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const getBestBetterLetterTab = async () => {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTab?.url?.startsWith('https://app.betterletter.ai/')) {
+        if (getTabUrl(activeTab).startsWith('https://app.betterletter.ai/')) {
             return activeTab;
         }
 
@@ -481,6 +844,245 @@ document.addEventListener('DOMContentLoaded', async () => {
             })[0] || null;
     };
 
+    const getBestDashboardTab = async () => {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (isBotsDashboardUrl(getTabUrl(activeTab))) return activeTab;
+
+        const { targetTabId } = await chrome.storage.local.get(['targetTabId']);
+        if (typeof targetTabId === 'number') {
+            try {
+                const targetTab = await chrome.tabs.get(targetTabId);
+                if (isBotsDashboardUrl(getTabUrl(targetTab))) return targetTab;
+            } catch (e) {
+                // Ignore closed/missing target tabs.
+            }
+        }
+
+        const dashboardTabs = await chrome.tabs.query({ url: 'https://app.betterletter.ai/admin_panel/bots/dashboard*' });
+        if (!dashboardTabs.length) return null;
+
+        return dashboardTabs
+            .slice()
+            .sort((a, b) => {
+                const activeDiff = Number(Boolean(b.active)) - Number(Boolean(a.active));
+                if (activeDiff !== 0) return activeDiff;
+                const lastAccessedDiff = Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0);
+                if (lastAccessedDiff !== 0) return lastAccessedDiff;
+                return Number(b.id || 0) - Number(a.id || 0);
+            })[0] || null;
+    };
+
+    const scrapeDashboardRowsFromTab = async (tabId) => {
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                const collapse = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+                const normalizeHeader = (value) => collapse(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                const parseDocumentId = (value) => {
+                    const match = collapse(value).match(/\d+/);
+                    return match ? match[0] : '';
+                };
+
+                const parseJobId = (value) => {
+                    const raw = collapse(value);
+                    if (!raw) return '';
+                    const urlMatch = raw.match(/\/admin_panel\/bots\/jobs\/([^/?#\s]+)/i);
+                    if (urlMatch?.[1]) return urlMatch[1];
+
+                    const uuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+                    if (uuidMatch) return uuidMatch[0];
+
+                    const numericMatch = raw.match(/\b\d+\b/);
+                    if (numericMatch) return numericMatch[0];
+
+                    if (/^[A-Za-z0-9_-]{8,}$/.test(raw)) return raw;
+                    return '';
+                };
+
+                const parseAttemptCount = (value) => {
+                    const matches = [...collapse(value).matchAll(/(\d+)\s*attempts?/gi)]
+                        .map(match => Number.parseInt(match[1], 10))
+                        .filter(Number.isFinite);
+                    if (!matches.length) return null;
+                    return Math.max(...matches);
+                };
+
+                const parseLatestError = (value) => {
+                    const statusText = collapse(value).replace(/copy status/ig, '').trim();
+                    if (!statusText) return '';
+                    const withoutTrailingAttempt = statusText.replace(/\b\d+\s*attempts?\b\s*$/i, '').trim();
+                    return withoutTrailingAttempt || statusText;
+                };
+
+                const resolveHeaderMap = (table) => {
+                    if (!table) return null;
+                    const headerCells = Array.from(table.querySelectorAll('thead th'));
+                    if (!headerCells.length) return null;
+
+                    const map = {};
+                    headerCells.forEach((th, index) => {
+                        const normalized = normalizeHeader(th.textContent);
+                        if (!normalized) return;
+                        if (normalized.includes('document') && normalized.includes('id')) {
+                            map.document = index;
+                            return;
+                        }
+                        if (normalized.includes('jobtype')) {
+                            map.jobType = index;
+                            return;
+                        }
+                        if (normalized === 'jobid' || (normalized.includes('job') && normalized.includes('id'))) {
+                            if (typeof map.jobId !== 'number') map.jobId = index;
+                            return;
+                        }
+                        if (normalized.includes('practice')) {
+                            map.practice = index;
+                            return;
+                        }
+                        if (normalized.includes('added')) {
+                            map.added = index;
+                            return;
+                        }
+                        if (normalized.includes('status')) {
+                            map.status = index;
+                        }
+                    });
+
+                    if (typeof map.document !== 'number' || typeof map.jobId !== 'number') return null;
+                    return map;
+                };
+
+                const tables = Array.from(document.querySelectorAll('table'));
+                let targetTable = null;
+                let headerMap = null;
+                for (const table of tables) {
+                    const map = resolveHeaderMap(table);
+                    if (map) {
+                        targetTable = table;
+                        headerMap = map;
+                        break;
+                    }
+                }
+
+                if (!targetTable || !headerMap) {
+                    return { rows: [], sourceUrl: window.location.href };
+                }
+
+                const rows = [];
+                const bodyRows = Array.from(targetTable.querySelectorAll('tbody tr'));
+                bodyRows.forEach((rowEl) => {
+                    const cells = Array.from(rowEl.querySelectorAll('td'));
+                    if (!cells.length) return;
+
+                    const getCell = (key) => {
+                        const idx = headerMap[key];
+                        return typeof idx === 'number' ? cells[idx] : null;
+                    };
+                    const getText = (key) => collapse(getCell(key)?.innerText || getCell(key)?.textContent || '');
+
+                    const documentCell = getCell('document');
+                    const documentLink = documentCell?.querySelector('a');
+                    const documentId = parseDocumentId(documentLink?.textContent || getText('document'));
+                    if (!documentId) return;
+
+                    const jobCell = getCell('jobId');
+                    const jobLink = jobCell?.querySelector('a[href*="/admin_panel/bots/jobs/"]');
+                    let jobId = '';
+                    const href = jobLink?.getAttribute('href') || '';
+                    const hrefMatch = href.match(/\/admin_panel\/bots\/jobs\/([^/?#]+)/i);
+                    if (hrefMatch?.[1]) {
+                        try {
+                            jobId = decodeURIComponent(hrefMatch[1]);
+                        } catch (e) {
+                            jobId = hrefMatch[1];
+                        }
+                    }
+                    if (!jobId) {
+                        jobId = parseJobId(jobLink?.textContent || getText('jobId'));
+                    }
+
+                    const practiceText = getText('practice');
+                    const odsCode = practiceText.match(/\b[A-Z]\d{5}\b/)?.[0] || '';
+                    const practiceName = collapse(practiceText.replace(odsCode, '')) || practiceText;
+                    const statusText = getText('status');
+
+                    rows.push({
+                        documentId,
+                        jobType: getText('jobType'),
+                        practice: practiceText,
+                        practiceName,
+                        odsCode,
+                        jobId,
+                        added: getText('added'),
+                        status: statusText,
+                        latestError: parseLatestError(statusText),
+                        attemptCount: parseAttemptCount(statusText)
+                    });
+                });
+
+                return { rows, sourceUrl: window.location.href };
+            }
+        });
+
+        return Array.isArray(result?.rows) ? result.rows : [];
+    };
+
+    const syncDashboardSuggestionRows = async ({ force = false, silent = true } = {}) => {
+        if (dashboardRowsLoadPromise) return dashboardRowsLoadPromise;
+
+        dashboardRowsLoadPromise = (async () => {
+            const dashboardTab = await getBestDashboardTab();
+            if (!dashboardTab?.id) {
+                if (!silent && dashboardRows.length === 0) {
+                    showToast('Open a Bots Dashboard tab to load ID suggestions.');
+                }
+                return dashboardRows;
+            }
+
+            const isFreshForSameTab = (
+                !force &&
+                dashboardRows.length > 0 &&
+                dashboardRowsSourceTabId === dashboardTab.id &&
+                (Date.now() - dashboardRowsLoadedAt < DASHBOARD_SUGGESTION_STALE_MS)
+            );
+            if (isFreshForSameTab) {
+                return dashboardRows;
+            }
+
+            try {
+                const rows = await scrapeDashboardRowsFromTab(dashboardTab.id);
+                indexDashboardRows(rows);
+                dashboardRowsLoadedAt = Date.now();
+                dashboardRowsSourceTabId = dashboardTab.id;
+                renderRecentIdChips();
+                updateDocValidation();
+                updateJobValidation();
+                return dashboardRows;
+            } catch (error) {
+                if (!silent && dashboardRows.length === 0) {
+                    showToast('Could not read dashboard rows.');
+                }
+                return dashboardRows;
+            }
+        })();
+
+        try {
+            return await dashboardRowsLoadPromise;
+        } finally {
+            dashboardRowsLoadPromise = null;
+        }
+    };
+
+    document.getElementById('jobManagerGlobalToggleBtn')?.addEventListener('click', () => {
+        syncDashboardSuggestionRows({ silent: true })
+            .then(() => {
+                if (document.activeElement === manualDocIdInput) showDocIdSuggestions();
+                if (document.activeElement === jobStatusInput) showJobIdSuggestions();
+            })
+            .catch(() => undefined);
+    });
+
     const tryAutoSelectPracticeFromActiveTab = async () => {
         try {
             const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -498,35 +1100,277 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    const runBookmarkletTool = async (toolName) => {
+    const getActiveBetterLetterTabForTool = async () => {
+        const tab = await getBestBetterLetterTab();
+        if (!tab?.id) {
+            showToast('Open a BetterLetter tab first.');
+            return null;
+        }
+        return tab;
+    };
+
+    const fetchUuidPickerRows = async (tabId) => {
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                const normalize = (value) => String(value || '').trim();
+                const regex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+                const allHtml = document.body?.innerHTML || '';
+                const uniqueUuids = [...new Set((allHtml.match(regex) || []).map(item => item.toLowerCase()))];
+
+                const getRowData = (uuid) => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                    const normalizedUuid = String(uuid || '').toLowerCase();
+                    let node;
+                    while ((node = walker.nextNode())) {
+                        const textContent = String(node.textContent || '');
+                        if (!textContent.toLowerCase().includes(normalizedUuid)) continue;
+
+                        const parentRow = node.parentElement?.closest('tr');
+                        let dateStr = 'N/A';
+                        if (parentRow) {
+                            const cells = parentRow.querySelectorAll('td');
+                            if (cells.length >= 8) dateStr = normalize(cells[7]?.textContent);
+                        }
+                        return { raw: normalize(textContent), date: dateStr || 'N/A' };
+                    }
+                    return { raw: uuid, date: 'N/A' };
+                };
+
+                return uniqueUuids.map((id) => {
+                    const row = getRowData(id);
+                    return {
+                        id,
+                        raw: row.raw || id,
+                        date: row.date || 'N/A'
+                    };
+                });
+            }
+        });
+        return Array.isArray(result) ? result : [];
+    };
+
+    const openUuidPickerModal = async () => {
         try {
-            const tab = await getBestBetterLetterTab();
-            if (!tab?.id) {
-                showToast('Open a BetterLetter tab first.');
+            const tab = await getActiveBetterLetterTabForTool();
+            if (!tab) return;
+
+            const rows = await fetchUuidPickerRows(tab.id);
+            if (!rows.length) {
+                showToast('No UUIDs found on the active page.');
                 return;
             }
 
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ['bookmarklet_tools.js']
+            if (!openBookmarkletToolModal('UUID Picker')) return;
+
+            let mode = 'SQL';
+            const getDisplayValue = (item) => {
+                if (mode === 'RAW') return item.raw || item.id;
+                if (mode === 'UUID') return item.id;
+                return `'${item.id}'`;
+            };
+
+            const searchInput = document.createElement('input');
+            searchInput.className = 'bookmarklet-tool-input';
+            searchInput.placeholder = 'Search UUID or row text...';
+
+            const dateInput = document.createElement('input');
+            dateInput.className = 'bookmarklet-tool-input';
+            dateInput.placeholder = 'Filter date...';
+
+            const sqlBtn = document.createElement('button');
+            sqlBtn.type = 'button';
+            sqlBtn.className = 'bookmarklet-tool-btn active';
+            sqlBtn.textContent = 'SQL';
+
+            const rawBtn = document.createElement('button');
+            rawBtn.type = 'button';
+            rawBtn.className = 'bookmarklet-tool-btn';
+            rawBtn.textContent = 'RAW';
+
+            const uuidBtn = document.createElement('button');
+            uuidBtn.type = 'button';
+            uuidBtn.className = 'bookmarklet-tool-btn';
+            uuidBtn.textContent = 'UUID';
+
+            const copyAllBtn = document.createElement('button');
+            copyAllBtn.type = 'button';
+            copyAllBtn.className = 'bookmarklet-tool-btn';
+            copyAllBtn.textContent = 'Copy Visible';
+
+            const exportBtn = document.createElement('button');
+            exportBtn.type = 'button';
+            exportBtn.className = 'bookmarklet-tool-btn';
+            exportBtn.textContent = 'Export';
+
+            bookmarkletToolModalActions?.append(sqlBtn, rawBtn, uuidBtn, copyAllBtn, exportBtn, searchInput, dateInput);
+
+            const summaryChip = document.createElement('div');
+            summaryChip.className = 'bookmarklet-tool-chip';
+            summaryChip.style.marginBottom = '8px';
+
+            const list = document.createElement('div');
+            list.className = 'bookmarklet-tool-list';
+
+            bookmarkletToolModalBody?.append(summaryChip, list);
+
+            const getVisibleRows = () => {
+                const query = searchInput.value.trim().toLowerCase();
+                const dateQuery = dateInput.value.trim().toLowerCase();
+                return rows.filter((item) => {
+                    const hay = `${item.id} ${item.raw}`.toLowerCase();
+                    const dateVal = String(item.date || '').toLowerCase();
+                    const matchesQuery = !query || hay.includes(query);
+                    const matchesDate = !dateQuery || dateVal.includes(dateQuery);
+                    return matchesQuery && matchesDate;
+                });
+            };
+
+            const setMode = (newMode) => {
+                mode = newMode;
+                [sqlBtn, rawBtn, uuidBtn].forEach((btn) => btn.classList.remove('active'));
+                if (newMode === 'SQL') sqlBtn.classList.add('active');
+                if (newMode === 'RAW') rawBtn.classList.add('active');
+                if (newMode === 'UUID') uuidBtn.classList.add('active');
+                render();
+            };
+
+            const render = () => {
+                const visibleRows = getVisibleRows();
+                summaryChip.textContent = `Showing ${visibleRows.length} of ${rows.length} UUIDs`;
+                list.innerHTML = '';
+                visibleRows.forEach((item) => {
+                    const rowEl = document.createElement('div');
+                    rowEl.className = 'bookmarklet-tool-item';
+
+                    const main = document.createElement('div');
+                    main.className = 'bookmarklet-tool-item-main';
+                    main.textContent = getDisplayValue(item);
+
+                    const meta = document.createElement('div');
+                    meta.className = 'bookmarklet-tool-item-meta';
+                    meta.textContent = `Date: ${item.date || 'N/A'}`;
+
+                    rowEl.append(main, meta);
+                    rowEl.addEventListener('click', async () => {
+                        try {
+                            await navigator.clipboard.writeText(getDisplayValue(item));
+                            showToast('Copied.');
+                        } catch (e) {
+                            showToast('Copy failed.');
+                        }
+                    });
+                    list.appendChild(rowEl);
+                });
+            };
+
+            searchInput.addEventListener('input', render);
+            dateInput.addEventListener('input', render);
+            sqlBtn.addEventListener('click', () => setMode('SQL'));
+            rawBtn.addEventListener('click', () => setMode('RAW'));
+            uuidBtn.addEventListener('click', () => setMode('UUID'));
+
+            copyAllBtn.addEventListener('click', async () => {
+                const visibleRows = getVisibleRows();
+                if (!visibleRows.length) return showToast('No visible rows.');
+                try {
+                    await navigator.clipboard.writeText(visibleRows.map(getDisplayValue).join(', '));
+                    showToast(`Copied ${visibleRows.length} UUIDs.`);
+                } catch (e) {
+                    showToast('Copy failed.');
+                }
             });
 
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: (name) => {
-                    if (!window.mailroomBookmarkletTools) {
-                        alert('Bookmarklet tools failed to load.');
-                        return;
-                    }
-                    window.mailroomBookmarkletTools.run(name);
-                },
-                args: [toolName]
+            exportBtn.addEventListener('click', () => {
+                const visibleRows = getVisibleRows();
+                if (!visibleRows.length) return showToast('No visible rows.');
+                const lines = visibleRows.map(item => `${item.id}\t${item.raw}\t${item.date || 'N/A'}`).join('\n');
+                const blob = new Blob([`UUID\tRAW\tDATE\n${lines}`], { type: 'text/plain' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `uuid_export_${Date.now()}.txt`;
+                a.click();
             });
 
-            showToast('Tool executed.');
-        } catch (err) {
-            console.error('Bookmarklet tool failed:', err);
-            showToast('Tool failed to run.');
+            render();
+            searchInput.focus();
+        } catch (error) {
+            console.error('UUID picker failed:', error);
+            showToast('UUID Picker failed.');
+        }
+    };
+
+    const fetchDocmanGroups = async (tabId) => {
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                const normalize = (value) => String(value || '').trim();
+                const allInputs = Array.from(document.querySelectorAll('input'));
+                const filledVisible = allInputs.filter((input) => input.offsetParent !== null && normalize(input.value).length > 0);
+                const groups = [];
+
+                // Existing page pattern stores docman group inputs in alternating fields.
+                for (let i = 0; i < filledVisible.length; i += 2) {
+                    const value = normalize(filledVisible[i]?.value);
+                    if (value) groups.push(value);
+                }
+
+                return [...new Set(groups)];
+            }
+        });
+        return Array.isArray(result) ? result : [];
+    };
+
+    const openDocmanGroupsModal = async () => {
+        try {
+            const tab = await getActiveBetterLetterTabForTool();
+            if (!tab) return;
+
+            const groups = await fetchDocmanGroups(tab.id);
+            if (!groups.length) {
+                showToast('No Docman Groups found on the active page.');
+                return;
+            }
+
+            if (!openBookmarkletToolModal('Docman Group Names')) return;
+
+            const countChip = document.createElement('div');
+            countChip.className = 'bookmarklet-tool-chip';
+            countChip.textContent = `${groups.length} unique group names`;
+
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'bookmarklet-tool-btn';
+            copyBtn.textContent = 'Copy All';
+
+            bookmarkletToolModalActions?.append(countChip, copyBtn);
+
+            const textarea = document.createElement('textarea');
+            textarea.value = groups.join('\n');
+            textarea.readOnly = true;
+            textarea.style.width = '100%';
+            textarea.style.minHeight = '300px';
+            textarea.style.resize = 'vertical';
+            textarea.style.margin = '0';
+            textarea.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+            textarea.style.fontSize = '12px';
+
+            bookmarkletToolModalBody?.appendChild(textarea);
+
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(textarea.value);
+                    showToast(`Copied ${groups.length} group names.`);
+                } catch (e) {
+                    showToast('Copy failed.');
+                }
+            });
+
+            textarea.focus();
+            textarea.select();
+        } catch (error) {
+            console.error('Docman groups failed:', error);
+            showToast('Docman groups tool failed.');
         }
     };
 
@@ -672,9 +1516,21 @@ ${error?.message || String(error)}`, 'invalid');
     };
 
     const loadRecentIds = async () => {
-        const { recentDocIds: d = [], recentJobIds: j = [] } = await chrome.storage.local.get(['recentDocIds', 'recentJobIds']);
-        recentDocIds = Array.isArray(d) ? d.slice(0, 5) : [];
-        recentJobIds = Array.isArray(j) ? j.slice(0, 5) : [];
+        const {
+            recentDocIds: d = [],
+            recentJobIds: j = [],
+            recentDocSuggestionMeta: docMeta = {},
+            recentJobSuggestionMeta: jobMeta = {}
+        } = await chrome.storage.local.get([
+            'recentDocIds',
+            'recentJobIds',
+            'recentDocSuggestionMeta',
+            'recentJobSuggestionMeta'
+        ]);
+        recentDocIds = Array.isArray(d) ? d.map(value => String(value || '').trim()).filter(Boolean).slice(0, 5) : [];
+        recentJobIds = Array.isArray(j) ? j.map(value => String(value || '').trim()).filter(Boolean).slice(0, 5) : [];
+        recentDocSuggestionMeta = normalizeSuggestionMetaMap(docMeta);
+        recentJobSuggestionMeta = normalizeSuggestionMetaMap(jobMeta);
         renderRecentIdChips();
     };
 
@@ -699,8 +1555,46 @@ ${error?.message || String(error)}`, 'invalid');
 
     runWorkflowBulkBtn?.addEventListener('click', runBulkWorkflowCreation);
 
-    manualDocIdInput?.addEventListener('input', updateDocValidation);
-    jobStatusInput?.addEventListener('input', updateJobValidation);
+    const refreshDocSuggestions = async ({ force = false } = {}) => {
+        await syncDashboardSuggestionRows({ force, silent: true });
+        showDocIdSuggestions();
+    };
+
+    const refreshJobSuggestions = async ({ force = false } = {}) => {
+        await syncDashboardSuggestionRows({ force, silent: true });
+        showJobIdSuggestions();
+    };
+
+    manualDocIdInput?.addEventListener('input', () => {
+        updateDocValidation();
+        showDocIdSuggestions();
+    });
+    manualDocIdInput?.addEventListener('focus', async () => {
+        hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
+        await refreshDocSuggestions();
+    });
+    manualDocIdInput?.addEventListener('blur', () => {
+        setTimeout(() => hideDashboardAutocomplete(docIdAutocompleteResultsContainer), 120);
+    });
+    manualDocIdInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
+    });
+
+    jobStatusInput?.addEventListener('input', () => {
+        updateJobValidation();
+        showJobIdSuggestions();
+    });
+    jobStatusInput?.addEventListener('focus', async () => {
+        hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
+        await refreshJobSuggestions();
+    });
+    jobStatusInput?.addEventListener('blur', () => {
+        setTimeout(() => hideDashboardAutocomplete(jobIdAutocompleteResultsContainer), 120);
+    });
+    jobStatusInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
+    });
+
     bulkIdsInput?.addEventListener('input', updateBulkValidation);
 
     btnJobs?.addEventListener('click', () => handleDocAction('jobs', btnJobs));
@@ -716,8 +1610,17 @@ ${error?.message || String(error)}`, 'invalid');
     openJobStatusBtn?.addEventListener('click', async () => {
         const jobId = updateJobValidation();
         if (!jobId) return showToast('No valid Job ID.');
+        hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
         await pushRecentId('job', jobId);
         await openUrlsWithLoading([getJobStatusUrl(jobId)], [openJobStatusBtn]);
+    });
+
+    openProblemReviewBtn?.addEventListener('click', async () => {
+        const jobId = updateJobValidation();
+        if (!jobId) return showToast('No valid Job ID.');
+        hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
+        await pushRecentId('job', jobId);
+        await openUrlsWithLoading([getProblemReviewUrl(jobId)], [openProblemReviewBtn]);
     });
 
     copyJobStatusUrlBtn?.addEventListener('click', () => {
@@ -733,6 +1636,7 @@ ${error?.message || String(error)}`, 'invalid');
     });
 
     clearJobStatusInputBtn?.addEventListener('click', () => {
+        hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
         if (jobStatusInput) {
             jobStatusInput.value = '';
             jobStatusInput.focus();
@@ -760,20 +1664,23 @@ ${error?.message || String(error)}`, 'invalid');
         copyUrlsToClipboard(urls, 'URLs');
     });
 
-    runUuidPickerToolBtn?.addEventListener('click', () => runBookmarkletTool('uuidPicker'));
-    runListDocmanGroupsToolBtn?.addEventListener('click', () => runBookmarkletTool('listDocmanGroups'));
+    runUuidPickerToolBtn?.addEventListener('click', openUuidPickerModal);
+    runListDocmanGroupsToolBtn?.addEventListener('click', openDocmanGroupsModal);
 
     updateDocValidation();
     updateJobValidation();
     updateBulkValidation();
-    loadRecentIds();
+    await loadRecentIds();
+    await syncDashboardSuggestionRows({ silent: true });
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
         // List of all inputs that should NOT hide the dropdown when clicked
         const safeInputs = [
             'practiceInput', 
-            'cdbSearchInput' 
+            'cdbSearchInput',
+            'manualDocId',
+            'jobStatusInput'
         ];
 
         const isInput = safeInputs.includes(e.target.id);
