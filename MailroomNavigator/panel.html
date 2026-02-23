@@ -133,34 +133,35 @@
       <div class="section-container">
         <div class="jobs-row">
           <div class="job-col">
-            <label for="docmanJobSelectNav">Docman Jobs</label>
-            <select id="docmanJobSelectNav">
-              <option value="">Select Docman job…</option>
-              <option value="generate_output">Generate Output</option>
-              <option value="docman_validate">Docman Validate</option>
-              <option value="docman_import">Docman Import</option>
-              <option value="docman_file">Docman File</option>
-              <option value="merge_tasks_for_same_recipient">Merge Tasks for Same Recipient</option>
-              <option value="publish_tasks">Publish Tasks</option>
-              <option value="docman_review">Docman Review</option>
-              <option value="docman_delete_original">Docman Delete Original</option>
-              <option value="docman_upload">Docman Upload</option>
-              <option value="docman_rejection">Docman Rejection</option>
-            </select>
+            <label for="docmanJobChecklistNav">Docman Jobs</label>
+            <div id="docmanJobChecklistNav" class="job-checklist">
+              <label class="job-check-item"><input type="checkbox" value="generate_output"> Generate Output</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_validate"> Docman Validate</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_import"> Docman Import</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_file"> Docman File</label>
+              <label class="job-check-item"><input type="checkbox" value="merge_tasks_for_same_recipient"> Merge Tasks for Same Recipient</label>
+              <label class="job-check-item"><input type="checkbox" value="publish_tasks"> Publish Tasks</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_review"> Docman Review</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_delete_original"> Docman Delete Original</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_upload"> Docman Upload</label>
+              <label class="job-check-item"><input type="checkbox" value="docman_rejection"> Docman Rejection</label>
+            </div>
+            <button id="openDocmanJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn">Open Selected</button>
           </div>
 
           <div class="job-col">
-            <label for="emisJobSelectNav">EMIS Jobs</label>
-            <select id="emisJobSelectNav">
-              <option value="">Select EMIS job…</option>
-              <option value="emis_api_consultation">EMIS API Consultation</option>
-              <option value="emis_unmatch">EMIS Unmatch</option>
-              <option value="emis_prepare">EMIS Prepare</option>
-              <option value="emis_delete_originals">EMIS Delete Originals</option>
-              <option value="emis_rejection">EMIS Rejection</option>
-            </select>
+            <label for="emisJobChecklistNav">EMIS Jobs</label>
+            <div id="emisJobChecklistNav" class="job-checklist">
+              <label class="job-check-item"><input type="checkbox" value="emis_api_consultation"> EMIS API Consultation</label>
+              <label class="job-check-item"><input type="checkbox" value="emis_unmatch"> EMIS Unmatch</label>
+              <label class="job-check-item"><input type="checkbox" value="emis_prepare"> EMIS Prepare</label>
+              <label class="job-check-item"><input type="checkbox" value="emis_delete_originals"> EMIS Delete Originals</label>
+              <label class="job-check-item"><input type="checkbox" value="emis_rejection"> EMIS Rejection</label>
+            </div>
+            <button id="openEmisJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn">Open Selected</button>
           </div>
         </div>
+        <div class="jobs-helper-text">Select one or more jobs with checkboxes.</div>
       </div>
       
       <div class="search-container" style="position: relative; width: 100%; max-width: 100%;">
@@ -311,6 +312,60 @@ Mike Drinkwater"></textarea>
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="runWorkflowBulkBtn" class="btn btn-sm">Run Bulk Create</button>
           <button id="testWorkflowParseBtn" class="btn btn-sm">Test Parse</button>
+        </div>
+      </div>
+
+      <div class="section-container" style="margin-top: 12px;">
+        <h3>Linear Issue + Slack</h3>
+        <label for="linearApiKeyInput">Linear API Key</label>
+        <input id="linearApiKeyInput" type="password" autocomplete="off" placeholder="Paste Linear API key">
+
+        <label for="linearTeamKeyInput">Linear Team Key</label>
+        <input id="linearTeamKeyInput" type="text" autocomplete="off" placeholder="e.g. ENG">
+
+        <label for="linearIssueTitleInput">Issue Title</label>
+        <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Short summary">
+
+        <label for="linearIssueDescriptionInput">Issue Description</label>
+        <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Describe the problem, steps, and context."></textarea>
+
+        <div class="linear-slack-grid">
+          <div>
+            <label for="linearIssuePriorityInput">Priority</label>
+            <select id="linearIssuePriorityInput">
+              <option value="0">No priority</option>
+              <option value="1">Urgent</option>
+              <option value="2">High</option>
+              <option value="3">Normal</option>
+              <option value="4">Low</option>
+            </select>
+          </div>
+          <div>
+            <label for="slackDeliveryModeInput">Slack Delivery</label>
+            <select id="slackDeliveryModeInput">
+              <option value="bot">Bot Token + Channel</option>
+              <option value="webhook">Incoming Webhook</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="slackBotModeFields" class="linear-slack-mode-block">
+          <label for="slackBotTokenInput">Slack Bot Token</label>
+          <input id="slackBotTokenInput" type="password" autocomplete="off" placeholder="xoxb-...">
+          <label for="slackChannelIdInput">Slack Channel ID</label>
+          <input id="slackChannelIdInput" type="text" autocomplete="off" placeholder="e.g. C0123456789">
+        </div>
+
+        <div id="slackWebhookModeFields" class="linear-slack-mode-block" style="display: none;">
+          <label for="slackWebhookUrlInput">Slack Incoming Webhook URL</label>
+          <input id="slackWebhookUrlInput" type="password" autocomplete="off" placeholder="https://hooks.slack.com/services/...">
+        </div>
+
+        <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Ready.</div>
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create + Post</button>
+          <button id="saveLinearSlackConfigBtn" class="btn btn-sm btn-ghost">Save Config</button>
+          <button id="clearLinearSlackConfigBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #b45309;">Clear Saved Config</button>
         </div>
       </div>
 

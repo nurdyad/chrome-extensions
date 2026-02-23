@@ -171,6 +171,63 @@ label {
     margin-bottom: 4px;
 }
 
+.job-checklist {
+    border: 1px solid #b9cadb;
+    border-radius: var(--border-radius);
+    background: #fff;
+    padding: 6px 8px;
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.job-check-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.25;
+    color: #1f3f5a;
+    cursor: pointer;
+}
+
+.job-check-item input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.job-open-btn {
+    margin-top: 6px;
+}
+
+.jobs-helper-text {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--dark-gray);
+}
+
+.linear-slack-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.linear-slack-grid select {
+    margin-bottom: 0;
+}
+
+.linear-slack-mode-block {
+    margin-top: 8px;
+}
+
+#linearIssueDescriptionInput {
+    min-height: 86px;
+}
+
 .global-nav-buttons-row {
     display: flex;
     justify-content: space-between;
@@ -260,6 +317,10 @@ label {
     .global-nav-buttons-row .btn {
     font-size: 12px;
     padding: 6px;
+    }
+
+    .linear-slack-grid {
+    grid-template-columns: 1fr;
     }
 }
 

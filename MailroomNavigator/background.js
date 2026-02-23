@@ -9,6 +9,8 @@ const CACHE_EXPIRY = 24 * 60 * 60 * 1000;
 let isScrapingActive = false; 
 const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
 const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
+const LINEAR_GRAPHQL_ENDPOINT = 'https://api.linear.app/graphql';
+const SLACK_CHAT_POST_MESSAGE_ENDPOINT = 'https://slack.com/api/chat.postMessage';
 const CACHE_REQUIRED_ACTIONS = new Set([
     'getPracticeCache',
     'requestActiveScrape',
@@ -112,6 +114,258 @@ async function setupOffscreen() {
 
 function isBetterLetterUrl(url) {
     return typeof url === 'string' && url.startsWith(`${BETTERLETTER_ORIGIN}/`);
+}
+
+function isScriptableUrl(url) {
+    return typeof url === 'string' && /^https?:\/\//i.test(url);
+}
+
+// --- Linear + Slack Integrations ---
+// Security note:
+// - We sanitize and validate all incoming fields before using them.
+// - We never store tokens in background global state.
+// - We never include secrets in response payloads back to the UI.
+function sanitizeSingleLine(value, maxLength = 1024) {
+    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function sanitizeMultiline(value, maxLength = 12000) {
+    return String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\u0000/g, '')
+        .trim()
+        .slice(0, maxLength);
+}
+
+function clampLinearPriority(value) {
+    const parsed = Number.parseInt(String(value ?? '0'), 10);
+    return [0, 1, 2, 3, 4].includes(parsed) ? parsed : 0;
+}
+
+function isLikelyLinearApiKey(value) {
+    // Linear personal keys are long secret tokens. We keep validation broad but non-empty.
+    return /^[A-Za-z0-9_-]{20,}$/.test(String(value || '').trim());
+}
+
+function isLikelyLinearTeamKey(value) {
+    return /^[A-Za-z0-9_-]{2,20}$/.test(String(value || '').trim());
+}
+
+function isLikelySlackBotToken(value) {
+    return /^xox[a-z]-[A-Za-z0-9-]+$/i.test(String(value || '').trim());
+}
+
+function isLikelySlackChannelId(value) {
+    return /^[CGD][A-Z0-9]{8,}$/i.test(String(value || '').trim());
+}
+
+function isLikelySlackWebhookUrl(value) {
+    return /^https:\/\/hooks\.slack(?:-gov)?\.com\/services\/[A-Za-z0-9/_-]+$/i.test(String(value || '').trim());
+}
+
+function sanitizeLinearSlackPayload(rawPayload = {}) {
+    const slackInput = rawPayload?.slack && typeof rawPayload.slack === 'object' ? rawPayload.slack : {};
+    const slackMode = sanitizeSingleLine(slackInput.mode, 20).toLowerCase() === 'webhook' ? 'webhook' : 'bot';
+
+    return {
+        linearApiKey: sanitizeSingleLine(rawPayload.linearApiKey, 320),
+        linearTeamKey: sanitizeSingleLine(rawPayload.linearTeamKey, 32),
+        title: sanitizeSingleLine(rawPayload.title, 240),
+        description: sanitizeMultiline(rawPayload.description, 12000),
+        priority: clampLinearPriority(rawPayload.priority),
+        slackMode,
+        slackBotToken: sanitizeSingleLine(slackInput.botToken, 320),
+        slackChannelId: sanitizeSingleLine(slackInput.channelId, 64),
+        slackWebhookUrl: sanitizeSingleLine(slackInput.webhookUrl, 700)
+    };
+}
+
+function validateLinearSlackPayload(payload) {
+    if (!isLikelyLinearApiKey(payload.linearApiKey)) {
+        throw new Error('Invalid or missing Linear API key.');
+    }
+    if (!isLikelyLinearTeamKey(payload.linearTeamKey)) {
+        throw new Error('Invalid or missing Linear Team key.');
+    }
+    if (!payload.title) {
+        throw new Error('Issue title is required.');
+    }
+
+    if (payload.slackMode === 'webhook') {
+        if (!isLikelySlackWebhookUrl(payload.slackWebhookUrl)) {
+            throw new Error('Invalid or missing Slack webhook URL.');
+        }
+        return;
+    }
+
+    if (!isLikelySlackBotToken(payload.slackBotToken)) {
+        throw new Error('Invalid or missing Slack bot token.');
+    }
+    if (!isLikelySlackChannelId(payload.slackChannelId)) {
+        throw new Error('Invalid or missing Slack channel ID.');
+    }
+}
+
+async function runLinearGraphqlRequest(linearApiKey, query, variables = {}) {
+    const response = await fetch(LINEAR_GRAPHQL_ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            // Linear accepts API key in Authorization header.
+            'Authorization': linearApiKey
+        },
+        body: JSON.stringify({ query, variables })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Linear request failed with status ${response.status}.`);
+    }
+
+    const payload = await response.json();
+    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+        const message = payload.errors
+            .map(err => sanitizeSingleLine(err?.message, 220))
+            .filter(Boolean)
+            .join('; ');
+        throw new Error(message || 'Linear returned an unknown error.');
+    }
+
+    return payload?.data || {};
+}
+
+async function resolveLinearTeamByKey(linearApiKey, teamKey) {
+    const query = `
+        query ResolveTeamByKey($key: String!) {
+            team(key: $key) {
+                id
+                key
+                name
+            }
+        }
+    `;
+
+    const data = await runLinearGraphqlRequest(linearApiKey, query, { key: teamKey });
+    const team = data?.team;
+    if (!team?.id) {
+        throw new Error(`Linear team "${teamKey}" was not found.`);
+    }
+    return team;
+}
+
+async function createLinearIssue(payload) {
+    const team = await resolveLinearTeamByKey(payload.linearApiKey, payload.linearTeamKey);
+
+    const issueInput = {
+        teamId: team.id,
+        title: payload.title
+    };
+    if (payload.description) issueInput.description = payload.description;
+    if (payload.priority > 0) issueInput.priority = payload.priority;
+
+    const mutation = `
+        mutation CreateIssue($input: IssueCreateInput!) {
+            issueCreate(input: $input) {
+                success
+                issue {
+                    id
+                    identifier
+                    title
+                    url
+                    priority
+                }
+            }
+        }
+    `;
+
+    const data = await runLinearGraphqlRequest(payload.linearApiKey, mutation, { input: issueInput });
+    const issueCreate = data?.issueCreate;
+    const issue = issueCreate?.issue;
+
+    if (!issueCreate?.success || !issue?.id || !issue?.identifier || !issue?.url) {
+        throw new Error('Linear issue creation failed.');
+    }
+
+    return {
+        team,
+        issue: {
+            identifier: sanitizeSingleLine(issue.identifier, 64),
+            title: sanitizeSingleLine(issue.title, 240),
+            url: sanitizeSingleLine(issue.url, 1000)
+        }
+    };
+}
+
+async function postSlackNotification(payload, issue) {
+    const message = `New Linear issue: <${issue.url}|${issue.identifier}> - ${issue.title}`;
+
+    if (payload.slackMode === 'webhook') {
+        const response = await fetch(payload.slackWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: message })
+        });
+        if (!response.ok) {
+            throw new Error(`Slack webhook failed with status ${response.status}.`);
+        }
+        return;
+    }
+
+    const response = await fetch(SLACK_CHAT_POST_MESSAGE_ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Authorization': `Bearer ${payload.slackBotToken}`
+        },
+        body: JSON.stringify({
+            channel: payload.slackChannelId,
+            text: message,
+            unfurl_links: false,
+            unfurl_media: false
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Slack API failed with status ${response.status}.`);
+    }
+
+    const slackPayload = await response.json();
+    if (!slackPayload?.ok) {
+        throw new Error(sanitizeSingleLine(slackPayload?.error, 220) || 'Slack API returned an error.');
+    }
+}
+
+async function handleCreateLinearIssueAndNotifySlack(rawPayload) {
+    try {
+        const payload = sanitizeLinearSlackPayload(rawPayload);
+        validateLinearSlackPayload(payload);
+
+        const created = await createLinearIssue(payload);
+        try {
+            await postSlackNotification(payload, created.issue);
+            return {
+                success: true,
+                issue: created.issue,
+                team: {
+                    key: sanitizeSingleLine(created.team?.key, 32),
+                    name: sanitizeSingleLine(created.team?.name, 120)
+                }
+            };
+        } catch (error) {
+            // Important: keep Linear success details and return a partial failure.
+            return {
+                success: false,
+                partial: true,
+                issue: created.issue,
+                error: `Linear issue created, but Slack failed: ${sanitizeSingleLine(error?.message, 260)}`
+            };
+        }
+    } catch (error) {
+        return {
+            success: false,
+            error: sanitizeSingleLine(error?.message, 260) || 'Could not create Linear issue.'
+        };
+    }
 }
 
 function getTabUrl(tab) {
@@ -517,11 +771,11 @@ async function ensureSidebarPanelMounted(tabId) {
     });
 }
 
-async function ensureSidebarHandleForBetterLetterTab(tabId) {
+async function ensureSidebarHandleForTab(tabId) {
     if (typeof tabId !== 'number') return;
     try {
         const tab = await chrome.tabs.get(tabId);
-        if (!isBetterLetterUrl(getTabUrl(tab))) return;
+        if (!isScriptableUrl(getTabUrl(tab))) return;
         await ensureSidebarPanelMounted(tabId);
     } catch (e) {
         // Ignore tabs that are gone/restricted or not scriptable yet.
@@ -532,21 +786,24 @@ async function ensureSidebarHandleForBetterLetterTab(tabId) {
 
 chrome.action.onClicked.addListener(async (tab) => {
     await setTargetTabId(tab?.id);
+    await ensureSidebarHandleForTab(tab?.id);
     openPanelPopup();
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
     const tabId = activeInfo?.tabId;
     setTargetTabId(tabId).catch(() => undefined);
-    ensureSidebarHandleForBetterLetterTab(tabId).catch(() => undefined);
+    ensureSidebarHandleForTab(tabId).catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (!changeInfo?.url && changeInfo?.status !== 'complete') return;
     const maybeUrl = typeof changeInfo?.url === 'string' ? changeInfo.url : getTabUrl(tab);
-    if (!isBetterLetterUrl(maybeUrl)) return;
-    chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
-    ensureSidebarHandleForBetterLetterTab(tabId).catch(() => undefined);
+    if (!isScriptableUrl(maybeUrl)) return;
+    if (isBetterLetterUrl(maybeUrl)) {
+        chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
+    }
+    ensureSidebarHandleForTab(tabId).catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -581,6 +838,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { success: true };
         }
         if (message.action === 'openPractice') return await handleOpenPractice(message.input, message.settingType);
+        if (message.action === 'createLinearIssueAndNotifySlack') {
+            return await handleCreateLinearIssueAndNotifySlack(message.payload);
+        }
         if (message.action === 'requestActiveScrape') {
             const data = await fetchAndCachePracticeList('manual-refresh');
             return { success: true, practicesCount: (data || []).length };

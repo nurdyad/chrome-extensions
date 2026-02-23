@@ -240,6 +240,12 @@ input[readonly] {
     background-color: #eaf4ff;
 }
 
+#suggestions li.all-practices-option {
+    font-weight: 600;
+    color: #1b4f7a;
+    background-color: #f2f8ff;
+}
+
 .suggestion-count {
     position: sticky;
     top: 0;
