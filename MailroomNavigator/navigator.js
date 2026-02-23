@@ -1,6 +1,9 @@
 // navigator.js - Cleaned for Top-Nav Redesign
 import { state, setCurrentSelectedOdsCode } from './state.js';
-import { showStatus, showToast } from './utils.js';
+import { showStatus } from './utils.js';
+
+const ALL_PRACTICES_CODE = 'ALL';
+const ALL_PRACTICES_LABEL = 'All practices';
 
 // navigator.js - Safety check to prevent duplicate buttons
 export function cleanDuplicateButtons() {
@@ -18,6 +21,9 @@ export function cleanDuplicateButtons() {
 
 // --- 1. Normalize Input Helper ---
 export function normalizePracticeSelection(input) {
+  if (input && typeof input === 'object' && String(input.ods || '').toUpperCase() === ALL_PRACTICES_CODE) {
+    return { name: ALL_PRACTICES_LABEL, ods: ALL_PRACTICES_CODE, display: ALL_PRACTICES_LABEL };
+  }
   if (input && typeof input === 'object' && typeof input.ods === 'string') {
     const name = typeof input.name === 'string' ? input.name : '';
     return { name, ods: input.ods, display: `${name} (${input.ods})` };
@@ -29,6 +35,10 @@ export function normalizePracticeSelection(input) {
 
   if (typeof input === 'string') {
     const trimmed = input.trim();
+    if (trimmed.toLowerCase() === ALL_PRACTICES_LABEL.toLowerCase()) {
+      return { name: ALL_PRACTICES_LABEL, ods: ALL_PRACTICES_CODE, display: ALL_PRACTICES_LABEL };
+    }
+
     const fromKey = state.cachedPractices[trimmed];
     if (fromKey) {
       return { name: fromKey.name, ods: fromKey.ods, display: trimmed };
@@ -61,6 +71,7 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   }
 
   setCurrentSelectedOdsCode(normalized.ods);
+  const hasConcretePractice = /^[A-Z]\d{5}$/.test(String(normalized.ods || '').toUpperCase());
 
   if (updateInput) {
       const el = document.getElementById('practiceInput');
@@ -70,8 +81,17 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   hidePracticeSuggestions();
   hideCdbSuggestions();
 
-  setNavigatorButtonsState(true);
-  if (triggerStatus) displayPracticeStatus();
+  setNavigatorButtonsState(hasConcretePractice);
+  if (triggerStatus) {
+    if (hasConcretePractice) {
+      displayPracticeStatus();
+    } else {
+      const statusDisplayEl = document.getElementById('statusDisplay');
+      if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+      const statusEl = document.getElementById('status');
+      if (statusEl) statusEl.style.display = 'none';
+    }
+  }
 
   return normalized;
 }
@@ -102,8 +122,7 @@ export function hideCdbSuggestions() {
 export function setNavigatorButtonsState(enable) {
     const ids = [
         'usersBtn', 'collectionBtn', 'preparingBtn', 'rejectedBtn', 
-        'openEhrSettingsBtn', 'taskRecipientsBtn',
-        'docmanJobSelectNav', 'emisJobSelectNav'
+        'openEhrSettingsBtn', 'taskRecipientsBtn'
     ];
     
     ids.forEach(id => {
@@ -123,7 +142,7 @@ export function requireSelectedOdsCode() {
 // --- 6. Fetch Status & Build Display ---
 export async function displayPracticeStatus() {
     const statusDisplayEl = document.getElementById('statusDisplay');
-    if (!statusDisplayEl || !state.currentSelectedOdsCode) return;
+    if (!statusDisplayEl || !/^[A-Z]\d{5}$/.test(String(state.currentSelectedOdsCode || '').toUpperCase())) return;
 
     statusDisplayEl.style.display = 'none';
     showStatus('Fetching practice details...', 'loading');
@@ -176,16 +195,33 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
         ? allNames
         : allNames.filter(name => name.toLowerCase().includes(query));
 
-    if (matches.length === 0) {
+    const shouldShowAllPractices = !query || ALL_PRACTICES_LABEL.toLowerCase().includes(query);
+
+    if (matches.length === 0 && !shouldShowAllPractices) {
         listEl.style.display = 'none';
         return;
     }
 
     listEl.innerHTML = '';
+
+    if (shouldShowAllPractices) {
+        const allLi = document.createElement('li');
+        allLi.textContent = `${ALL_PRACTICES_LABEL} (no practice filter)`;
+        allLi.className = 'all-practices-option';
+        allLi.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedPractice({ name: ALL_PRACTICES_LABEL, ods: ALL_PRACTICES_CODE, display: ALL_PRACTICES_LABEL });
+        });
+        listEl.appendChild(allLi);
+    }
+
     matches.forEach(name => {
         const li = document.createElement('li');
         li.textContent = name;
-        li.addEventListener('click', () => {
+        li.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             setSelectedPractice(state.cachedPractices[name]);
         });
         listEl.appendChild(li);

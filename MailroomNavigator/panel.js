@@ -346,18 +346,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) { showToast(e.message); }
     });
 
-    // Job Dropdowns
-    const openJobDashboard = (jobType) => {
-        if (!jobType) return;
-        try {
-            const ods = Navigator.requireSelectedOdsCode();
-            const url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=${encodeURIComponent(jobType)}&practice_ids=${encodeURIComponent(ods)}&status=paused`;
-            openTabWithTimeout(url);
-        } catch (e) { showToast(e.message); }
+    // Job Dashboard Filters (checkbox multi-select)
+    const docmanJobChecklistNav = document.getElementById('docmanJobChecklistNav');
+    const emisJobChecklistNav = document.getElementById('emisJobChecklistNav');
+    const openDocmanJobsNavBtn = document.getElementById('openDocmanJobsNavBtn');
+    const openEmisJobsNavBtn = document.getElementById('openEmisJobsNavBtn');
+
+    const getSelectedJobTypes = (checklistEl) => {
+        if (!checklistEl) return [];
+        return Array.from(checklistEl.querySelectorAll('input[type="checkbox"]:checked'))
+            .map(input => String(input?.value || '').trim())
+            .filter(Boolean);
     };
 
-    document.getElementById('docmanJobSelectNav')?.addEventListener('change', (e) => { openJobDashboard(e.target.value); e.target.value = ''; });
-    document.getElementById('emisJobSelectNav')?.addEventListener('change', (e) => { openJobDashboard(e.target.value); e.target.value = ''; });
+    const buildJobsDashboardUrl = (jobTypes, odsCode = '') => {
+        const encodedTypes = jobTypes.map(jobType => encodeURIComponent(jobType)).join('+');
+        const encodedOds = odsCode ? `&practice_ids=${encodeURIComponent(odsCode)}` : '';
+        return `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=${encodedTypes}${encodedOds}&status=paused`;
+    };
+
+    const openMultiJobDashboard = (checklistEl, groupLabel) => {
+        const selectedJobTypes = getSelectedJobTypes(checklistEl);
+        if (selectedJobTypes.length === 0) {
+            showToast(`Select at least one ${groupLabel} job.`);
+            return;
+        }
+
+        const selectedPracticeCode = String(state.currentSelectedOdsCode || '').trim().toUpperCase();
+        const hasPracticeFilter = /^[A-Z]\d{5}$/.test(selectedPracticeCode);
+        const isAllPractices = selectedPracticeCode === 'ALL';
+
+        if (!hasPracticeFilter && !isAllPractices) {
+            showToast('Select a practice or choose All practices from Practice input.');
+            return;
+        }
+
+        const url = buildJobsDashboardUrl(selectedJobTypes, hasPracticeFilter ? selectedPracticeCode : '');
+        openTabWithTimeout(url);
+    };
+
+    openDocmanJobsNavBtn?.addEventListener('click', () => openMultiJobDashboard(docmanJobChecklistNav, 'Docman'));
+    openEmisJobsNavBtn?.addEventListener('click', () => openMultiJobDashboard(emisJobChecklistNav, 'EMIS'));
 
     // I. EMAIL FORMATTER LOGIC
     document.getElementById("convertEmailBtn")?.addEventListener("click", Email.convertEmails);
@@ -418,6 +447,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const runWorkflowBulkBtn = document.getElementById('runWorkflowBulkBtn');
     const testWorkflowParseBtn = document.getElementById('testWorkflowParseBtn');
 
+    const linearApiKeyInput = document.getElementById('linearApiKeyInput');
+    const linearTeamKeyInput = document.getElementById('linearTeamKeyInput');
+    const linearIssueTitleInput = document.getElementById('linearIssueTitleInput');
+    const linearIssueDescriptionInput = document.getElementById('linearIssueDescriptionInput');
+    const linearIssuePriorityInput = document.getElementById('linearIssuePriorityInput');
+    const slackDeliveryModeInput = document.getElementById('slackDeliveryModeInput');
+    const slackBotModeFields = document.getElementById('slackBotModeFields');
+    const slackWebhookModeFields = document.getElementById('slackWebhookModeFields');
+    const slackBotTokenInput = document.getElementById('slackBotTokenInput');
+    const slackChannelIdInput = document.getElementById('slackChannelIdInput');
+    const slackWebhookUrlInput = document.getElementById('slackWebhookUrlInput');
+    const linearSlackStatus = document.getElementById('linearSlackStatus');
+    const createLinearSlackIssueBtn = document.getElementById('createLinearSlackIssueBtn');
+    const saveLinearSlackConfigBtn = document.getElementById('saveLinearSlackConfigBtn');
+    const clearLinearSlackConfigBtn = document.getElementById('clearLinearSlackConfigBtn');
+
     let recentDocIds = [];
     let recentJobIds = [];
     let recentDocSuggestionMeta = {};
@@ -429,6 +474,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let dashboardRowsLoadedAt = 0;
     let dashboardRowsSourceTabId = null;
     const DASHBOARD_SUGGESTION_STALE_MS = 45000;
+    const LINEAR_SLACK_CONFIG_KEY = 'linearSlackConfigV1';
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -1386,6 +1432,211 @@ document.addEventListener('DOMContentLoaded', async () => {
         })
         .filter(Boolean);
 
+    // --- Linear + Slack Issue Helpers ---
+    // We keep string sanitation on the panel side to reduce accidental bad payloads,
+    // then repeat strict validation in the background worker before any network call.
+    const trimField = (value, maxLength = 4096) => String(value || '').trim().slice(0, maxLength);
+    const trimMultilineField = (value, maxLength = 12000) => String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\u0000/g, '')
+        .trim()
+        .slice(0, maxLength);
+
+    const isLikelySlackBotToken = (value) => /^xox[a-z]-[A-Za-z0-9-]+$/i.test(String(value || '').trim());
+    const isLikelySlackChannelId = (value) => /^[CGD][A-Z0-9]{8,}$/i.test(String(value || '').trim());
+    const isLikelySlackWebhookUrl = (value) => /^https:\/\/hooks\.slack(?:-gov)?\.com\/services\/[A-Za-z0-9/_-]+$/i.test(String(value || '').trim());
+
+    const setLinearSlackStatus = (message, tone = null) => {
+        if (!linearSlackStatus) return;
+        linearSlackStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') linearSlackStatus.classList.add('valid');
+        else if (tone === 'invalid') linearSlackStatus.classList.add('invalid');
+        else linearSlackStatus.classList.add('neutral');
+        linearSlackStatus.textContent = message;
+    };
+
+    // Show only the relevant Slack credential block based on selected delivery mode.
+    const updateSlackModeVisibility = () => {
+        const mode = String(slackDeliveryModeInput?.value || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
+        if (slackBotModeFields) slackBotModeFields.style.display = mode === 'bot' ? 'block' : 'none';
+        if (slackWebhookModeFields) slackWebhookModeFields.style.display = mode === 'webhook' ? 'block' : 'none';
+    };
+
+    const getLinearSlackPayloadFromForm = () => {
+        const priorityRaw = Number.parseInt(String(linearIssuePriorityInput?.value || '0'), 10);
+        const priority = [0, 1, 2, 3, 4].includes(priorityRaw) ? priorityRaw : 0;
+        const slackMode = String(slackDeliveryModeInput?.value || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
+
+        return {
+            linearApiKey: trimField(linearApiKeyInput?.value, 300),
+            linearTeamKey: trimField(linearTeamKeyInput?.value, 32),
+            title: trimField(linearIssueTitleInput?.value, 240),
+            description: trimMultilineField(linearIssueDescriptionInput?.value, 12000),
+            priority,
+            slack: {
+                mode: slackMode,
+                botToken: trimField(slackBotTokenInput?.value, 300),
+                channelId: trimField(slackChannelIdInput?.value, 64),
+                webhookUrl: trimField(slackWebhookUrlInput?.value, 600)
+            }
+        };
+    };
+
+    const validateLinearSlackPayload = (payload) => {
+        if (!payload.linearApiKey) return 'Linear API key is required.';
+        if (!payload.linearTeamKey) return 'Linear Team key is required.';
+        if (!payload.title) return 'Issue title is required.';
+
+        if (payload.slack?.mode === 'webhook') {
+            if (!payload.slack.webhookUrl) return 'Slack webhook URL is required.';
+            if (!isLikelySlackWebhookUrl(payload.slack.webhookUrl)) return 'Slack webhook URL format looks invalid.';
+            return '';
+        }
+
+        if (!payload.slack?.botToken) return 'Slack bot token is required.';
+        if (!isLikelySlackBotToken(payload.slack.botToken)) return 'Slack bot token format looks invalid.';
+        if (!payload.slack.channelId) return 'Slack channel ID is required.';
+        if (!isLikelySlackChannelId(payload.slack.channelId)) return 'Slack channel ID format looks invalid.';
+        return '';
+    };
+
+    // Config is saved only when the user explicitly clicks "Save Config".
+    // We keep it in chrome.storage.local (not sync) to avoid cross-device propagation.
+    const saveLinearSlackConfig = async () => {
+        const payload = getLinearSlackPayloadFromForm();
+
+        if (!payload.linearApiKey || !payload.linearTeamKey) {
+            setLinearSlackStatus('Linear API key and Team key are required to save config.', 'invalid');
+            return;
+        }
+
+        if (payload.slack.mode === 'webhook') {
+            if (!payload.slack.webhookUrl || !isLikelySlackWebhookUrl(payload.slack.webhookUrl)) {
+                setLinearSlackStatus('Provide a valid Slack webhook URL before saving.', 'invalid');
+                return;
+            }
+        } else {
+            if (!payload.slack.botToken || !isLikelySlackBotToken(payload.slack.botToken)) {
+                setLinearSlackStatus('Provide a valid Slack bot token before saving.', 'invalid');
+                return;
+            }
+            if (!payload.slack.channelId || !isLikelySlackChannelId(payload.slack.channelId)) {
+                setLinearSlackStatus('Provide a valid Slack channel ID before saving.', 'invalid');
+                return;
+            }
+        }
+
+        const config = {
+            linearApiKey: payload.linearApiKey,
+            linearTeamKey: payload.linearTeamKey,
+            priority: payload.priority,
+            slack: {
+                mode: payload.slack.mode,
+                botToken: payload.slack.botToken,
+                channelId: payload.slack.channelId,
+                webhookUrl: payload.slack.webhookUrl
+            }
+        };
+
+        await chrome.storage.local.set({ [LINEAR_SLACK_CONFIG_KEY]: config });
+        setLinearSlackStatus('Config saved locally on this browser profile.', 'valid');
+        showToast('Linear/Slack config saved.');
+    };
+
+    const loadLinearSlackConfig = async () => {
+        const result = await chrome.storage.local.get([LINEAR_SLACK_CONFIG_KEY]);
+        const config = result?.[LINEAR_SLACK_CONFIG_KEY];
+        if (!config || typeof config !== 'object') {
+            updateSlackModeVisibility();
+            return;
+        }
+
+        if (linearApiKeyInput) linearApiKeyInput.value = trimField(config.linearApiKey, 300);
+        if (linearTeamKeyInput) linearTeamKeyInput.value = trimField(config.linearTeamKey, 32);
+        if (linearIssuePriorityInput) {
+            const savedPriority = Number.parseInt(String(config.priority ?? 0), 10);
+            linearIssuePriorityInput.value = String([0, 1, 2, 3, 4].includes(savedPriority) ? savedPriority : 0);
+        }
+
+        const slackConfig = config.slack && typeof config.slack === 'object' ? config.slack : {};
+        if (slackDeliveryModeInput) {
+            slackDeliveryModeInput.value = String(slackConfig.mode || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
+        }
+        if (slackBotTokenInput) slackBotTokenInput.value = trimField(slackConfig.botToken, 300);
+        if (slackChannelIdInput) slackChannelIdInput.value = trimField(slackConfig.channelId, 64);
+        if (slackWebhookUrlInput) slackWebhookUrlInput.value = trimField(slackConfig.webhookUrl, 600);
+
+        updateSlackModeVisibility();
+        setLinearSlackStatus('Saved config loaded. Issue title/description are not auto-saved.', 'neutral');
+    };
+
+    const clearLinearSlackConfig = async () => {
+        await chrome.storage.local.remove([LINEAR_SLACK_CONFIG_KEY]);
+
+        if (linearApiKeyInput) linearApiKeyInput.value = '';
+        if (linearTeamKeyInput) linearTeamKeyInput.value = '';
+        if (linearIssuePriorityInput) linearIssuePriorityInput.value = '0';
+        if (slackBotTokenInput) slackBotTokenInput.value = '';
+        if (slackChannelIdInput) slackChannelIdInput.value = '';
+        if (slackWebhookUrlInput) slackWebhookUrlInput.value = '';
+        if (slackDeliveryModeInput) slackDeliveryModeInput.value = 'bot';
+
+        updateSlackModeVisibility();
+        setLinearSlackStatus('Saved config cleared.', 'neutral');
+        showToast('Saved config cleared.');
+    };
+
+    const createLinearIssueAndNotifySlack = async () => {
+        const payload = getLinearSlackPayloadFromForm();
+        const validationError = validateLinearSlackPayload(payload);
+        if (validationError) {
+            setLinearSlackStatus(validationError, 'invalid');
+            showToast(validationError);
+            return;
+        }
+
+        try {
+            if (createLinearSlackIssueBtn) {
+                createLinearSlackIssueBtn.disabled = true;
+                createLinearSlackIssueBtn.textContent = 'Submitting…';
+            }
+
+            setLinearSlackStatus('Creating issue in Linear and sending Slack notification…', 'neutral');
+            const response = await chrome.runtime.sendMessage({
+                action: 'createLinearIssueAndNotifySlack',
+                payload
+            });
+
+            if (response?.success && response?.issue?.identifier) {
+                const issueId = trimField(response.issue.identifier, 64);
+                const issueUrl = trimField(response.issue.url, 1000);
+                setLinearSlackStatus(`Created ${issueId}\nSlack message sent successfully.`, 'valid');
+                if (issueUrl) showToast(`Issue created: ${issueId}`);
+                return;
+            }
+
+            if (response?.partial && response?.issue?.identifier) {
+                const issueId = trimField(response.issue.identifier, 64);
+                const reason = trimField(response.error, 220) || 'Slack notification failed.';
+                setLinearSlackStatus(`Issue ${issueId} created.\nSlack failed: ${reason}`, 'invalid');
+                showToast('Issue created, but Slack failed.');
+                return;
+            }
+
+            const err = trimField(response?.error, 260) || 'Failed to create issue.';
+            throw new Error(err);
+        } catch (error) {
+            const message = trimField(error?.message, 260) || 'Linear/Slack request failed.';
+            setLinearSlackStatus(message, 'invalid');
+            showToast(message);
+        } finally {
+            if (createLinearSlackIssueBtn) {
+                createLinearSlackIssueBtn.disabled = false;
+                createLinearSlackIssueBtn.textContent = 'Create + Post';
+            }
+        }
+    };
+
     const formatEta = (ms) => {
         if (!Number.isFinite(ms) || ms <= 0) return '—';
         const seconds = Math.ceil(ms / 1000);
@@ -1554,6 +1805,27 @@ ${error?.message || String(error)}`, 'invalid');
     });
 
     runWorkflowBulkBtn?.addEventListener('click', runBulkWorkflowCreation);
+    slackDeliveryModeInput?.addEventListener('change', updateSlackModeVisibility);
+    saveLinearSlackConfigBtn?.addEventListener('click', () => {
+        saveLinearSlackConfig().catch(() => {
+            setLinearSlackStatus('Could not save config.', 'invalid');
+            showToast('Could not save config.');
+        });
+    });
+    clearLinearSlackConfigBtn?.addEventListener('click', () => {
+        clearLinearSlackConfig().catch(() => {
+            setLinearSlackStatus('Could not clear saved config.', 'invalid');
+            showToast('Could not clear saved config.');
+        });
+    });
+    createLinearSlackIssueBtn?.addEventListener('click', () => {
+        createLinearIssueAndNotifySlack().catch(() => {
+            setLinearSlackStatus('Linear/Slack action failed.', 'invalid');
+            showToast('Linear/Slack action failed.');
+        });
+    });
+    updateSlackModeVisibility();
+    await loadLinearSlackConfig();
 
     const refreshDocSuggestions = async ({ force = false } = {}) => {
         await syncDashboardSuggestionRows({ force, silent: true });
