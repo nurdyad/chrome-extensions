@@ -150,6 +150,101 @@ Use `SETUP.md` for installation on a new machine.
 - `Get Docman Group Names`
 - Tools render inside extension modal so they stay layered over the main panel.
 
+## File Structure
+
+### High-Level Layout
+
+```text
+MailroomNavigator/
+├── manifest.json
+├── panel.html / panel.js
+├── background.js
+├── navigator.js / jobs.js / email.js
+├── bot_dashboard_navigator.js / mailroom_page_integrator.js / password_content.js
+├── bookmarklet_tools.js / bulk_workflow_groups.js
+├── offscreen.html / offscreen.js
+├── state.js / utils.js
+├── css/
+├── icons/
+└── automation/
+```
+
+### Root Files
+
+| File | What it does |
+|---|---|
+| `manifest.json` | Chrome extension manifest (permissions, scripts, commands, resources). |
+| `panel.html` | Main extension UI layout for all tabs and controls. |
+| `panel.js` | Main controller wiring UI events to modules and background actions. |
+| `background.js` | Service worker: orchestration, caching, tab operations, Linear/Slack actions, summary jobs. |
+| `state.js` | Shared in-memory state used by panel modules. |
+| `utils.js` | Shared helpers (toasts, debounce, safe DOM writes, small utilities). |
+| `README.md` | Feature and architecture overview (this file). |
+| `SETUP.md` | Install guide for new machines/OS. |
+| `.env.example` | Safe environment template (copy to `.env`). |
+
+### Feature Modules
+
+| File | What it does |
+|---|---|
+| `navigator.js` | Practice Navigator behavior: suggestions, practice selection, status rendering, action buttons. |
+| `jobs.js` | Job Panel behavior: ID parsing, autocomplete lists, link generation, bulk actions, recent IDs. |
+| `email.js` | Email formatter logic (convert and name extraction workflows). |
+| `bookmarklet_tools.js` | In-page tools host and modal/panel positioning logic (UUID picker, Docman group names). |
+| `bulk_workflow_groups.js` | In-page automation helper for bulk workflow group creation. |
+
+### Content / In-Page Scripts
+
+| File | What it does |
+|---|---|
+| `bot_dashboard_navigator.js` | Adds floating quick actions and row metadata extraction on dashboard/mailroom pages. |
+| `mailroom_page_integrator.js` | Integrates extra row-level helpers on mailroom table pages. |
+| `password_content.js` | Password tools helper script for practice admin pages. |
+| `offscreen.html` | Offscreen document host required by Chrome offscreen API. |
+| `offscreen.js` | Offscreen worker logic for hidden-page scraping tasks. |
+
+### Styling and Assets
+
+| Path | What it does |
+|---|---|
+| `css/utilities.css` | Shared utility classes used across views. |
+| `css/layout.css` | Main layout structure and spacing. |
+| `css/buttons.css` | Button styles and variants. |
+| `css/inputs.css` | Input/textarea/select styling. |
+| `css/status.css` | Badge/status/validation styling. |
+| `icons/` | Extension icons used by browser toolbar/manager pages. |
+
+### Automation (Optional)
+
+| File | What it does |
+|---|---|
+| `automation/package.json` | Local Node dependencies for automation scripts. |
+| `automation/save-auth-local.mjs` | Playwright + IMAP OTP login flow; saves storage state. |
+| `automation/morning-login-runner.sh` | Morning auth/session refresh runner with verification + notifications. |
+| `automation/install-morning-login-launchagent.sh` | Installs morning runner LaunchAgent (macOS). |
+| `automation/uninstall-morning-login-launchagent.sh` | Removes morning runner LaunchAgent. |
+| `automation/reliability-test.sh` | Repeated forced-run reliability checker. |
+| `automation/fetch-dashboard-summary.mjs` | Reads live Require Attention counts from dashboard tabs. |
+| `automation/show-live-summary-notification.sh` | Runs summary fetch and sends final notification. |
+| `automation/global-summary-hotkey.m` | macOS hotkey daemon (`Cmd+Shift+9`, fallback `Cmd+Ctrl+9`) with menu-bar indicator. |
+| `automation/install-global-summary-hotkey.sh` | Compiles/installs global hotkey LaunchAgent. |
+| `automation/uninstall-global-summary-hotkey.sh` | Removes global hotkey LaunchAgent. |
+| `automation/linear-trigger-server.mjs` | Local HTTP service used by `Trigger Linear` button. |
+| `automation/start-linear-trigger-server.sh` | Runner wrapper for trigger server. |
+| `automation/install-linear-trigger-launchagent.sh` | Installs trigger server LaunchAgent. |
+| `automation/uninstall-linear-trigger-launchagent.sh` | Removes trigger server LaunchAgent. |
+| `automation/check-global-summary-hotkey.sh` | Diagnostic status/log helper for hotkey service. |
+| `automation/README-morning-login.md` | Detailed macOS automation operations reference. |
+
+### Generated Local-Only Paths (Not Committed)
+
+| Path | Purpose |
+|---|---|
+| `.env` | Local secrets and machine-specific configuration. |
+| `.automation-state/` | Runtime state/session files (storage state, run markers). |
+| `logs/` | Runtime logs for runner, hotkey daemon, and trigger server. |
+| `automation/node_modules/` | Installed local dependencies. |
+
 ## Keyboard Shortcuts
 
 - Chrome command (`manifest.json`):
@@ -182,4 +277,3 @@ See:
   - `.automation-state/`
   - `logs/`
 - Do not commit real API tokens (Linear/Slack) or auth state files.
-
