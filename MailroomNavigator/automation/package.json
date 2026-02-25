@@ -1,0 +1,14 @@
+{
+  "name": "mailroomnavigator-automation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "auth:save": "node save-auth-local.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "imapflow": "^1.2.9",
+    "playwright": "^1.58.2"
+  }
+}
