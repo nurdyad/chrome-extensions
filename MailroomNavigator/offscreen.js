@@ -1,4 +1,4 @@
-// offscreen.js - Final Robust Silent Engine
+// Offscreen document worker used by Chrome extension background scraping flows.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'offscreen') return false;
 

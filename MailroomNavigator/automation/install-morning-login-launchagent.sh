@@ -4,6 +4,7 @@ set -euo pipefail
 # Installs a macOS LaunchAgent that runs the morning-login runner:
 # - at user login (RunAtLoad)
 # - every day at a selected clock time
+# - on a heartbeat interval so wake/unlock cases are handled
 #
 # Usage:
 #   ./install-morning-login-launchagent.sh [--hour 7] [--minute 0]

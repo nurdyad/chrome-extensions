@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# One-shot live dashboard summary fetch + macOS notification entrypoint.
+# Behavior:
+# - Uses saved auth state when available
+# - Retries once after refreshing auth if response is unauthorized
+# - Emits one final success/failure notification
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 

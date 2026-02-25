@@ -1,3 +1,5 @@
+// Bookmarklet utility runner injected into BetterLetter tabs.
+// Handles modal/panel placement and execution for UUID Picker / Docman Group tools.
 (function () {
   const SIDEBAR_ROOT_ID = 'bl-allinone-sidebar-panel';
   const BASE_RIGHT_GAP = 20;

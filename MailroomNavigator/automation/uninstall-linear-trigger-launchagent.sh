@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Removes the local linear-trigger LaunchAgent and plist.
+
 LABEL="ai.betterletter.mailroomnavigator.linear-trigger-server"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
 

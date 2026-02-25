@@ -2,6 +2,7 @@
 
 This automation runs on macOS login (and daily at a set time) and sends a native macOS notification.
 It is fully local to `MailroomNavigator/automation` and does not depend on `bot-jobs-linear`.
+For full extension install across platforms, see `MailroomNavigator/SETUP.md`.
 
 ## What it does
 
@@ -28,7 +29,7 @@ It is fully local to `MailroomNavigator/automation` and does not depend on `bot-
 ## Install
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 npm install
 chmod +x morning-login-runner.sh install-morning-login-launchagent.sh uninstall-morning-login-launchagent.sh reliability-test.sh start-linear-trigger-server.sh install-linear-trigger-launchagent.sh uninstall-linear-trigger-launchagent.sh show-live-summary-notification.sh install-global-summary-hotkey.sh uninstall-global-summary-hotkey.sh check-global-summary-hotkey.sh
 ./install-morning-login-launchagent.sh --hour 7 --minute 0 --interval 300
@@ -41,7 +42,7 @@ The `Trigger Linear` button in the extension calls a local service that runs `bo
 Install the local trigger service:
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 chmod +x start-linear-trigger-server.sh install-linear-trigger-launchagent.sh uninstall-linear-trigger-launchagent.sh
 ./install-linear-trigger-launchagent.sh
 ```
@@ -55,7 +56,8 @@ curl http://127.0.0.1:4817/health
 ## Test immediately
 
 ```bash
-/bin/bash /Users/nursiddique/chrome-extensions/MailroomNavigator/automation/morning-login-runner.sh --force
+cd <repo>/MailroomNavigator/automation
+/bin/bash ./morning-login-runner.sh --force
 ```
 
 ## Global Hotkey (Works Outside Chrome)
@@ -63,7 +65,7 @@ curl http://127.0.0.1:4817/health
 Install a macOS global shortcut daemon (`Cmd+Shift+9`, fallback `Cmd+Ctrl+9`) that triggers a live summary notification from any app (Slack desktop, Linear desktop, Meet tab, etc.).
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 ./install-global-summary-hotkey.sh
 ```
 
@@ -76,14 +78,14 @@ After install, a menu-bar indicator (`MRN`) stays visible and shows live state:
 Manual one-off run of the same summary notification script:
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 ./show-live-summary-notification.sh
 ```
 
 Check daemon health/logs quickly:
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 ./check-global-summary-hotkey.sh
 ```
 
@@ -99,7 +101,7 @@ Logs:
 Run multiple forced attempts and get a success-rate summary:
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 ./reliability-test.sh --attempts 3 --delay 20
 ```
 
@@ -138,7 +140,7 @@ Behavior details:
 ## Uninstall
 
 ```bash
-cd /Users/nursiddique/chrome-extensions/MailroomNavigator/automation
+cd <repo>/MailroomNavigator/automation
 ./uninstall-morning-login-launchagent.sh
 ./uninstall-linear-trigger-launchagent.sh
 ./uninstall-global-summary-hotkey.sh

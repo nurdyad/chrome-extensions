@@ -1,4 +1,6 @@
-// Wrap the entire script in an IIFE to create a private scope
+// Password tools content script for BetterLetter practice admin pages.
+// Provides inline floating helpers to read/copy/convert credential-like fields.
+// Wrapped in an IIFE to keep page scope isolated.
 (() => {
     console.log('BetterLetter Password Tools: Script injected and running!'); // Diagnostic log at the very top
     let floatingPanel = null;

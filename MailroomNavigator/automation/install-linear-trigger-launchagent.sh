@@ -1,15 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Installs the local LaunchAgent that exposes /trigger for "Trigger Linear" button calls.
+# This script intentionally does not store secrets in git-tracked files; it only references
+# values from MailroomNavigator/.env and runtime environment variables.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RUNNER_PATH="$SCRIPT_DIR/start-linear-trigger-server.sh"
 ENV_FILE="$REPO_ROOT/.env"
 SERVER_SCRIPT="$SCRIPT_DIR/linear-trigger-server.mjs"
-BOT_JOBS_DIR="${LINEAR_TRIGGER_BOT_JOBS_DIR:-/Users/nursiddique/Projects/bot-jobs-linear}"
 BOT_JOBS_ENTRY="${LINEAR_TRIGGER_BOT_JOBS_ENTRY:-bot-jobs.js}"
 PORT="${LINEAR_TRIGGER_SERVER_PORT:-4817}"
+
+resolve_default_bot_jobs_dir() {
+  local candidates=(
+    "$REPO_ROOT/../bot-jobs-linear"
+    "$HOME/Projects/bot-jobs-linear"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  # Fall back to the first candidate so the error message is deterministic.
+  printf '%s\n' "${candidates[0]}"
+}
+
+BOT_JOBS_DIR="${LINEAR_TRIGGER_BOT_JOBS_DIR:-$(resolve_default_bot_jobs_dir)}"
 
 LABEL="ai.betterletter.mailroomnavigator.linear-trigger-server"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -35,6 +56,7 @@ fi
 
 if [[ ! -d "$BOT_JOBS_DIR" ]]; then
   echo "Missing bot-jobs-linear directory: $BOT_JOBS_DIR"
+  echo "Set LINEAR_TRIGGER_BOT_JOBS_DIR to your local bot-jobs-linear path."
   exit 1
 fi
 

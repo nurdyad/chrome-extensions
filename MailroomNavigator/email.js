@@ -1,4 +1,4 @@
-// email.js
+// "Others" view helpers for email formatting/name extraction workflows.
 import { showToast, extractNameFromEmail } from './utils.js';
 
 // --- 1. Main Conversion Logic ---

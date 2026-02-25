@@ -11,6 +11,7 @@
 </head>
 <body>
   <div class="extension-wrapper"> 
+    <!-- Top-level view switcher: Navigator / Job Panel / Others -->
     <div class="btn-row global-nav-buttons-row">
       <button id="navigatorGlobalToggleBtn" class="btn active-tab">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -39,6 +40,7 @@
       </button>
     </div>
 
+    <!-- View 1: Practice Navigator -->
     <div id="practiceNavigatorView" class="view-transition">
       <h1>
         Practice Navigator
@@ -176,6 +178,7 @@
       <div id="statusDisplay"></div>
     </div>
 
+    <!-- View 2: Job Panel -->
     <div id="jobManagerView" class="job-manager-container view-transition" style="display: none; width: 100%;">
   
       <div class="section-container">
@@ -266,6 +269,7 @@
 
     </div>
 
+    <!-- View 3: Others (Email formatter, workflows, Linear/Slack, bookmarklet tools) -->
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
 
       <div class="section-container">
@@ -386,6 +390,7 @@ Mike Drinkwater"></textarea>
     </div>
 
   </div>
+  <!-- Modal host for bookmarklet tool UIs -->
   <div id="bookmarkletToolModal" class="bookmarklet-tool-modal" aria-hidden="true">
     <div class="bookmarklet-tool-modal-card" role="dialog" aria-modal="true" aria-labelledby="bookmarkletToolModalTitle">
       <div class="bookmarklet-tool-modal-header">

@@ -1,4 +1,4 @@
-// jobs.js - Full Replacement with URL Safety Guards
+// Job Panel logic: dashboard scraping, ID suggestions, URL builders, and bulk actions.
 import { state, setJobData, setUniquePractices, setDocActive, setJobIdActive, setPracticeActive } from './state.js';
 import { showToast, safeSetInnerHTML, toggleLoadingState, addActive, openTabWithTimeout } from './utils.js';
 import { setSelectedPractice } from './navigator.js';

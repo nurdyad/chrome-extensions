@@ -6,15 +6,31 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Local trigger server used by the extension "Trigger Linear" button.
+ * Security model:
+ * - Binds to localhost only by default (127.0.0.1)
+ * - Applies origin allowlist checks for browser requests
+ * - Reads runtime config from env (no secrets hard-coded in repo)
+ */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
 const HOST = String(process.env.LINEAR_TRIGGER_SERVER_HOST || "127.0.0.1");
 const PORT = Number(process.env.LINEAR_TRIGGER_SERVER_PORT || 4817);
-const BOT_JOBS_DIR = String(
-  process.env.LINEAR_TRIGGER_BOT_JOBS_DIR || "/Users/nursiddique/Projects/bot-jobs-linear",
-);
+function resolveDefaultBotJobsDir() {
+  const candidates = [
+    resolve(REPO_ROOT, "..", "bot-jobs-linear"),
+    resolve(process.env.HOME || "", "Projects", "bot-jobs-linear"),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+const BOT_JOBS_DIR = String(process.env.LINEAR_TRIGGER_BOT_JOBS_DIR || resolveDefaultBotJobsDir());
 const BOT_JOBS_ENTRY = String(process.env.LINEAR_TRIGGER_BOT_JOBS_ENTRY || "bot-jobs.js");
 const BOT_JOBS_ENV_FILE = String(
   process.env.LINEAR_TRIGGER_BOT_JOBS_ENV_FILE || join(BOT_JOBS_DIR, ".env"),

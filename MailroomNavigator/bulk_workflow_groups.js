@@ -1,3 +1,5 @@
+// In-page automation helper for creating workflow groups in bulk.
+// Triggered from the extension "Custom Workflow Groups" section.
 (() => {
   if (window.__BL_BULK_WORKFLOW_RUN__) return;
 

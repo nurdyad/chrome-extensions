@@ -1,6 +1,12 @@
 import "dotenv/config";
 import { chromium } from "playwright";
 
+/**
+ * Reads live "Require Attention" counts from BetterLetter admin dashboard tabs.
+ * Output contract (stdout):
+ * - SUMMARY=<human readable line>
+ * - SUMMARY_JSON=<json payload>
+ */
 const ADMIN_DASHBOARD_URL = "https://app.betterletter.ai/admin_panel/bots/dashboard?status=paused";
 const REQUESTS = [
   {

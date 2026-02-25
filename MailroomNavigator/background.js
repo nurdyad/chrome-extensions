@@ -1,6 +1,12 @@
 /**
- * Merged background.js - Final Stable Version
- * Fixes: Multi-monitor tab reuse and Phoenix LiveView tab clicking.
+ * MailroomNavigator background service worker.
+ *
+ * Primary responsibilities:
+ * - Cross-tab/background orchestration for panel actions
+ * - Practice cache management + hydration
+ * - Dashboard summary scraping / notification flow
+ * - Linear + Slack issue pipeline requests
+ * - Cross-window tab reuse/open helpers
  */
 
 // --- 1. Global State ---

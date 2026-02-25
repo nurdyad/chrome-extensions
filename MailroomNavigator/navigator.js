@@ -1,4 +1,4 @@
-// navigator.js - Cleaned for Top-Nav Redesign
+// Navigator view logic: practice lookup, quick navigation actions, and practice status rendering.
 import { state, setCurrentSelectedOdsCode } from './state.js';
 import { showStatus } from './utils.js';
 

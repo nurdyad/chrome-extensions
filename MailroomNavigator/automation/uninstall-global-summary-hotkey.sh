@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Removes the global summary hotkey LaunchAgent and plist.
+
 LABEL="ai.betterletter.mailroomnavigator.summary-hotkey"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
 

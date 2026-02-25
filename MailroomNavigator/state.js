@@ -1,4 +1,5 @@
-// state.js
+// Shared in-memory UI state used by panel modules.
+// This is not persisted by itself; background/storage sync is handled elsewhere.
 
 export const state = {
     currentSelectedOdsCode: null,

@@ -1,4 +1,5 @@
-// panel.js (Main Controller) - Full Replacement
+// Main panel controller for all three views (Navigator, Job Panel, Others).
+// This file wires DOM events to feature modules and background actions.
 import { state, setCachedPractices } from './state.js';
 import { showToast, showStatus, openTabWithTimeout } from './utils.js';
 import * as Navigator from './navigator.js';

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Removes the morning-login LaunchAgent and plist.
+
 LABEL="ai.betterletter.mailroomnavigator.morning-login"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
 

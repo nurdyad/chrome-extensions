@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Diagnostic helper for the global summary hotkey stack.
+# It prints:
+# 1) LaunchAgent state
+# 2) hotkey daemon log tail
+# 3) latest summary script log tail
+# 4) launchd stdout/stderr tails
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 

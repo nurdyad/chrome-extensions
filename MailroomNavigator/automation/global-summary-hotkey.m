@@ -2,6 +2,12 @@
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 
+// Global hotkey daemon (macOS):
+// - Registers Cmd+Shift+9 and Cmd+Ctrl+9
+// - Executes show-live-summary-notification.sh
+// - Maintains a menu bar heartbeat indicator (MRN)
+// - Logs lifecycle and run outcomes
+
 static EventHotKeyRef gHotKeyRef = NULL;
 static EventHotKeyRef gNumpadHotKeyRef = NULL;
 static EventHotKeyRef gFallbackHotKeyRef = NULL;
