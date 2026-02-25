@@ -1,0 +1,14 @@
+{
+  "updatedAt": "2026-02-25T00:18:45.159Z",
+  "activeRun": null,
+  "lastRun": {
+    "runId": "1771978699240-igv21n",
+    "startedAt": "2026-02-25T00:18:19.240Z",
+    "endedAt": "2026-02-25T00:18:45.158Z",
+    "status": "success",
+    "dryRun": true,
+    "exitCode": 0,
+    "signal": "",
+    "error": ""
+  }
+}

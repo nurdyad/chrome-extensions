@@ -362,11 +362,17 @@ Mike Drinkwater"></textarea>
         </div>
 
         <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Ready.</div>
+        <label style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
+          <input id="triggerLinearDryRunInput" type="checkbox">
+          Trigger Linear in Dry Run mode (no new issues created)
+        </label>
         <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create + Post</button>
           <button id="saveLinearSlackConfigBtn" class="btn btn-sm btn-ghost">Save Config</button>
+          <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #0f766e;">Trigger Linear</button>
           <button id="clearLinearSlackConfigBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #b45309;">Clear Saved Config</button>
         </div>
+        <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger idle.</div>
       </div>
 
       <div class="section-container">
