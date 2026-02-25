@@ -28,6 +28,12 @@ build/
 .env.local
 .env.*.local
 
+# MailroomNavigator runtime artifacts (generated/sensitive)
+MailroomNavigator/.automation-state/
+MailroomNavigator/logs/
+MailroomNavigator/automation/playwright-report/
+MailroomNavigator/automation/test-results/
+
 # OS junk
 Thumbs.db
 ehthumbs.db
