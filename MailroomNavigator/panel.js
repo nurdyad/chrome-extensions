@@ -462,6 +462,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const createLinearSlackIssueBtn = document.getElementById('createLinearSlackIssueBtn');
     const saveLinearSlackConfigBtn = document.getElementById('saveLinearSlackConfigBtn');
     const clearLinearSlackConfigBtn = document.getElementById('clearLinearSlackConfigBtn');
+    const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
+    const triggerLinearDryRunInput = document.getElementById('triggerLinearDryRunInput');
+    const linearTriggerStatus = document.getElementById('linearTriggerStatus');
 
     let recentDocIds = [];
     let recentJobIds = [];
@@ -475,6 +478,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     let dashboardRowsSourceTabId = null;
     const DASHBOARD_SUGGESTION_STALE_MS = 45000;
     const LINEAR_SLACK_CONFIG_KEY = 'linearSlackConfigV1';
+    const LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS = 3500;
+    const LINEAR_TRIGGER_STATUS_POLL_WINDOW_MS = 4 * 60 * 1000;
+    let linearTriggerStatusPollTimer = null;
+    let linearTriggerStatusPollDeadlineMs = 0;
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -1455,6 +1462,176 @@ document.addEventListener('DOMContentLoaded', async () => {
         linearSlackStatus.textContent = message;
     };
 
+    const setLinearTriggerStatus = (message, tone = null) => {
+        if (!linearTriggerStatus) return;
+        linearTriggerStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') linearTriggerStatus.classList.add('valid');
+        else if (tone === 'invalid') linearTriggerStatus.classList.add('invalid');
+        else linearTriggerStatus.classList.add('neutral');
+        linearTriggerStatus.textContent = message;
+    };
+
+    const setLinearTriggerButtonState = (state) => {
+        if (!triggerLinearBotJobsBtn) return;
+        const normalized = String(state || 'idle').toLowerCase();
+        if (normalized === 'pending') {
+            triggerLinearBotJobsBtn.disabled = true;
+            triggerLinearBotJobsBtn.textContent = 'Triggering…';
+            return;
+        }
+        if (normalized === 'running') {
+            triggerLinearBotJobsBtn.disabled = true;
+            triggerLinearBotJobsBtn.textContent = 'Running…';
+            return;
+        }
+        triggerLinearBotJobsBtn.disabled = false;
+        triggerLinearBotJobsBtn.textContent = 'Trigger Linear';
+    };
+
+    const formatLinearTriggerTime = (value) => {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
+    const formatLinearTriggerRunSummary = (run, isActive = false) => {
+        if (!run || typeof run !== 'object') return '';
+        const runId = trimField(run.runId, 64) || 'unknown';
+        const started = formatLinearTriggerTime(run.startedAt);
+        const ended = formatLinearTriggerTime(run.endedAt);
+        const dryRun = run.dryRun ? ' (dry run)' : '';
+        if (isActive || String(run.status || '').toLowerCase() === 'running') {
+            return `Run ${runId} is running${dryRun}${started ? ` since ${started}` : ''}.`;
+        }
+        if (String(run.status || '').toLowerCase() === 'success') {
+            return `Run ${runId} finished successfully${dryRun}${ended ? ` at ${ended}` : ''}.`;
+        }
+        const reason = trimField(run.error, 180) || `exit code ${String(run.exitCode ?? 'unknown')}`;
+        return `Run ${runId} failed${dryRun}${ended ? ` at ${ended}` : ''}: ${reason}`;
+    };
+
+    const stopLinearTriggerStatusPolling = () => {
+        if (!linearTriggerStatusPollTimer) return;
+        clearInterval(linearTriggerStatusPollTimer);
+        linearTriggerStatusPollTimer = null;
+        linearTriggerStatusPollDeadlineMs = 0;
+    };
+
+    const applyLinearTriggerHealthStatus = (health) => {
+        if (!health || typeof health !== 'object') {
+            setLinearTriggerStatus('Local trigger status unavailable.', 'invalid');
+            setLinearTriggerButtonState('idle');
+            return false;
+        }
+
+        const isRunning = Boolean(health.running);
+        const activeRun = health.activeRun && typeof health.activeRun === 'object' ? health.activeRun : null;
+        const lastRun = health.lastRun && typeof health.lastRun === 'object' ? health.lastRun : null;
+
+        if (isRunning && activeRun) {
+            setLinearTriggerButtonState('running');
+            setLinearTriggerStatus(formatLinearTriggerRunSummary(activeRun, true), 'neutral');
+            return true;
+        }
+
+        setLinearTriggerButtonState('idle');
+        if (lastRun) {
+            const tone = String(lastRun.status || '').toLowerCase() === 'success' ? 'valid' : 'invalid';
+            setLinearTriggerStatus(formatLinearTriggerRunSummary(lastRun, false), tone);
+            return false;
+        }
+
+        setLinearTriggerStatus('Local trigger idle.', 'neutral');
+        return false;
+    };
+
+    const fetchLinearTriggerHealthStatus = async () => {
+        const response = await chrome.runtime.sendMessage({
+            action: 'getLinearBotJobsTriggerStatus'
+        });
+        if (!response?.success || !response?.status) {
+            const reason = trimField(response?.error, 240) || 'Could not read local trigger status.';
+            throw new Error(reason);
+        }
+        return response.status;
+    };
+
+    const pollLinearTriggerStatus = async ({ silent = false } = {}) => {
+        try {
+            const health = await fetchLinearTriggerHealthStatus();
+            return applyLinearTriggerHealthStatus(health);
+        } catch (error) {
+            setLinearTriggerButtonState('idle');
+            if (!silent) {
+                const reason = trimField(error?.message, 240) || 'Could not read local trigger status.';
+                setLinearTriggerStatus(reason, 'invalid');
+            }
+            return false;
+        }
+    };
+
+    const startLinearTriggerStatusPolling = () => {
+        stopLinearTriggerStatusPolling();
+        linearTriggerStatusPollDeadlineMs = Date.now() + LINEAR_TRIGGER_STATUS_POLL_WINDOW_MS;
+
+        pollLinearTriggerStatus({ silent: false }).catch(() => undefined);
+
+        linearTriggerStatusPollTimer = setInterval(() => {
+            if (Date.now() > linearTriggerStatusPollDeadlineMs) {
+                stopLinearTriggerStatusPolling();
+                setLinearTriggerButtonState('idle');
+                return;
+            }
+            pollLinearTriggerStatus({ silent: false })
+                .then((isRunning) => {
+                    if (!isRunning) stopLinearTriggerStatusPolling();
+                })
+                .catch(() => undefined);
+        }, LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS);
+    };
+
+    const triggerLinearBotJobsRun = async () => {
+        try {
+            const isDryRun = Boolean(triggerLinearDryRunInput?.checked);
+            setLinearTriggerButtonState('pending');
+            setLinearTriggerStatus(
+                isDryRun ? 'Triggering bot-jobs-linear dry run…' : 'Triggering bot-jobs-linear run…',
+                'neutral'
+            );
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'triggerLinearBotJobsRun',
+                payload: { dryRun: isDryRun }
+            });
+
+            if (response?.success && response?.run) {
+                const summary = formatLinearTriggerRunSummary(response.run, true) || 'Run started.';
+                setLinearTriggerStatus(summary, 'valid');
+                showToast(isDryRun ? 'bot-jobs-linear dry run triggered.' : 'bot-jobs-linear run triggered.');
+                setLinearTriggerButtonState('running');
+                startLinearTriggerStatusPolling();
+                return;
+            }
+
+            if (response?.running && response?.run) {
+                const summary = formatLinearTriggerRunSummary(response.run, true) || 'A run is already in progress.';
+                setLinearTriggerStatus(summary, 'neutral');
+                showToast('A Linear run is already in progress.');
+                setLinearTriggerButtonState('running');
+                startLinearTriggerStatusPolling();
+                return;
+            }
+
+            throw new Error(trimField(response?.error, 260) || 'Could not trigger bot-jobs-linear run.');
+        } catch (error) {
+            const message = trimField(error?.message, 260) || 'Could not trigger bot-jobs-linear run.';
+            setLinearTriggerStatus(message, 'invalid');
+            setLinearTriggerButtonState('idle');
+            showToast(message);
+        }
+    };
+
     // Show only the relevant Slack credential block based on selected delivery mode.
     const updateSlackModeVisibility = () => {
         const mode = String(slackDeliveryModeInput?.value || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
@@ -1824,8 +2001,16 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Linear/Slack action failed.');
         });
     });
+    triggerLinearBotJobsBtn?.addEventListener('click', () => {
+        triggerLinearBotJobsRun().catch(() => {
+            setLinearTriggerStatus('Could not trigger bot-jobs-linear run.', 'invalid');
+            setLinearTriggerButtonState('idle');
+            showToast('Could not trigger bot-jobs-linear run.');
+        });
+    });
     updateSlackModeVisibility();
     await loadLinearSlackConfig();
+    await pollLinearTriggerStatus({ silent: true });
 
     const refreshDocSuggestions = async ({ force = false } = {}) => {
         await syncDashboardSuggestionRows({ force, silent: true });
@@ -2013,7 +2198,7 @@ setInterval(async () => {
         await syncPracticeCache();
       }
 
-      await Navigator.displayPracticeStatus();
+      await Navigator.displayPracticeStatus({ keepExisting: true, preferCached: true, silent: true });
     } catch (e) {
       console.warn("[Panel] Scan skipped.");
     } finally {

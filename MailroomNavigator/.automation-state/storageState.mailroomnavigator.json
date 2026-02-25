@@ -1,0 +1,15 @@
+{
+  "cookies": [
+    {
+      "name": "_mailroom_key",
+      "value": "SFMyNTY.g3QAAAAEbQAAAAtfY3NyZl90b2tlbm0AAAAYNDVUMnoxcmZia2NvOVlSLUpqemNRVS1KbQAAABBsYXN0X2FjdGl2aXR5X2F0YmmfYC9tAAAADGxvZ2dlZF9pbl9hdGJpn2AvbQAAAAp1c2VyX3Rva2VubQAAAUtleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKaGRXUWlPaUotUGlBMExqa2lMQ0psZUhBaU9qRTNOek15TmpJeE1qY3NJbWxoZENJNk1UYzNNakExTWpVeU55d2lhWE56SWpvaVFYTm9RWFYwYUdWdWRHbGpZWFJwYjI0Z2RqUXVPUzQ1SWl3aWFuUnBJam9pTXpKaWNHZHZhMjVyTjJOeGFIQTNjR1F3TVRnM2N6a3hJaXdpYm1KbUlqb3hOemN5TURVeU5USTNMQ0p6ZFdJaU9pSjFjMlZ5UDNWelpYSmZhV1E5WVhWMGFEQWxOME0yTmpoaVlXRXlaR1poTWpJeVl6QXhaREkxTUdZell6QWlmUS44dDhQZlRYV1ZUek52REdCY1NBZVBYVVRzRXpnMVVUYUNTUXIxal9ZWTBv.cQzfzNORRX7ISCOqMNWCbMDsunmOmX5qLV39tzt2v80",
+      "domain": "app.betterletter.ai",
+      "path": "/",
+      "expires": 1772138928.069702,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}

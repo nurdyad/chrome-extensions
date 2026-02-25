@@ -9,14 +9,64 @@ const CACHE_EXPIRY = 24 * 60 * 60 * 1000;
 let isScrapingActive = false; 
 const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
 const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
+const LIVE_COUNTS_CACHE_TTL_MS = 45 * 1000;
+const LIVE_COUNTS_TEMP_TAB_COOLDOWN_MS = 30 * 1000;
+const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
+const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
 const LINEAR_GRAPHQL_ENDPOINT = 'https://api.linear.app/graphql';
 const SLACK_CHAT_POST_MESSAGE_ENDPOINT = 'https://slack.com/api/chat.postMessage';
+const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
+const liveCountsCacheByOds = new Map();
+const liveCountsTempFetchInFlightByOds = new Map();
+const liveCountsLastTempFetchAtByOds = new Map();
+const liveCountsResolveInFlightByOds = new Map();
+const LEGACY_MAILROOM_API_STORAGE_KEYS = ['mailroomApiConfigV1', 'MAILROOM_API_URL', 'MAILROOM_API_KEY'];
+const MORNING_DASHBOARD_ALERT_STATE_KEY = 'morningDashboardAlertStateV2';
+const MORNING_DASHBOARD_ALERT_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+const MORNING_DASHBOARD_ALERT_MIN_INTERVAL_MS = 10 * 60 * 1000;
+const MORNING_DASHBOARD_ALERT_FETCH_TIMEOUT_MS = 14000;
+const MORNING_DASHBOARD_ALERT_WINDOW_START_HOUR = 7;
+const MORNING_DASHBOARD_ALERT_WINDOW_END_HOUR = 17;
+const HOTKEY_SHOW_LIVE_SUMMARY_COMMAND = 'show_live_dashboard_summary';
+const HOTKEY_TOOLTIP_AUTO_HIDE_MS = 8500;
+const MORNING_DASHBOARD_ALERT_REQUESTS = [
+    {
+        key: 'filing',
+        label: 'Filing (Docman pipeline)',
+        path: '/admin_panel/bots/dashboard?job_types=generate_output+docman_upload+docman_file+merge_tasks_for_same_recipient+docman_review+docman_delete_original+docman_validate&status=paused'
+    },
+    {
+        key: 'docman',
+        label: 'Docman Import',
+        path: '/admin_panel/bots/dashboard?job_types=docman_import&status=paused'
+    },
+    {
+        key: 'coding',
+        label: 'Coding',
+        path: '/admin_panel/bots/dashboard?job_types=emis_coding+emis_api_consultation&status=paused'
+    },
+    {
+        key: 'import',
+        label: 'Import Jobs',
+        path: '/admin_panel/bots/dashboard?job_types=import_jobs+emis_prepare&status=paused'
+    }
+];
 const CACHE_REQUIRED_ACTIONS = new Set([
     'getPracticeCache',
     'requestActiveScrape',
     'getPracticeStatus',
     'hydratePracticeCdb'
 ]);
+
+async function clearLegacyMailroomApiStorage() {
+    try {
+        await chrome.storage.local.remove(LEGACY_MAILROOM_API_STORAGE_KEYS);
+    } catch (e) {
+        // Ignore storage cleanup failures; they do not affect runtime behavior.
+    }
+}
+clearLegacyMailroomApiStorage();
 
 // --- 2. TAB RE-USE & LIVEVIEW CLICKING ---
 
@@ -368,10 +418,623 @@ async function handleCreateLinearIssueAndNotifySlack(rawPayload) {
     }
 }
 
+function sanitizeLinearTriggerRunPayload(rawPayload = {}) {
+    return {
+        dryRun: Boolean(rawPayload?.dryRun)
+    };
+}
+
+function sanitizeLinearTriggerRun(rawRun = null) {
+    if (!rawRun || typeof rawRun !== 'object') return null;
+    const status = sanitizeSingleLine(rawRun.status, 32).toLowerCase();
+    const exitCode = typeof rawRun.exitCode === 'number' && Number.isFinite(rawRun.exitCode)
+        ? rawRun.exitCode
+        : null;
+    return {
+        runId: sanitizeSingleLine(rawRun.runId, 80),
+        startedAt: sanitizeSingleLine(rawRun.startedAt, 80),
+        endedAt: sanitizeSingleLine(rawRun.endedAt, 80),
+        status: ['running', 'success', 'failed'].includes(status) ? status : '',
+        dryRun: Boolean(rawRun.dryRun),
+        exitCode,
+        signal: sanitizeSingleLine(rawRun.signal, 32),
+        error: sanitizeSingleLine(rawRun.error, 260)
+    };
+}
+
+async function callLinearTriggerServer(path, { method = 'GET', body = null } = {}) {
+    const normalizedPath = String(path || '').trim().startsWith('/') ? String(path).trim() : `/${String(path || '').trim()}`;
+    const targetUrl = `${LINEAR_TRIGGER_SERVER_BASE_URL}${normalizedPath}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), LINEAR_TRIGGER_SERVER_TIMEOUT_MS);
+
+    try {
+        const headers = { 'Accept': 'application/json' };
+        const init = { method, headers, signal: controller.signal };
+        if (body !== null) {
+            headers['Content-Type'] = 'application/json';
+            init.body = JSON.stringify(body);
+        }
+
+        const response = await fetch(targetUrl, init);
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (e) {
+            payload = null;
+        }
+
+        return { response, payload };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function normalizeLinearTriggerError(error) {
+    const errorName = sanitizeSingleLine(error?.name, 80).toLowerCase();
+    if (errorName === 'aborterror') {
+        return 'Local trigger service timed out.';
+    }
+
+    const message = sanitizeSingleLine(error?.message, 220);
+    if (!message) {
+        return 'Local trigger service is unavailable.';
+    }
+
+    if (message.toLowerCase().includes('failed to fetch')) {
+        return 'Local trigger service is unavailable. Run install-linear-trigger-launchagent.sh.';
+    }
+
+    return message;
+}
+
+async function handleTriggerLinearBotJobsRun(rawPayload) {
+    try {
+        const payload = sanitizeLinearTriggerRunPayload(rawPayload);
+        const { response, payload: serverPayload } = await callLinearTriggerServer('/trigger-linear', {
+            method: 'POST',
+            body: payload
+        });
+
+        const run = sanitizeLinearTriggerRun(serverPayload?.run);
+        if (response.status === 409) {
+            return {
+                success: false,
+                running: true,
+                run,
+                error: sanitizeSingleLine(serverPayload?.error, 220) || 'A bot-jobs run is already in progress.'
+            };
+        }
+
+        if (!response.ok || !serverPayload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(serverPayload?.error, 240) || `Trigger service failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            run
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
+async function handleGetLinearBotJobsTriggerStatus() {
+    try {
+        const { response, payload } = await callLinearTriggerServer('/health', { method: 'GET' });
+        if (!response.ok || !payload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Trigger service health failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            status: {
+                running: Boolean(payload.running),
+                activeRun: sanitizeLinearTriggerRun(payload.activeRun),
+                lastRun: sanitizeLinearTriggerRun(payload.lastRun),
+                serverTime: sanitizeSingleLine(payload.serverTime, 80)
+            }
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
 function getTabUrl(tab) {
     if (typeof tab?.url === 'string') return tab.url;
     if (typeof tab?.pendingUrl === 'string') return tab.pendingUrl;
     return '';
+}
+
+function isWithinLocalAlertWindow(timestampMs = Date.now()) {
+    const hour = new Date(timestampMs).getHours();
+    const startHour = Number(MORNING_DASHBOARD_ALERT_WINDOW_START_HOUR);
+    const endHour = Number(MORNING_DASHBOARD_ALERT_WINDOW_END_HOUR);
+    if (!Number.isInteger(startHour) || !Number.isInteger(endHour)) return true;
+    if (startHour === endHour) return true;
+    if (startHour < endHour) return hour >= startHour && hour < endHour;
+    return hour >= startHour || hour < endHour;
+}
+
+function formatMorningCount(value) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : 'N/A';
+}
+
+function buildMorningDashboardSummaryMessage(summary) {
+    const generatedAt = new Date(summary?.generatedAt || Date.now());
+    const dateLabel = generatedAt.toLocaleDateString(undefined, {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+    });
+    const timeLabel = generatedAt.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+
+    const lines = [
+        `BetterLetter Morning Summary (${dateLabel} ${timeLabel})`,
+        ''
+    ];
+
+    const categories = Array.isArray(summary?.categories) ? summary.categories : [];
+    categories.forEach((item) => {
+        const label = String(item?.label || item?.key || 'Category').trim();
+        const requireAttention = formatMorningCount(item?.requireAttentionCount);
+        lines.push(`${label}: Require Attention ${requireAttention}`);
+    });
+
+    if (categories.length > 0) {
+        lines.push('');
+        lines.push('Source: Bots Dashboard paused filters');
+    }
+
+    return lines.join('\n');
+}
+
+function buildHotkeySummaryTooltipData(summary, errorMessage = '') {
+    if (errorMessage) {
+        return {
+            title: 'MailroomNavigator',
+            lines: [String(errorMessage || 'Unable to load summary.')],
+            isError: true
+        };
+    }
+
+    const generatedAt = new Date(summary?.generatedAt || Date.now());
+    const updatedAt = generatedAt.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+
+    const categories = Array.isArray(summary?.categories) ? summary.categories : [];
+    const lines = categories.map((item) => {
+        const label = String(item?.label || item?.key || 'Category').trim();
+        const requireAttention = formatMorningCount(item?.requireAttentionCount);
+        return `${label}: ${requireAttention} require attention`;
+    });
+    lines.push(`Updated: ${updatedAt}`);
+
+    return {
+        title: 'Live BetterLetter Summary',
+        lines,
+        isError: false
+    };
+}
+
+async function showHotkeySummaryTooltipInTab(tabId, tooltipData) {
+    if (typeof tabId !== 'number') return false;
+    if (!tooltipData || typeof tooltipData !== 'object') return false;
+
+    const title = sanitizeSingleLine(tooltipData.title, 80) || 'MailroomNavigator';
+    const lines = Array.isArray(tooltipData.lines)
+        ? tooltipData.lines.map((line) => sanitizeSingleLine(line, 220)).filter(Boolean).slice(0, 8)
+        : [];
+    const isError = Boolean(tooltipData.isError);
+    if (!lines.length) return false;
+
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (payload, hideMs) => {
+                try {
+                    const TOOLTIP_ID = '__mailroomnavigator_hotkey_summary_tooltip';
+                    const POINTER_STATE_KEY = '__mailroomnavigator_pointer_state';
+                    const fallbackX = Math.max(24, window.innerWidth - 28);
+                    const fallbackY = 72;
+
+                    if (!window[POINTER_STATE_KEY]) {
+                        window[POINTER_STATE_KEY] = { x: fallbackX, y: fallbackY };
+                        const capturePointer = (event) => {
+                            window[POINTER_STATE_KEY] = {
+                                x: Number(event?.clientX || fallbackX),
+                                y: Number(event?.clientY || fallbackY)
+                            };
+                        };
+                        document.addEventListener('mousemove', capturePointer, { passive: true });
+                        document.addEventListener('pointermove', capturePointer, { passive: true });
+                    }
+
+                    const existing = document.getElementById(TOOLTIP_ID);
+                    if (existing) {
+                        const timerId = Number(existing.dataset.hideTimer || 0);
+                        if (Number.isFinite(timerId) && timerId > 0) window.clearTimeout(timerId);
+                        existing.remove();
+                    }
+
+                    const tooltipEl = document.createElement('div');
+                    tooltipEl.id = TOOLTIP_ID;
+                    tooltipEl.style.position = 'fixed';
+                    tooltipEl.style.zIndex = '2147483647';
+                    tooltipEl.style.maxWidth = '420px';
+                    tooltipEl.style.minWidth = '260px';
+                    tooltipEl.style.padding = '10px 12px';
+                    tooltipEl.style.borderRadius = '10px';
+                    tooltipEl.style.boxShadow = '0 10px 25px rgba(0,0,0,0.3)';
+                    tooltipEl.style.border = payload?.isError ? '1px solid rgba(220, 38, 38, 0.85)' : '1px solid rgba(30, 64, 175, 0.85)';
+                    tooltipEl.style.background = payload?.isError ? 'rgba(127, 29, 29, 0.95)' : 'rgba(15, 23, 42, 0.95)';
+                    tooltipEl.style.color = '#ffffff';
+                    tooltipEl.style.font = '13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    tooltipEl.style.whiteSpace = 'pre-wrap';
+                    tooltipEl.style.pointerEvents = 'none';
+                    tooltipEl.style.opacity = '0';
+                    tooltipEl.style.transition = 'opacity 140ms ease';
+
+                    const titleEl = document.createElement('div');
+                    titleEl.textContent = String(payload?.title || 'MailroomNavigator');
+                    titleEl.style.fontWeight = '700';
+                    titleEl.style.marginBottom = '6px';
+                    titleEl.style.color = payload?.isError ? '#fecaca' : '#bfdbfe';
+                    tooltipEl.appendChild(titleEl);
+
+                    const bodyEl = document.createElement('div');
+                    bodyEl.textContent = Array.isArray(payload?.lines) ? payload.lines.join('\n') : '';
+                    tooltipEl.appendChild(bodyEl);
+
+                    (document.body || document.documentElement).appendChild(tooltipEl);
+
+                    const pointer = window[POINTER_STATE_KEY] || { x: fallbackX, y: fallbackY };
+                    let left = Number(pointer.x || fallbackX) + 16;
+                    let top = Number(pointer.y || fallbackY) + 18;
+                    const rect = tooltipEl.getBoundingClientRect();
+                    if (left + rect.width > window.innerWidth - 12) {
+                        left = Math.max(12, Number(pointer.x || fallbackX) - rect.width - 16);
+                    }
+                    if (top + rect.height > window.innerHeight - 12) {
+                        top = Math.max(12, window.innerHeight - rect.height - 12);
+                    }
+                    tooltipEl.style.left = `${Math.round(left)}px`;
+                    tooltipEl.style.top = `${Math.round(top)}px`;
+
+                    requestAnimationFrame(() => {
+                        tooltipEl.style.opacity = '1';
+                    });
+
+                    const closeTimer = window.setTimeout(() => {
+                        tooltipEl.style.opacity = '0';
+                        window.setTimeout(() => tooltipEl.remove(), 180);
+                    }, Math.max(1500, Number(hideMs || 8000)));
+                    tooltipEl.dataset.hideTimer = String(closeTimer);
+                } catch (e) {
+                    // Ignore tooltip rendering failures in page context.
+                }
+            },
+            args: [{ title, lines, isError }, HOTKEY_TOOLTIP_AUTO_HIDE_MS]
+        });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function showLiveSummaryViaHotkey() {
+    let activeTab = null;
+    try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        activeTab = tabs?.[0] || null;
+    } catch (e) {
+        activeTab = null;
+    }
+
+    const activeTabId = activeTab?.id;
+    const activeTabUrl = getTabUrl(activeTab);
+    if (typeof activeTabId !== 'number' || !isScriptableUrl(activeTabUrl)) return;
+
+    try {
+        const summary = await withTimeout(
+            fetchMorningDashboardSummaryFromSession(),
+            MORNING_DASHBOARD_ALERT_FETCH_TIMEOUT_MS
+        );
+        if (!summary || typeof summary !== 'object') {
+            await showHotkeySummaryTooltipInTab(
+                activeTabId,
+                buildHotkeySummaryTooltipData(null, 'Unable to load BetterLetter summary right now.')
+            );
+            return;
+        }
+        if (summary.unauthorized) {
+            await showHotkeySummaryTooltipInTab(
+                activeTabId,
+                buildHotkeySummaryTooltipData(null, 'BetterLetter session is not authorized. Please sign in.')
+            );
+            return;
+        }
+        if (!Array.isArray(summary.categories) || summary.categories.length === 0) {
+            await showHotkeySummaryTooltipInTab(
+                activeTabId,
+                buildHotkeySummaryTooltipData(null, 'No dashboard summary data found.')
+            );
+            return;
+        }
+        await showHotkeySummaryTooltipInTab(activeTabId, buildHotkeySummaryTooltipData(summary));
+    } catch (e) {
+        await showHotkeySummaryTooltipInTab(
+            activeTabId,
+            buildHotkeySummaryTooltipData(null, 'Summary fetch failed. Try again in a few seconds.')
+        );
+    }
+}
+
+let morningDashboardAlertInFlight = false;
+
+async function fetchMorningDashboardSummaryFromSession() {
+    const result = await runInExistingBetterLetterTab(async (requestConfigs) => {
+        const collapse = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const normalizeHeader = (value) => collapse(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const buildLooseLabelPattern = (label) => {
+            const tokens = collapse(label).toLowerCase().split(/\s+/).filter(Boolean);
+            if (!tokens.length) return '';
+            return tokens.join('\\s*');
+        };
+
+        const parseCountByLabel = (text, label) => {
+            const source = collapse(text);
+            const looseLabelPattern = buildLooseLabelPattern(label);
+            if (!source || !looseLabelPattern) return null;
+
+            const patterns = [
+                new RegExp(`${looseLabelPattern}[^0-9]{0,20}\\((\\d+)\\)`, 'gi'),
+                new RegExp(`${looseLabelPattern}[^0-9]{0,20}[:\\-]?\\s*(\\d+)\\b`, 'gi')
+            ];
+
+            const values = [];
+            patterns.forEach((regex) => {
+                for (const match of source.matchAll(regex)) {
+                    const parsed = Number.parseInt(String(match?.[1] || ''), 10);
+                    if (Number.isFinite(parsed) && parsed >= 0) values.push(parsed);
+                }
+            });
+
+            if (!values.length) return null;
+            return Math.max(...values);
+        };
+
+        const parseDocumentId = (value) => {
+            const match = collapse(value).match(/\d+/);
+            return match ? match[0] : '';
+        };
+
+        const parseStatusText = (cell) => collapse(cell?.innerText || cell?.textContent || '');
+        const isFailedStatus = (statusText) => /fail|error|attention|still\s*erroring/i.test(String(statusText || ''));
+
+        const resolveHeaderMap = (table) => {
+            if (!table) return null;
+            const headerCells = Array.from(table.querySelectorAll('thead th'));
+            if (!headerCells.length) return null;
+
+            const map = {};
+            headerCells.forEach((th, index) => {
+                const normalized = normalizeHeader(th.textContent);
+                if (!normalized) return;
+                if (normalized.includes('document') && normalized.includes('id')) {
+                    map.document = index;
+                    return;
+                }
+                if (normalized.includes('status')) {
+                    map.status = index;
+                }
+            });
+
+            if (typeof map.document !== 'number') return null;
+            return map;
+        };
+
+        const parseRowsFromDashboardHtml = (html) => {
+            const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+            const sourceText = collapse(doc?.body?.innerText || '');
+            const unauthorized = /log in|sign in|password/i.test(sourceText) &&
+                Boolean(doc.querySelector('form[action*="sign"], input[type="password"]'));
+
+            const tables = Array.from(doc.querySelectorAll('table'));
+            let headerMap = null;
+            let targetTable = null;
+            for (const table of tables) {
+                const map = resolveHeaderMap(table);
+                if (!map) continue;
+                targetTable = table;
+                headerMap = map;
+                break;
+            }
+
+            let rowCount = 0;
+            let failedRows = 0;
+            if (targetTable && headerMap) {
+                const bodyRows = Array.from(targetTable.querySelectorAll('tbody tr'));
+                bodyRows.forEach((rowEl) => {
+                    const cells = Array.from(rowEl.querySelectorAll('td'));
+                    if (!cells.length) return;
+                    const documentCell = cells[headerMap.document];
+                    const documentId = parseDocumentId(documentCell?.innerText || documentCell?.textContent || '');
+                    if (!documentId) return;
+                    rowCount += 1;
+
+                    if (typeof headerMap.status === 'number') {
+                        const statusCell = cells[headerMap.status];
+                        const statusText = parseStatusText(statusCell);
+                        if (isFailedStatus(statusText)) failedRows += 1;
+                    }
+                });
+            }
+
+            const requireAttentionCount = parseCountByLabel(sourceText, 'Require Attention');
+            const effectiveRequireAttentionCount = Number.isFinite(requireAttentionCount)
+                ? requireAttentionCount
+                : failedRows;
+
+            return {
+                unauthorized,
+                rowCount,
+                failedRows,
+                requireAttentionCount: Number.isFinite(effectiveRequireAttentionCount)
+                    ? effectiveRequireAttentionCount
+                    : null
+            };
+        };
+
+        const fetchOneCategory = async (item) => {
+            try {
+                const response = await fetch(String(item?.path || ''), {
+                    credentials: 'include',
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    return {
+                        key: String(item?.key || ''),
+                        label: String(item?.label || item?.key || ''),
+                        unauthorized: false,
+                        requireAttentionCount: null,
+                        rowCount: 0
+                    };
+                }
+
+                const html = await response.text();
+                const parsed = parseRowsFromDashboardHtml(html);
+                return {
+                    key: String(item?.key || ''),
+                    label: String(item?.label || item?.key || ''),
+                    unauthorized: parsed.unauthorized,
+                    requireAttentionCount: parsed.requireAttentionCount,
+                    rowCount: parsed.rowCount
+                };
+            } catch (e) {
+                return {
+                    key: String(item?.key || ''),
+                    label: String(item?.label || item?.key || ''),
+                    unauthorized: false,
+                    requireAttentionCount: null,
+                    rowCount: 0
+                };
+            }
+        };
+
+        const categories = await Promise.all((Array.isArray(requestConfigs) ? requestConfigs : []).map(fetchOneCategory));
+        const unauthorized = categories.some(item => item?.unauthorized);
+
+        return {
+            unauthorized,
+            generatedAt: Date.now(),
+            categories
+        };
+    }, [MORNING_DASHBOARD_ALERT_REQUESTS]);
+
+    return result && typeof result === 'object' ? result : null;
+}
+
+async function showMorningDashboardAlertInTab(tabId, summary) {
+    if (typeof tabId !== 'number') return false;
+    const message = buildMorningDashboardSummaryMessage(summary);
+    if (!message.trim()) return false;
+
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (text) => {
+                window.alert(String(text || 'BetterLetter morning summary is ready.'));
+            },
+            args: [message]
+        });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function maybeTriggerMorningDashboardAlert(tabId, tabUrl, reason = '') {
+    if (morningDashboardAlertInFlight) return;
+    if (typeof tabId !== 'number') return;
+    if (!isBetterLetterUrl(tabUrl)) return;
+
+    const now = Date.now();
+    const isManualTrigger = String(reason || '') === 'action_click';
+    if (!isManualTrigger && !isWithinLocalAlertWindow(now)) return;
+    let state = {};
+    try {
+        const stored = await chrome.storage.local.get([MORNING_DASHBOARD_ALERT_STATE_KEY]);
+        state = stored?.[MORNING_DASHBOARD_ALERT_STATE_KEY] && typeof stored[MORNING_DASHBOARD_ALERT_STATE_KEY] === 'object'
+            ? stored[MORNING_DASHBOARD_ALERT_STATE_KEY]
+            : {};
+    } catch (e) {
+        state = {};
+    }
+
+    const lastAttemptAt = Number(state?.lastAttemptAt);
+    if (Number.isFinite(lastAttemptAt) && now - lastAttemptAt < MORNING_DASHBOARD_ALERT_RETRY_COOLDOWN_MS) {
+        return;
+    }
+
+    const lastAlertAt = Number(state?.alertedAt);
+    if (!isManualTrigger && Number.isFinite(lastAlertAt) && now - lastAlertAt < MORNING_DASHBOARD_ALERT_MIN_INTERVAL_MS) {
+        return;
+    }
+
+    morningDashboardAlertInFlight = true;
+    try {
+        const nextState = {
+            lastAttemptAt: now,
+            lastReason: String(reason || '')
+        };
+        await chrome.storage.local.set({ [MORNING_DASHBOARD_ALERT_STATE_KEY]: nextState });
+
+        const summary = await withTimeout(
+            fetchMorningDashboardSummaryFromSession(),
+            MORNING_DASHBOARD_ALERT_FETCH_TIMEOUT_MS
+        );
+        if (!summary || typeof summary !== 'object') return;
+        if (summary.unauthorized) return;
+        if (!Array.isArray(summary.categories) || summary.categories.length === 0) return;
+
+        const alerted = await showMorningDashboardAlertInTab(tabId, summary);
+        if (!alerted) return;
+
+        await chrome.storage.local.set({
+            [MORNING_DASHBOARD_ALERT_STATE_KEY]: {
+                ...nextState,
+                alertedAt: Date.now(),
+                generatedAt: summary.generatedAt || Date.now()
+            }
+        });
+    } catch (e) {
+        // Ignore morning alert failures; core extension workflows should continue.
+    } finally {
+        morningDashboardAlertInFlight = false;
+    }
 }
 
 async function setTargetTabId(tabId) {
@@ -397,20 +1060,86 @@ async function findAnyBetterLetterTab() {
     return allBetterLetterTabs[0] || null;
 }
 
-async function runInExistingBetterLetterTab(func, args = []) {
-    const tab = await findAnyBetterLetterTab();
-    if (!tab?.id) return null;
+async function getOrderedBetterLetterTabCandidates() {
+    const candidates = [];
+    const seen = new Set();
+    const pushTab = (tab) => {
+        if (!tab || typeof tab.id !== 'number') return;
+        if (!isBetterLetterUrl(getTabUrl(tab))) return;
+        if (seen.has(tab.id)) return;
+        seen.add(tab.id);
+        candidates.push(tab);
+    };
 
     try {
-        const [{ result }] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func,
-            args
-        });
-        return result;
+        const { targetTabId } = await chrome.storage.local.get(['targetTabId']);
+        if (typeof targetTabId === 'number') {
+            try {
+                const targetTab = await chrome.tabs.get(targetTabId);
+                pushTab(targetTab);
+            } catch (e) {
+                // Stored target tab can be stale; ignore and continue.
+            }
+        }
     } catch (e) {
-        return null;
+        // Ignore storage errors and continue with query-based candidates.
     }
+
+    try {
+        const activeCurrentWindow = await chrome.tabs.query({
+            active: true,
+            currentWindow: true,
+            url: BETTERLETTER_TAB_PATTERN
+        });
+        activeCurrentWindow.forEach(pushTab);
+    } catch (e) {
+        // Ignore query errors and continue.
+    }
+
+    try {
+        const allBetterLetterTabs = await chrome.tabs.query({ url: BETTERLETTER_TAB_PATTERN });
+        const scoredTabs = [...allBetterLetterTabs].sort((a, b) => {
+            const score = (tab) => {
+                let value = 0;
+                if (tab?.active) value += 200;
+                if (tab?.status === 'complete') value += 100;
+                if (!tab?.discarded) value += 80;
+                if (!tab?.pinned) value += 10;
+                const lastAccessed = Number(tab?.lastAccessed || 0);
+                value += Math.floor(lastAccessed / 1000000);
+                return value;
+            };
+            return score(b) - score(a);
+        });
+        scoredTabs.forEach(pushTab);
+    } catch (e) {
+        // Ignore query errors and continue.
+    }
+
+    return candidates;
+}
+
+async function runInExistingBetterLetterTab(func, args = []) {
+    const candidates = await getOrderedBetterLetterTabCandidates();
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+    for (const tab of candidates) {
+        if (!tab?.id || tab.discarded) continue;
+
+        try {
+            const [{ result }] = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func,
+                args
+            });
+            await setTargetTabId(tab.id);
+            return result;
+        } catch (e) {
+            // Try the next BetterLetter tab if this one is not scriptable.
+        }
+    }
+
+    return null;
 }
 
 async function fetchPracticeCdbByOds(odsCode) {
@@ -441,6 +1170,893 @@ async function fetchPracticeCdbByOds(odsCode) {
     }
 
     return '';
+}
+
+function normalizeLetterCountValue(rawValue) {
+    const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function createEmptyLiveCounts() {
+    return {
+        preparing: null,
+        edit: null,
+        review: null,
+        coding: null,
+        rejected: null
+    };
+}
+
+function mergeLiveCounts(base, incoming) {
+    const merged = { ...base };
+    ['preparing', 'edit', 'review', 'coding', 'rejected'].forEach((key) => {
+        const existing = Number.isFinite(base?.[key]) ? base[key] : null;
+        const next = Number.isFinite(incoming?.[key]) ? incoming[key] : null;
+        if (existing === null) merged[key] = next;
+        else if (next === null) merged[key] = existing;
+        else merged[key] = Math.max(existing, next);
+    });
+    return merged;
+}
+
+function hasAnyLiveCounts(counts) {
+    return ['preparing', 'edit', 'review', 'coding', 'rejected']
+        .some((key) => Number.isFinite(counts?.[key]));
+}
+
+function hasCompleteLiveCounts(counts) {
+    return ['preparing', 'edit', 'review', 'coding', 'rejected']
+        .every((key) => Number.isFinite(counts?.[key]));
+}
+
+function allLiveCountsZeroOrNull(counts) {
+    return ['preparing', 'edit', 'review', 'coding', 'rejected']
+        .every((key) => !Number.isFinite(counts?.[key]) || Number(counts?.[key]) === 0);
+}
+
+function getCachedLiveCounts(odsCode, maxAgeMs = LIVE_COUNTS_CACHE_TTL_MS) {
+    const key = String(odsCode || '').trim().toUpperCase();
+    const cached = liveCountsCacheByOds.get(key);
+    if (!cached || typeof cached !== 'object') return null;
+    if (!Number.isFinite(cached.timestamp)) return null;
+    if (Date.now() - cached.timestamp > maxAgeMs) return null;
+    return cached.counts && typeof cached.counts === 'object' ? cached.counts : null;
+}
+
+function setCachedLiveCounts(odsCode, counts, source = 'unknown') {
+    const key = String(odsCode || '').trim().toUpperCase();
+    if (!key || !counts || typeof counts !== 'object') return;
+    if (!hasAnyLiveCounts(counts)) return;
+    const normalizedCounts = { ...createEmptyLiveCounts(), ...counts };
+    // Avoid persisting low-confidence "all zero" snapshots from transient pages.
+    // Fresh non-zero values remain cached and are reused immediately.
+    if (allLiveCountsZeroOrNull(normalizedCounts)) return;
+    liveCountsCacheByOds.set(key, {
+        counts: normalizedCounts,
+        source: String(source || 'unknown'),
+        timestamp: Date.now()
+    });
+}
+
+function shouldAttemptTempTabFetch(odsCode) {
+    const key = String(odsCode || '').trim().toUpperCase();
+    const now = Date.now();
+    const last = Number(liveCountsLastTempFetchAtByOds.get(key) || 0);
+    if (now - last < LIVE_COUNTS_TEMP_TAB_COOLDOWN_MS) return false;
+    liveCountsLastTempFetchAtByOds.set(key, now);
+    return true;
+}
+
+function withTimeout(promise, timeoutMs) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            resolve(null);
+        }, timeoutMs);
+
+        Promise.resolve(promise)
+            .then((value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve(value);
+            })
+            .catch(() => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve(null);
+            });
+    });
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 12000) {
+    if (typeof tabId !== 'number') throw new Error('Invalid tab ID.');
+
+    const currentTab = await chrome.tabs.get(tabId);
+    if (currentTab?.status === 'complete') return;
+
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(onUpdated);
+            reject(new Error('Timed out waiting for tab load.'));
+        }, timeoutMs);
+
+        const onUpdated = (updatedTabId, changeInfo) => {
+            if (updatedTabId !== tabId) return;
+            if (changeInfo?.status !== 'complete') return;
+            clearTimeout(timeout);
+            chrome.tabs.onUpdated.removeListener(onUpdated);
+            resolve();
+        };
+
+        chrome.tabs.onUpdated.addListener(onUpdated);
+    });
+}
+
+async function fetchLiveMailroomCountsViaTempTab(odsCode) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return createEmptyLiveCounts();
+
+    const editQuery = new URLSearchParams({
+        assigned_to_me: 'false',
+        practice: normalizedOds,
+        sort: 'expected_return_date',
+        sort_dir: 'asc',
+        urgent: 'false'
+    });
+    const targetUrl = `${BETTERLETTER_ORIGIN}/mailroom/edit?${editQuery.toString()}`;
+
+    let tabId = null;
+    try {
+        const created = await chrome.tabs.create({ url: targetUrl, active: false });
+        tabId = created?.id;
+        if (typeof tabId !== 'number') return createEmptyLiveCounts();
+
+        await waitForTabComplete(tabId, 12000);
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: async (hydrateWindowMs) => {
+                const parseCountToken = (token) => {
+                    const raw = String(token || '').trim();
+                    if (!raw) return null;
+                    if (raw.includes('/')) {
+                        const parts = raw.split('/')
+                            .map(part => Number.parseInt(String(part).trim(), 10))
+                            .filter(Number.isFinite);
+                        if (!parts.length) return null;
+                        return parts[parts.length - 1];
+                    }
+                    const match = raw.match(/\d+/);
+                    if (!match) return null;
+                    const parsed = Number.parseInt(match[0], 10);
+                    return Number.isFinite(parsed) ? parsed : null;
+                };
+
+                const parseTabCount = (sourceText, label) => {
+                    const regex = new RegExp(`\\b${label}\\b\\s*\\(([^)]+)\\)`, 'gi');
+                    const matches = [...String(sourceText || '').matchAll(regex)];
+                    if (!matches.length) return null;
+                    const parsed = matches
+                        .map(match => parseCountToken(match?.[1] || ''))
+                        .filter(Number.isFinite);
+                    if (!parsed.length) return null;
+                    return Math.max(...parsed);
+                };
+
+                const readCounts = () => {
+                    const sourceText = String(document?.body?.innerText || '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    return {
+                        preparing: parseTabCount(sourceText, 'PREPARING'),
+                        edit: parseTabCount(sourceText, 'EDIT'),
+                        review: parseTabCount(sourceText, 'REVIEW'),
+                        coding: parseTabCount(sourceText, 'CODING'),
+                        rejected: parseTabCount(sourceText, 'REJECTED')
+                    };
+                };
+
+                const keys = ['preparing', 'edit', 'review', 'coding', 'rejected'];
+                // Give LiveView additional time to hydrate counters after load.
+                let best = readCounts();
+                const deadline = Date.now() + Math.max(1500, Number(hydrateWindowMs) || 2500);
+                let lastSignature = '';
+                let stableCompleteReads = 0;
+                while (Date.now() < deadline) {
+                    const signature = keys
+                        .map((key) => Number.isFinite(best?.[key]) ? String(best[key]) : 'x')
+                        .join('|');
+                    const isComplete = keys.every((key) => Number.isFinite(best?.[key]));
+                    const hasPositive = keys.some((key) => Number.isFinite(best?.[key]) && best[key] > 0);
+
+                    if (isComplete && hasPositive) {
+                        return best;
+                    }
+
+                    if (isComplete) {
+                        if (signature === lastSignature) stableCompleteReads += 1;
+                        else stableCompleteReads = 1;
+                        lastSignature = signature;
+                        // For true-zero practices, accept stable complete values after a few passes.
+                        if (stableCompleteReads >= 3) return best;
+                    } else {
+                        stableCompleteReads = 0;
+                        lastSignature = signature;
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, 220));
+                    const next = readCounts();
+                    keys.forEach((key) => {
+                        const current = Number.isFinite(best?.[key]) ? best[key] : null;
+                        const incoming = Number.isFinite(next?.[key]) ? next[key] : null;
+                        if (current === null) best[key] = incoming;
+                        else if (incoming !== null) best[key] = Math.max(current, incoming);
+                    });
+                }
+                return best;
+            },
+            args: [LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS]
+        });
+
+        return result && typeof result === 'object' ? result : createEmptyLiveCounts();
+    } catch (error) {
+        return createEmptyLiveCounts();
+    } finally {
+        if (typeof tabId === 'number') {
+            chrome.tabs.remove(tabId).catch(() => undefined);
+        }
+    }
+}
+
+async function fetchLiveMailroomCountsViaHiddenFrame(odsCode) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return createEmptyLiveCounts();
+
+    const result = await runInExistingBetterLetterTab(async (targetOds, hydrateWindowMs) => {
+        const emptyCounts = {
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null
+        };
+
+        const parseCountToken = (token) => {
+            const raw = String(token || '').trim();
+            if (!raw) return null;
+            if (raw.includes('/')) {
+                const parts = raw.split('/')
+                    .map(part => Number.parseInt(String(part).trim(), 10))
+                    .filter(Number.isFinite);
+                if (!parts.length) return null;
+                return parts[parts.length - 1];
+            }
+            const match = raw.match(/\d+/);
+            if (!match) return null;
+            const parsed = Number.parseInt(match[0], 10);
+            return Number.isFinite(parsed) ? parsed : null;
+        };
+
+        const parseTabCount = (sourceText, label) => {
+            const regex = new RegExp(`\\b${label}\\b\\s*\\(([^)]+)\\)`, 'gi');
+            const matches = [...String(sourceText || '').matchAll(regex)];
+            if (!matches.length) return null;
+            const parsed = matches
+                .map(match => parseCountToken(match?.[1] || ''))
+                .filter(Number.isFinite);
+            if (!parsed.length) return null;
+            return Math.max(...parsed);
+        };
+
+        const readCountsFromDoc = (doc) => {
+            const sourceText = String(doc?.body?.innerText || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!sourceText) return { ...emptyCounts };
+            return {
+                preparing: parseTabCount(sourceText, 'PREPARING'),
+                edit: parseTabCount(sourceText, 'EDIT'),
+                review: parseTabCount(sourceText, 'REVIEW'),
+                coding: parseTabCount(sourceText, 'CODING'),
+                rejected: parseTabCount(sourceText, 'REJECTED')
+            };
+        };
+
+        const mergeCounts = (base, incoming) => {
+            const merged = { ...base };
+            ['preparing', 'edit', 'review', 'coding', 'rejected'].forEach((key) => {
+                const existing = Number.isFinite(base?.[key]) ? base[key] : null;
+                const next = Number.isFinite(incoming?.[key]) ? incoming[key] : null;
+                if (existing === null) merged[key] = next;
+                else if (next === null) merged[key] = existing;
+                else merged[key] = Math.max(existing, next);
+            });
+            return merged;
+        };
+
+        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const editQuery = new URLSearchParams({
+            assigned_to_me: 'false',
+            practice: targetOds,
+            sort: 'expected_return_date',
+            sort_dir: 'asc',
+            urgent: 'false'
+        });
+        const frameUrl = `${window.location.origin}/mailroom/edit?${editQuery.toString()}`;
+
+        const frame = document.createElement('iframe');
+        frame.setAttribute('aria-hidden', 'true');
+        frame.tabIndex = -1;
+        frame.style.position = 'fixed';
+        frame.style.left = '-99999px';
+        frame.style.top = '-99999px';
+        frame.style.width = '1px';
+        frame.style.height = '1px';
+        frame.style.opacity = '0';
+        frame.style.pointerEvents = 'none';
+        frame.style.border = '0';
+        frame.style.zIndex = '-1';
+
+        const cleanup = () => {
+            try { frame.remove(); } catch (e) { /* ignore */ }
+        };
+
+        try {
+            const loaded = await new Promise((resolve) => {
+                let settled = false;
+                const finish = (value) => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(value);
+                };
+
+                const timeout = setTimeout(() => finish(false), 13000);
+                frame.addEventListener('load', () => {
+                    clearTimeout(timeout);
+                    finish(true);
+                }, { once: true });
+
+                (document.body || document.documentElement).appendChild(frame);
+                frame.src = frameUrl;
+            });
+
+            if (!loaded) {
+                return emptyCounts;
+            }
+
+            const keys = ['preparing', 'edit', 'review', 'coding', 'rejected'];
+            const deadline = Date.now() + Math.max(1800, Number(hydrateWindowMs) || 5200);
+            let best = readCountsFromDoc(frame.contentDocument);
+            let lastSignature = '';
+            let stableCompleteReads = 0;
+
+            while (Date.now() < deadline) {
+                const signature = keys
+                    .map((key) => Number.isFinite(best?.[key]) ? String(best[key]) : 'x')
+                    .join('|');
+                const isComplete = keys.every((key) => Number.isFinite(best?.[key]));
+                const hasPositive = keys.some((key) => Number.isFinite(best?.[key]) && best[key] > 0);
+
+                if (isComplete && hasPositive) return best;
+                if (isComplete) {
+                    if (signature === lastSignature) stableCompleteReads += 1;
+                    else stableCompleteReads = 1;
+                    lastSignature = signature;
+                    if (stableCompleteReads >= 3) return best;
+                } else {
+                    stableCompleteReads = 0;
+                    lastSignature = signature;
+                }
+
+                await wait(240);
+                const next = readCountsFromDoc(frame.contentDocument);
+                best = mergeCounts(best, next);
+            }
+
+            return best;
+        } catch (e) {
+            return emptyCounts;
+        } finally {
+            cleanup();
+        }
+    }, [normalizedOds, LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS]);
+
+    return result && typeof result === 'object' ? result : createEmptyLiveCounts();
+}
+
+async function refreshLiveMailroomCountsViaTempTab(odsCode) {
+    const key = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(key)) return createEmptyLiveCounts();
+
+    if (liveCountsTempFetchInFlightByOds.has(key)) {
+        return liveCountsTempFetchInFlightByOds.get(key);
+    }
+    if (!shouldAttemptTempTabFetch(key)) {
+        return getCachedLiveCounts(key, LIVE_COUNTS_CACHE_TTL_MS * 4) || createEmptyLiveCounts();
+    }
+
+    const promise = (async () => {
+        const counts = await fetchLiveMailroomCountsViaTempTab(key);
+        if (hasAnyLiveCounts(counts)) {
+            setCachedLiveCounts(key, counts, 'temp_tab_dom');
+        }
+        return counts;
+    })().finally(() => {
+        liveCountsTempFetchInFlightByOds.delete(key);
+    });
+
+    liveCountsTempFetchInFlightByOds.set(key, promise);
+    return promise;
+}
+
+async function fetchLiveMailroomCountsFromOpenTabs(odsCode) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    const tabs = await chrome.tabs.query({ url: `${BETTERLETTER_ORIGIN}/mailroom/*` });
+    if (!Array.isArray(tabs) || !tabs.length) return createEmptyLiveCounts();
+
+    let aggregated = createEmptyLiveCounts();
+    for (const tab of tabs) {
+        const url = getTabUrl(tab);
+        if (!url) continue;
+
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(url);
+        } catch (e) {
+            continue;
+        }
+
+        const practiceParam = String(
+            parsedUrl.searchParams.get('practice') ||
+            parsedUrl.searchParams.get('practice_ids') ||
+            ''
+        ).trim().toUpperCase();
+
+        // Strict practice scoping: do not use tabs without explicit practice query,
+        // and never use "practice=all" when resolving single-practice counts.
+        if (!practiceParam || practiceParam === 'ALL' || practiceParam !== normalizedOds) continue;
+        if (!/^\/mailroom\/(preparing|rejected|edit|review|coding)/i.test(parsedUrl.pathname)) continue;
+
+        try {
+            const [{ result }] = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => {
+                    const parseCountToken = (token) => {
+                        const raw = String(token || '').trim();
+                        if (!raw) return null;
+
+                        if (raw.includes('/')) {
+                            const parts = raw.split('/')
+                                .map(part => Number.parseInt(String(part).trim(), 10))
+                                .filter(Number.isFinite);
+                            if (!parts.length) return null;
+                            return parts[parts.length - 1];
+                        }
+
+                        const match = raw.match(/\d+/);
+                        if (!match) return null;
+                        const parsed = Number.parseInt(match[0], 10);
+                        return Number.isFinite(parsed) ? parsed : null;
+                    };
+
+                    const parseTabCount = (sourceText, label) => {
+                        const regex = new RegExp(`\\b${label}\\b\\s*\\(([^)]+)\\)`, 'gi');
+                        const matches = [...String(sourceText || '').matchAll(regex)];
+                        if (!matches.length) return null;
+
+                        const parsed = matches
+                            .map(match => parseCountToken(match?.[1] || ''))
+                            .filter(Number.isFinite);
+                        if (!parsed.length) return null;
+                        return Math.max(...parsed);
+                    };
+
+                    const sourceText = String(document?.body?.innerText || '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+
+                    return {
+                        preparing: parseTabCount(sourceText, 'PREPARING'),
+                        edit: parseTabCount(sourceText, 'EDIT'),
+                        review: parseTabCount(sourceText, 'REVIEW'),
+                        coding: parseTabCount(sourceText, 'CODING'),
+                        rejected: parseTabCount(sourceText, 'REJECTED')
+                    };
+                }
+            });
+
+            const fromTab = result && typeof result === 'object' ? result : createEmptyLiveCounts();
+            aggregated = mergeLiveCounts(aggregated, fromTab);
+            if (hasCompleteLiveCounts(aggregated)) break;
+        } catch (e) {
+            // Ignore tabs that cannot be scripted at this moment.
+        }
+    }
+
+    return aggregated;
+}
+
+async function fetchLiveMailroomCountsByOds(odsCode, options = {}) {
+    const allowTempTab = options?.allowTempTab === true;
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        return {
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null,
+            fetchedAt: Date.now()
+        };
+    }
+
+    const cachedCounts = getCachedLiveCounts(normalizedOds);
+    let aggregatedCounts = createEmptyLiveCounts();
+
+    // First preference: parse hydrated values directly from already open mailroom tabs.
+    // This captures LiveView-updated counters that can differ from static server HTML.
+    const countsFromOpenTabs = await fetchLiveMailroomCountsFromOpenTabs(normalizedOds);
+    aggregatedCounts = mergeLiveCounts(aggregatedCounts, countsFromOpenTabs);
+    let hasConfidentCounts = hasCompleteLiveCounts(aggregatedCounts);
+    if (hasAnyLiveCounts(countsFromOpenTabs)) {
+        setCachedLiveCounts(normalizedOds, countsFromOpenTabs, 'open_tab_dom');
+    }
+
+    // Fast path: if an open mailroom tab already has full hydrated counters, avoid extra fetches.
+    if (hasCompleteLiveCounts(aggregatedCounts)) {
+        const safeCounts = aggregatedCounts;
+        return {
+            preparing: normalizeLetterCountValue(safeCounts.preparing),
+            edit: normalizeLetterCountValue(safeCounts.edit),
+            review: normalizeLetterCountValue(safeCounts.review),
+            coding: normalizeLetterCountValue(safeCounts.coding),
+            rejected: normalizeLetterCountValue(safeCounts.rejected),
+            fetchedAt: Date.now()
+        };
+    }
+
+    const countsFromFetch = await runInExistingBetterLetterTab(async (targetOds) => {
+        // Fetch and parse server-rendered mailroom page text to read tab counters.
+        // Practice-specific tab counters are read from the edit page for the selected ODS.
+        const emptyCounts = {
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null
+        };
+
+        const parseCountToken = (token) => {
+            const raw = String(token || '').trim();
+            if (!raw) return null;
+
+            // Values like "0/62" appear in Edit/Review tabs. We take the total (62).
+            if (raw.includes('/')) {
+                const parts = raw.split('/')
+                    .map(part => Number.parseInt(String(part).trim(), 10))
+                    .filter(Number.isFinite);
+                if (!parts.length) return null;
+                return parts[parts.length - 1];
+            }
+
+            const match = raw.match(/\d+/);
+            if (!match) return null;
+            const parsed = Number.parseInt(match[0], 10);
+            return Number.isFinite(parsed) ? parsed : null;
+        };
+
+        const parseTabCount = (sourceText, label) => {
+            // Some pages include duplicated tab bars (desktop/mobile/hidden states).
+            // Parse all matches and keep the largest non-null number to avoid false zeros.
+            const regex = new RegExp(`\\b${label}\\b\\s*\\(([^)]+)\\)`, 'gi');
+            const matches = [...String(sourceText || '').matchAll(regex)];
+            if (!matches.length) return null;
+
+            const parsed = matches
+                .map(match => parseCountToken(match?.[1] || ''))
+                .filter(Number.isFinite);
+            if (!parsed.length) return null;
+            return Math.max(...parsed);
+        };
+
+        const mergeCounts = (base, incoming) => {
+            const merged = { ...base };
+            ['preparing', 'edit', 'review', 'coding', 'rejected'].forEach((key) => {
+                const existing = Number.isFinite(base?.[key]) ? base[key] : null;
+                const next = Number.isFinite(incoming?.[key]) ? incoming[key] : null;
+                if (existing === null) merged[key] = next;
+                else if (next === null) merged[key] = existing;
+                else merged[key] = Math.max(existing, next);
+            });
+            return merged;
+        };
+
+        const parseCountsFromHtml = (html) => {
+            const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+            const sourceText = String(doc?.body?.innerText || html || '').replace(/\s+/g, ' ').trim();
+            if (!sourceText) return { ...emptyCounts };
+
+            return {
+                preparing: parseTabCount(sourceText, 'PREPARING'),
+                edit: parseTabCount(sourceText, 'EDIT'),
+                review: parseTabCount(sourceText, 'REVIEW'),
+                coding: parseTabCount(sourceText, 'CODING'),
+                rejected: parseTabCount(sourceText, 'REJECTED')
+            };
+        };
+
+            const readPracticeFromUrl = (urlValue) => {
+                const practiceParam = String(
+                    urlValue.searchParams.get('practice') ||
+                    urlValue.searchParams.get('practice_ids') ||
+                    urlValue.searchParams.get('ods_code') ||
+                    ''
+                ).trim().toUpperCase();
+                return practiceParam;
+            };
+
+            const responseMatchesPractice = (responseUrl, targetPractice, requestRelativeUrl = '') => {
+                const target = String(targetPractice || '').trim().toUpperCase();
+                if (!target) return false;
+
+                try {
+                    const finalUrl = new URL(responseUrl);
+                    const resolvedPractice = readPracticeFromUrl(finalUrl);
+                    if (resolvedPractice === 'ALL') return false;
+                    if (resolvedPractice) return resolvedPractice === target;
+
+                    if (requestRelativeUrl) {
+                        const requestedUrl = new URL(requestRelativeUrl, window.location.origin);
+                        const requestedPractice = readPracticeFromUrl(requestedUrl);
+                        if (requestedPractice && requestedPractice !== 'ALL') {
+                            return requestedPractice === target;
+                        }
+                    }
+                    return false;
+                } catch (e) {
+                    return false;
+                }
+            };
+
+        try {
+            const editQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const preparingSelfQuery = new URLSearchParams({
+                only_action_items: 'true',
+                practice: targetOds,
+                service: 'self',
+                sort: 'upload_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const preparingFullQuery = new URLSearchParams({
+                only_action_items: 'true',
+                practice: targetOds,
+                service: 'full',
+                sort: 'upload_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const codingSelfQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                service: 'self',
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const codingFullQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                service: 'full',
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const codingFallbackQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const rejectedFullQuery = new URLSearchParams({
+                practice: targetOds,
+                service: 'full',
+                show_processed: 'false',
+                sort: 'inserted_at',
+                sort_dir: 'asc'
+            });
+            const reviewSelfQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                service: 'self',
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+            const reviewFullQuery = new URLSearchParams({
+                assigned_to_me: 'false',
+                practice: targetOds,
+                service: 'full',
+                sort: 'expected_return_date',
+                sort_dir: 'asc',
+                urgent: 'false'
+            });
+
+            // Invisible, in-session fetches from an existing BetterLetter tab.
+            // Include review endpoints for both self/full service views.
+            const requestPaths = [
+                `/mailroom/preparing?${preparingSelfQuery.toString()}`,
+                `/mailroom/preparing?${preparingFullQuery.toString()}`,
+                `/mailroom/edit?${editQuery.toString()}`,
+                `/mailroom/coding?${codingSelfQuery.toString()}`,
+                `/mailroom/coding?${codingFullQuery.toString()}`,
+                `/mailroom/coding?${codingFallbackQuery.toString()}`,
+                `/mailroom/review?${reviewSelfQuery.toString()}`,
+                `/mailroom/review?${reviewFullQuery.toString()}`,
+                `/mailroom/rejected?${rejectedFullQuery.toString()}`
+            ];
+
+            const parsedList = await Promise.all(requestPaths.map(async (relativeUrl) => {
+                try {
+                    const response = await fetch(relativeUrl, {
+                        credentials: 'include',
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) return null;
+                    if (!responseMatchesPractice(response.url, targetOds, relativeUrl)) return null;
+
+                    const html = await response.text();
+                    return parseCountsFromHtml(html);
+                } catch (e) {
+                    return null;
+                }
+            }));
+
+            return parsedList.reduce((acc, parsed) => {
+                if (!parsed || typeof parsed !== 'object') return acc;
+                return mergeCounts(acc, parsed);
+            }, { ...emptyCounts });
+        } catch (error) {
+            return emptyCounts;
+        }
+    }, [normalizedOds]);
+
+    const safeFetchedCounts = countsFromFetch && typeof countsFromFetch === 'object'
+        ? countsFromFetch
+        : createEmptyLiveCounts();
+
+    aggregatedCounts = hasAnyLiveCounts(aggregatedCounts)
+        ? mergeLiveCounts(aggregatedCounts, safeFetchedCounts)
+        : safeFetchedCounts;
+
+    // Hidden iframe fallback:
+    // Load an off-screen mailroom page inside an existing BetterLetter tab and
+    // read hydrated counters without opening any visible tab/window.
+    const needsWorkflowCounts = ['preparing', 'edit', 'review', 'coding']
+        .some((key) => !Number.isFinite(aggregatedCounts?.[key]));
+    if (needsWorkflowCounts) {
+        const countsFromHiddenFrame = await withTimeout(
+            fetchLiveMailroomCountsViaHiddenFrame(normalizedOds),
+            LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS
+        );
+        if (countsFromHiddenFrame && hasAnyLiveCounts(countsFromHiddenFrame)) {
+            aggregatedCounts = mergeLiveCounts(aggregatedCounts, countsFromHiddenFrame);
+            setCachedLiveCounts(normalizedOds, countsFromHiddenFrame, 'hidden_iframe_dom');
+            if (hasCompleteLiveCounts(aggregatedCounts)) {
+                hasConfidentCounts = true;
+            }
+        }
+    }
+
+    // If low-confidence data is all zero/null, use recent cache immediately and refresh via temp tab.
+    if (allLiveCountsZeroOrNull(aggregatedCounts)) {
+        if (cachedCounts && hasAnyLiveCounts(cachedCounts)) {
+            if (allowTempTab) {
+                refreshLiveMailroomCountsViaTempTab(normalizedOds).catch(() => undefined);
+            }
+            const safeCounts = cachedCounts;
+            return {
+                preparing: normalizeLetterCountValue(safeCounts.preparing),
+                edit: normalizeLetterCountValue(safeCounts.edit),
+                review: normalizeLetterCountValue(safeCounts.review),
+                coding: normalizeLetterCountValue(safeCounts.coding),
+                rejected: normalizeLetterCountValue(safeCounts.rejected),
+                fetchedAt: Date.now()
+            };
+        }
+
+        // No useful cache yet: wait briefly for a temp-tab refresh, then continue.
+        if (allowTempTab) {
+            const tempTabCounts = await withTimeout(
+                refreshLiveMailroomCountsViaTempTab(normalizedOds),
+                LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS
+            );
+            if (tempTabCounts && hasAnyLiveCounts(tempTabCounts)) {
+                aggregatedCounts = tempTabCounts;
+                if (hasCompleteLiveCounts(tempTabCounts)) {
+                    hasConfidentCounts = true;
+                }
+            }
+        }
+    }
+
+    const safeCounts = aggregatedCounts && typeof aggregatedCounts === 'object'
+        ? aggregatedCounts
+        : createEmptyLiveCounts();
+
+    if (hasCompleteLiveCounts(safeCounts) && !allLiveCountsZeroOrNull(safeCounts)) {
+        hasConfidentCounts = true;
+    }
+
+    // Do not present likely placeholder zeros as real values.
+    if (allLiveCountsZeroOrNull(safeCounts) && !hasConfidentCounts) {
+        return {
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null,
+            fetchedAt: Date.now()
+        };
+    }
+
+    if (hasAnyLiveCounts(safeCounts)) {
+        setCachedLiveCounts(normalizedOds, safeCounts, 'resolved');
+    }
+
+    return {
+        preparing: normalizeLetterCountValue(safeCounts.preparing),
+        edit: normalizeLetterCountValue(safeCounts.edit),
+        review: normalizeLetterCountValue(safeCounts.review),
+        coding: normalizeLetterCountValue(safeCounts.coding),
+        rejected: normalizeLetterCountValue(safeCounts.rejected),
+        fetchedAt: Date.now()
+    };
+}
+
+async function resolveLiveMailroomCountsByOds(odsCode, options = {}) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        return {
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null,
+            fetchedAt: Date.now()
+        };
+    }
+
+    if (liveCountsResolveInFlightByOds.has(normalizedOds)) {
+        return liveCountsResolveInFlightByOds.get(normalizedOds);
+    }
+
+    const promise = fetchLiveMailroomCountsByOds(normalizedOds, options)
+        .catch(() => ({
+            preparing: null,
+            edit: null,
+            review: null,
+            coding: null,
+            rejected: null,
+            fetchedAt: Date.now()
+        }))
+        .finally(() => {
+            liveCountsResolveInFlightByOds.delete(normalizedOds);
+        });
+
+    liveCountsResolveInFlightByOds.set(normalizedOds, promise);
+    return promise;
 }
 
 async function hydrateMissingCdbs(limit = 25) {
@@ -787,6 +2403,7 @@ async function ensureSidebarHandleForTab(tabId) {
 chrome.action.onClicked.addListener(async (tab) => {
     await setTargetTabId(tab?.id);
     await ensureSidebarHandleForTab(tab?.id);
+    maybeTriggerMorningDashboardAlert(tab?.id, getTabUrl(tab), 'action_click').catch(() => undefined);
     openPanelPopup();
 });
 
@@ -794,6 +2411,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     const tabId = activeInfo?.tabId;
     setTargetTabId(tabId).catch(() => undefined);
     ensureSidebarHandleForTab(tabId).catch(() => undefined);
+    chrome.tabs.get(tabId)
+        .then((tab) => maybeTriggerMorningDashboardAlert(tabId, getTabUrl(tab), 'tab_activated'))
+        .catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -804,7 +2424,34 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
     }
     ensureSidebarHandleForTab(tabId).catch(() => undefined);
+    if (changeInfo?.status === 'complete') {
+        maybeTriggerMorningDashboardAlert(tabId, maybeUrl, 'tab_updated').catch(() => undefined);
+    }
 });
+
+if (chrome.idle?.setDetectionInterval && chrome.idle?.onStateChanged) {
+    // Detect OS lock/unlock or idle transitions while Chrome is running.
+    // When the user becomes active, fetch a fresh summary from the current session.
+    chrome.idle.setDetectionInterval(60);
+    chrome.idle.onStateChanged.addListener((newState) => {
+        if (newState !== 'active') return;
+        findAnyBetterLetterTab()
+            .then((tab) => {
+                const tabId = tab?.id;
+                const tabUrl = getTabUrl(tab);
+                if (typeof tabId !== 'number' || !isBetterLetterUrl(tabUrl)) return;
+                maybeTriggerMorningDashboardAlert(tabId, tabUrl, 'idle_active').catch(() => undefined);
+            })
+            .catch(() => undefined);
+    });
+}
+
+if (chrome.commands?.onCommand) {
+    chrome.commands.onCommand.addListener((command) => {
+        if (String(command || '') !== HOTKEY_SHOW_LIVE_SUMMARY_COMMAND) return;
+        showLiveSummaryViaHotkey().catch(() => undefined);
+    });
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.target === 'offscreen') return false;
@@ -841,25 +2488,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'createLinearIssueAndNotifySlack') {
             return await handleCreateLinearIssueAndNotifySlack(message.payload);
         }
+        if (message.action === 'triggerLinearBotJobsRun') {
+            return await handleTriggerLinearBotJobsRun(message.payload);
+        }
+        if (message.action === 'getLinearBotJobsTriggerStatus') {
+            return await handleGetLinearBotJobsTriggerStatus();
+        }
         if (message.action === 'requestActiveScrape') {
             const data = await fetchAndCachePracticeList('manual-refresh');
             return { success: true, practicesCount: (data || []).length };
         }
+        if (message.action === 'getPracticeLiveCounts') {
+            // Never open extra tabs for live counts; use invisible in-session fetch only.
+            const liveMailroomCounts = await resolveLiveMailroomCountsByOds(message.odsCode, { allowTempTab: false });
+            return { success: true, liveMailroomCounts };
+        }
         if (message.action === 'getPracticeStatus') {
-            let p = Object.values(practiceCache).find(x => x.ods === message.odsCode);
+            const normalizedOds = String(message.odsCode || '').trim().toUpperCase();
+            let p = Object.values(practiceCache).find(x => x.ods === normalizedOds);
 
-            const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
-            if (p && looksInvalidCdb) {
-                const cdb = await fetchPracticeCdbByOds(message.odsCode);
-                if (cdb) {
-                    const cacheKey = `${p.name} (${p.ods})`;
-                    p = { ...p, cdb, practiceCDB: cdb, timestamp: Date.now() };
-                    practiceCache[cacheKey] = p;
-                    await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
+            // Return fast using cached live counts, and refresh counts in background.
+            let liveMailroomCounts = getCachedLiveCounts(normalizedOds, LIVE_COUNTS_CACHE_TTL_MS * 4) || createEmptyLiveCounts();
+            if (/^[A-Z]\d{5}$/.test(normalizedOds)) {
+                const liveCountsPromise = resolveLiveMailroomCountsByOds(normalizedOds, { allowTempTab: false });
+                const quickCounts = await withTimeout(liveCountsPromise, 800);
+                if (quickCounts && hasAnyLiveCounts(quickCounts)) {
+                    liveMailroomCounts = mergeLiveCounts(liveMailroomCounts, quickCounts);
                 }
             }
 
-            return { success: true, status: { ...p, odsCode: p?.ods, practiceCDB: p?.cdb || 'N/A' } };
+            const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
+            if (p && looksInvalidCdb && /^[A-Z]\d{5}$/.test(normalizedOds)) {
+                fetchPracticeCdbByOds(normalizedOds)
+                    .then(async (cdb) => {
+                        if (!cdb) return;
+                        const refreshed = { ...p, cdb, practiceCDB: cdb, timestamp: Date.now() };
+                        const cacheKey = `${refreshed.name} (${refreshed.ods})`;
+                        practiceCache[cacheKey] = refreshed;
+                        await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
+                    })
+                    .catch(() => undefined);
+            }
+
+            return {
+                success: true,
+                status: {
+                    ...p,
+                    odsCode: p?.ods || normalizedOds || '',
+                    practiceCDB: p?.cdb || 'N/A',
+                    liveMailroomCounts
+                }
+            };
         }
         if (message.action === 'hydratePracticeCdb') {
             const updated = await hydrateMissingCdbs(message.limit || 25);
