@@ -26,5 +26,12 @@ Each folder also contains a `README.md` with details and screenshots.
 Clone the repo and load any extension directly into Chrome:
 
 ```bash
-git clone https://github.com/your-username/chrome-extensions.git
+git clone https://github.com/nurdyad/chrome-extensions.git
 cd chrome-extensions
+```
+
+## MailroomNavigator Docs
+
+- Feature reference: `MailroomNavigator/README.md`
+- Setup guide: `MailroomNavigator/SETUP.md`
+- macOS automation details: `MailroomNavigator/automation/README-morning-login.md`
