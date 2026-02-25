@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Runs repeated forced morning-login flows and reports success rate.
+# Purpose: quantify stability of auth + OTP + session verification.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNNER_PATH="$SCRIPT_DIR/morning-login-runner.sh"

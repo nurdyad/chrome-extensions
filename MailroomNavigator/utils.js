@@ -1,4 +1,4 @@
-// utils.js
+// Shared UI/helpers used across panel modules.
 let toastHideTimer = null;
 let toastFadeTimer = null;
 

@@ -1,5 +1,7 @@
 /**
- * bot_dashboard_navigator.js - Floating quick actions on dashboard rows
+ * Bot dashboard content helper:
+ * - Shows row-level floating copy/open quick actions
+ * - Extracts structured row metadata for extension features
  */
 (() => {
     let floatingNavPanel = null;

@@ -1,4 +1,6 @@
-
+// Mailroom page integrator:
+// - Reads row-level document details from mailroom tables
+// - Adds helper actions/metadata overlays for faster navigation
 console.log("Mailroom Integrator: Script loaded.");
 
 // Function to extract data from a table row on Mailroom pages (Rejected, Preparing, etc.)

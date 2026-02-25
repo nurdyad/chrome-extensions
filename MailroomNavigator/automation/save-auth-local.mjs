@@ -3,6 +3,13 @@ import { chromium } from "playwright";
 import { ImapFlow } from "imapflow";
 import { writeFile } from "node:fs/promises";
 
+/**
+ * Auth bootstrap for BetterLetter.
+ * Responsibilities:
+ * - Sign in using credentials from .env
+ * - Complete OTP using IMAP inbox polling
+ * - Persist Playwright storage state for reuse by automation scripts
+ */
 const DASHBOARD_URL = "https://app.betterletter.ai/admin_panel/bots/dashboard?status=paused";
 const STORAGE_STATE_PATH = process.env.AUTH_STORAGE_STATE_PATH || "storageState.mailroomnavigator.json";
 

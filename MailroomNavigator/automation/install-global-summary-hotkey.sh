@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Installs the macOS LaunchAgent that runs the global hotkey daemon.
+# Hotkeys:
+# - Cmd+Shift+9 (primary)
+# - Cmd+Ctrl+9 (fallback)
+# The daemon triggers a live BetterLetter dashboard summary notification.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
