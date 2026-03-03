@@ -46,6 +46,8 @@ cp .env.example .env
    - `user_email`, `user_password`
    - admin auth fields if required in your environment
    - OTP IMAP mailbox settings
+   - `LINEAR_API_KEY`, `LINEAR_TEAM_KEY` (for extension "Create Linear Issue")
+   - `SLACK_BOT_TOKEN` (only if you want Slack sync from the Linear Issue panel)
    - optional linear trigger settings
 
 3. Never commit `.env`:
@@ -105,17 +107,23 @@ For scheduled runs:
 - Windows: Task Scheduler
 - Linux: systemd user service / cron
 
-## 5. Trigger Linear Requirements
+## 5. Trigger Linear + Linear Issue Requirements
 
-The `Trigger Linear` button calls a localhost service on `127.0.0.1:4817`.
+Both the `Trigger Linear` button and `Create Linear Issue` button call a localhost service on `127.0.0.1:4817`.
 
 Required local setup:
 
+- `LINEAR_API_KEY` and `LINEAR_TEAM_KEY` exist in `MailroomNavigator/.env`
+- if Slack sync is enabled in panel:
+  - `SLACK_BOT_TOKEN` exists in `MailroomNavigator/.env`
+  - optional: `SLACK_SYNC_MEMBER_ONLY=1` to show only channels the bot already belongs to
+  - click `Sync Slack` in panel to load channel/user suggestions
+  - choose Slack target type (`channel`/`user`) and target ID in the panel
 - `LINEAR_TRIGGER_BOT_JOBS_DIR` points to your `bot-jobs-linear` checkout
 - `bot-jobs.js` exists in that directory
 - target `.env` for bot-jobs is present
 
-If not configured, trigger endpoint will return a clear error in status/logs.
+If not configured, the endpoint returns a clear error in extension status/logs.
 
 ## 6. Upgrade / Reinstall
 
@@ -147,4 +155,3 @@ tail -f ../logs/morning-login-$(date +%F).log
 tail -f ../logs/live-summary-hotkey-$(date +%F).log
 curl http://127.0.0.1:4817/health
 ```
-

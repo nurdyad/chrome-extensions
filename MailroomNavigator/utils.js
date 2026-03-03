@@ -77,10 +77,31 @@ export function showStatus(message, type) {
 
 // Opens a new browser tab safely
 export function openTabWithTimeout(url) {
-    chrome.tabs.create({ url }).catch(err => {
-        console.error("Failed to open tab:", err);
-        showToast("Failed to open page.");
-    });
+    const targetUrl = String(url || '').trim();
+    if (!targetUrl) return;
+
+    const handleError = (err) => {
+        const message = String(err?.message || err || '');
+        if (message.toLowerCase().includes('extension context invalidated')) {
+            console.warn('Extension context invalidated while opening tab.');
+            showToast('Extension reloaded. Refresh this page and reopen the panel.');
+            return;
+        }
+        console.error('Failed to open tab:', err);
+        showToast('Failed to open page.');
+    };
+
+    try {
+        if (!chrome?.tabs?.create) {
+            throw new Error('chrome.tabs API unavailable.');
+        }
+        const result = chrome.tabs.create({ url: targetUrl });
+        if (result && typeof result.catch === 'function') {
+            result.catch(handleError);
+        }
+    } catch (err) {
+        handleError(err);
+    }
 }
 
 // Extract Name from "Name <email@example.com>"
