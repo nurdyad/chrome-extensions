@@ -5,7 +5,7 @@
  * - Cross-tab/background orchestration for panel actions
  * - Practice cache management + hydration
  * - Dashboard summary scraping / notification flow
- * - Linear + Slack issue pipeline requests
+ * - Linear issue pipeline requests (via local trigger service)
  * - Cross-window tab reuse/open helpers
  */
 
@@ -19,10 +19,9 @@ const LIVE_COUNTS_CACHE_TTL_MS = 45 * 1000;
 const LIVE_COUNTS_TEMP_TAB_COOLDOWN_MS = 30 * 1000;
 const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
 const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
-const LINEAR_GRAPHQL_ENDPOINT = 'https://api.linear.app/graphql';
-const SLACK_CHAT_POST_MESSAGE_ENDPOINT = 'https://slack.com/api/chat.postMessage';
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
+const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
 const liveCountsCacheByOds = new Map();
 const liveCountsTempFetchInFlightByOds = new Map();
 const liveCountsLastTempFetchAtByOds = new Map();
@@ -176,7 +175,7 @@ function isScriptableUrl(url) {
     return typeof url === 'string' && /^https?:\/\//i.test(url);
 }
 
-// --- Linear + Slack Integrations ---
+// --- Linear Issue Integration ---
 // Security note:
 // - We sanitize and validate all incoming fields before using them.
 // - We never store tokens in background global state.
@@ -198,228 +197,176 @@ function clampLinearPriority(value) {
     return [0, 1, 2, 3, 4].includes(parsed) ? parsed : 0;
 }
 
-function isLikelyLinearApiKey(value) {
-    // Linear personal keys are long secret tokens. We keep validation broad but non-empty.
-    return /^[A-Za-z0-9_-]{20,}$/.test(String(value || '').trim());
+function normalizeSlackTargetType(value) {
+    return String(value || '').trim().toLowerCase() === 'user' ? 'user' : 'channel';
 }
 
-function isLikelyLinearTeamKey(value) {
-    return /^[A-Za-z0-9_-]{2,20}$/.test(String(value || '').trim());
-}
-
-function isLikelySlackBotToken(value) {
-    return /^xox[a-z]-[A-Za-z0-9-]+$/i.test(String(value || '').trim());
-}
-
-function isLikelySlackChannelId(value) {
-    return /^[CGD][A-Z0-9]{8,}$/i.test(String(value || '').trim());
-}
-
-function isLikelySlackWebhookUrl(value) {
-    return /^https:\/\/hooks\.slack(?:-gov)?\.com\/services\/[A-Za-z0-9/_-]+$/i.test(String(value || '').trim());
-}
-
-function sanitizeLinearSlackPayload(rawPayload = {}) {
-    const slackInput = rawPayload?.slack && typeof rawPayload.slack === 'object' ? rawPayload.slack : {};
-    const slackMode = sanitizeSingleLine(slackInput.mode, 20).toLowerCase() === 'webhook' ? 'webhook' : 'bot';
-
+function sanitizeLinearSlackPayload(rawSlack = null) {
+    if (!rawSlack || typeof rawSlack !== 'object') return null;
     return {
-        linearApiKey: sanitizeSingleLine(rawPayload.linearApiKey, 320),
-        linearTeamKey: sanitizeSingleLine(rawPayload.linearTeamKey, 32),
-        title: sanitizeSingleLine(rawPayload.title, 240),
-        description: sanitizeMultiline(rawPayload.description, 12000),
-        priority: clampLinearPriority(rawPayload.priority),
-        slackMode,
-        slackBotToken: sanitizeSingleLine(slackInput.botToken, 320),
-        slackChannelId: sanitizeSingleLine(slackInput.channelId, 64),
-        slackWebhookUrl: sanitizeSingleLine(slackInput.webhookUrl, 700)
+        enabled: Boolean(rawSlack.enabled),
+        targetType: normalizeSlackTargetType(rawSlack.targetType),
+        target: sanitizeSingleLine(rawSlack.target, 80).replace(/^[@#]/, '')
     };
 }
 
-function validateLinearSlackPayload(payload) {
-    if (!isLikelyLinearApiKey(payload.linearApiKey)) {
-        throw new Error('Invalid or missing Linear API key.');
+async function getStoredLinearSlackPrefs() {
+    try {
+        const result = await chrome.storage.local.get([LINEAR_SLACK_PREFS_STORAGE_KEY]);
+        return sanitizeLinearSlackPayload(result?.[LINEAR_SLACK_PREFS_STORAGE_KEY]);
+    } catch {
+        return null;
     }
-    if (!isLikelyLinearTeamKey(payload.linearTeamKey)) {
-        throw new Error('Invalid or missing Linear Team key.');
+}
+
+function sanitizeLinearSlackResult(rawSlack = null) {
+    if (!rawSlack || typeof rawSlack !== 'object') return null;
+    return {
+        attempted: Boolean(rawSlack.attempted),
+        success: Boolean(rawSlack.success),
+        targetType: normalizeSlackTargetType(rawSlack.targetType),
+        target: sanitizeSingleLine(rawSlack.target, 80),
+        channel: sanitizeSingleLine(rawSlack.channel, 80),
+        ts: sanitizeSingleLine(rawSlack.ts, 64),
+        error: sanitizeSingleLine(rawSlack.error, 260)
+    };
+}
+
+function sanitizeSlackTargetEntry(rawEntry = null, targetType = 'channel') {
+    if (!rawEntry || typeof rawEntry !== 'object') return null;
+    const type = normalizeSlackTargetType(rawEntry.type || targetType);
+    const id = sanitizeSingleLine(rawEntry.id, 80).replace(/^[@#]/, '');
+    if (!id) return null;
+    const name = sanitizeSingleLine(rawEntry.name, 120);
+    const label = sanitizeSingleLine(rawEntry.label, 200)
+        || (type === 'user'
+            ? (name ? `${name} (${id})` : id)
+            : (name ? `#${name} (${id})` : id));
+    return { id, name, label, type };
+}
+
+function sanitizeSlackTargetList(rawList = [], targetType = 'channel') {
+    const source = Array.isArray(rawList) ? rawList : [];
+    const map = new Map();
+    source.forEach((entry) => {
+        const normalized = sanitizeSlackTargetEntry(entry, targetType);
+        if (!normalized || map.has(normalized.id)) return;
+        map.set(normalized.id, normalized);
+    });
+    return [...map.values()];
+}
+
+function sanitizeSlackTargetsPayload(rawTargets = null) {
+    if (!rawTargets || typeof rawTargets !== 'object') {
+        return {
+            channels: [],
+            users: [],
+            syncedAt: ''
+        };
+    }
+    return {
+        channels: sanitizeSlackTargetList(rawTargets.channels, 'channel'),
+        users: sanitizeSlackTargetList(rawTargets.users, 'user'),
+        syncedAt: sanitizeSingleLine(rawTargets.syncedAt, 80)
+    };
+}
+
+function sanitizeLinearIssuePayload(rawPayload = {}) {
+    return {
+        documentId: sanitizeSingleLine(rawPayload.documentId, 32),
+        failedJobId: sanitizeSingleLine(rawPayload.failedJobId, 120),
+        fileSizeBytes: sanitizeSingleLine(rawPayload.fileSizeBytes, 120),
+        practiceName: sanitizeSingleLine(rawPayload.practiceName, 240),
+        letterAdminLink: sanitizeSingleLine(rawPayload.letterAdminLink, 1200),
+        failedJobLink: sanitizeSingleLine(rawPayload.failedJobLink, 1200),
+        title: sanitizeSingleLine(rawPayload.title, 240),
+        description: sanitizeMultiline(rawPayload.description, 12000),
+        priority: clampLinearPriority(rawPayload.priority),
+        slack: sanitizeLinearSlackPayload(rawPayload?.slack)
+    };
+}
+
+function validateLinearIssuePayload(payload) {
+    if (!/^\d+$/.test(payload.documentId)) {
+        throw new Error('Invalid or missing Document ID.');
     }
     if (!payload.title) {
         throw new Error('Issue title is required.');
     }
-
-    if (payload.slackMode === 'webhook') {
-        if (!isLikelySlackWebhookUrl(payload.slackWebhookUrl)) {
-            throw new Error('Invalid or missing Slack webhook URL.');
-        }
-        return;
-    }
-
-    if (!isLikelySlackBotToken(payload.slackBotToken)) {
-        throw new Error('Invalid or missing Slack bot token.');
-    }
-    if (!isLikelySlackChannelId(payload.slackChannelId)) {
-        throw new Error('Invalid or missing Slack channel ID.');
+    if (!payload.description) {
+        throw new Error('Issue description is required.');
     }
 }
 
-async function runLinearGraphqlRequest(linearApiKey, query, variables = {}) {
-    const response = await fetch(LINEAR_GRAPHQL_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            // Linear accepts API key in Authorization header.
-            'Authorization': linearApiKey
-        },
-        body: JSON.stringify({ query, variables })
-    });
-
-    if (!response.ok) {
-        throw new Error(`Linear request failed with status ${response.status}.`);
-    }
-
-    const payload = await response.json();
-    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-        const message = payload.errors
-            .map(err => sanitizeSingleLine(err?.message, 220))
-            .filter(Boolean)
-            .join('; ');
-        throw new Error(message || 'Linear returned an unknown error.');
-    }
-
-    return payload?.data || {};
-}
-
-async function resolveLinearTeamByKey(linearApiKey, teamKey) {
-    const query = `
-        query ResolveTeamByKey($key: String!) {
-            team(key: $key) {
-                id
-                key
-                name
-            }
-        }
-    `;
-
-    const data = await runLinearGraphqlRequest(linearApiKey, query, { key: teamKey });
-    const team = data?.team;
-    if (!team?.id) {
-        throw new Error(`Linear team "${teamKey}" was not found.`);
-    }
-    return team;
-}
-
-async function createLinearIssue(payload) {
-    const team = await resolveLinearTeamByKey(payload.linearApiKey, payload.linearTeamKey);
-
-    const issueInput = {
-        teamId: team.id,
-        title: payload.title
-    };
-    if (payload.description) issueInput.description = payload.description;
-    if (payload.priority > 0) issueInput.priority = payload.priority;
-
-    const mutation = `
-        mutation CreateIssue($input: IssueCreateInput!) {
-            issueCreate(input: $input) {
-                success
-                issue {
-                    id
-                    identifier
-                    title
-                    url
-                    priority
-                }
-            }
-        }
-    `;
-
-    const data = await runLinearGraphqlRequest(payload.linearApiKey, mutation, { input: issueInput });
-    const issueCreate = data?.issueCreate;
-    const issue = issueCreate?.issue;
-
-    if (!issueCreate?.success || !issue?.id || !issue?.identifier || !issue?.url) {
-        throw new Error('Linear issue creation failed.');
-    }
-
-    return {
-        team,
-        issue: {
-            identifier: sanitizeSingleLine(issue.identifier, 64),
-            title: sanitizeSingleLine(issue.title, 240),
-            url: sanitizeSingleLine(issue.url, 1000)
-        }
-    };
-}
-
-async function postSlackNotification(payload, issue) {
-    const message = `New Linear issue: <${issue.url}|${issue.identifier}> - ${issue.title}`;
-
-    if (payload.slackMode === 'webhook') {
-        const response = await fetch(payload.slackWebhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: message })
-        });
-        if (!response.ok) {
-            throw new Error(`Slack webhook failed with status ${response.status}.`);
-        }
-        return;
-    }
-
-    const response = await fetch(SLACK_CHAT_POST_MESSAGE_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Authorization': `Bearer ${payload.slackBotToken}`
-        },
-        body: JSON.stringify({
-            channel: payload.slackChannelId,
-            text: message,
-            unfurl_links: false,
-            unfurl_media: false
-        })
-    });
-
-    if (!response.ok) {
-        throw new Error(`Slack API failed with status ${response.status}.`);
-    }
-
-    const slackPayload = await response.json();
-    if (!slackPayload?.ok) {
-        throw new Error(sanitizeSingleLine(slackPayload?.error, 220) || 'Slack API returned an error.');
-    }
-}
-
-async function handleCreateLinearIssueAndNotifySlack(rawPayload) {
+async function handleCreateLinearIssueFromEnv(rawPayload) {
     try {
-        const payload = sanitizeLinearSlackPayload(rawPayload);
-        validateLinearSlackPayload(payload);
+        const payload = sanitizeLinearIssuePayload(rawPayload);
+        if (!payload.slack) {
+            const storedSlackPrefs = await getStoredLinearSlackPrefs();
+            if (storedSlackPrefs?.enabled) {
+                payload.slack = storedSlackPrefs;
+            }
+        }
+        validateLinearIssuePayload(payload);
 
-        const created = await createLinearIssue(payload);
-        try {
-            await postSlackNotification(payload, created.issue);
-            return {
-                success: true,
-                issue: created.issue,
-                team: {
-                    key: sanitizeSingleLine(created.team?.key, 32),
-                    name: sanitizeSingleLine(created.team?.name, 120)
-                }
-            };
-        } catch (error) {
-            // Important: keep Linear success details and return a partial failure.
+        const { response, payload: serverPayload } = await callLinearTriggerServer('/linear/create-issue', {
+            method: 'POST',
+            body: payload
+        });
+
+        if (!response.ok || !serverPayload?.ok) {
+            const serverError = sanitizeSingleLine(serverPayload?.error, 260);
+            if (response.status === 404 || serverError.toLowerCase() === 'not found.') {
+                return {
+                    success: false,
+                    error: 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).'
+                };
+            }
             return {
                 success: false,
-                partial: true,
-                issue: created.issue,
-                error: `Linear issue created, but Slack failed: ${sanitizeSingleLine(error?.message, 260)}`
+                error: serverError || `Trigger service failed with status ${response.status}.`
             };
         }
+
+        return {
+            success: true,
+            issue: {
+                identifier: sanitizeSingleLine(serverPayload?.issue?.identifier, 64),
+                title: sanitizeSingleLine(serverPayload?.issue?.title, 240),
+                url: sanitizeSingleLine(serverPayload?.issue?.url, 1000)
+            },
+            team: {
+                key: sanitizeSingleLine(serverPayload?.team?.key, 32),
+                name: sanitizeSingleLine(serverPayload?.team?.name, 120)
+            },
+            slack: sanitizeLinearSlackResult(serverPayload?.slack)
+        };
     } catch (error) {
         return {
             success: false,
-            error: sanitizeSingleLine(error?.message, 260) || 'Could not create Linear issue.'
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
+async function handleSyncLinearSlackWorkspaceTargets() {
+    try {
+        const { response, payload } = await callLinearTriggerServer('/slack/targets', { method: 'GET' });
+        if (!response.ok || !payload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 260) || `Trigger service failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            targets: sanitizeSlackTargetsPayload(payload.targets)
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
         };
     }
 }
@@ -428,6 +375,20 @@ function sanitizeLinearTriggerRunPayload(rawPayload = {}) {
     return {
         dryRun: Boolean(rawPayload?.dryRun)
     };
+}
+
+function normalizeLinearTriggerRunType(rawType) {
+    return sanitizeSingleLine(rawType, 32).toLowerCase() === 'reconcile'
+        ? 'reconcile'
+        : 'trigger';
+}
+
+function sanitizeLinearTriggerRunLines(rawLines = [], maxItems = 10, maxLength = 240) {
+    if (!Array.isArray(rawLines)) return [];
+    return rawLines
+        .map((line) => sanitizeSingleLine(line, maxLength))
+        .filter(Boolean)
+        .slice(0, maxItems);
 }
 
 function sanitizeLinearTriggerRun(rawRun = null) {
@@ -441,10 +402,19 @@ function sanitizeLinearTriggerRun(rawRun = null) {
         startedAt: sanitizeSingleLine(rawRun.startedAt, 80),
         endedAt: sanitizeSingleLine(rawRun.endedAt, 80),
         status: ['running', 'success', 'failed'].includes(status) ? status : '',
+        runType: normalizeLinearTriggerRunType(rawRun.runType),
         dryRun: Boolean(rawRun.dryRun),
         exitCode,
         signal: sanitizeSingleLine(rawRun.signal, 32),
-        error: sanitizeSingleLine(rawRun.error, 260)
+        error: sanitizeSingleLine(rawRun.error, 260),
+        summaryLines: sanitizeLinearTriggerRunLines(rawRun.summaryLines, 10, 240),
+        reportErrors: sanitizeLinearTriggerRunLines(rawRun.reportErrors, 4, 240),
+        createdIssuesTotal: Number.isFinite(Number(rawRun.createdIssuesTotal)) ? Number(rawRun.createdIssuesTotal) : 0,
+        previewIssuesTotal: Number.isFinite(Number(rawRun.previewIssuesTotal)) ? Number(rawRun.previewIssuesTotal) : 0,
+        skippedDuplicatesTotal: Number.isFinite(Number(rawRun.skippedDuplicatesTotal)) ? Number(rawRun.skippedDuplicatesTotal) : 0,
+        actionableFoundTotal: Number.isFinite(Number(rawRun.actionableFoundTotal)) ? Number(rawRun.actionableFoundTotal) : 0,
+        issueCandidatesTotal: Number.isFinite(Number(rawRun.issueCandidatesTotal)) ? Number(rawRun.issueCandidatesTotal) : 0,
+        floodMode: Boolean(rawRun.floodMode)
     };
 }
 
@@ -495,10 +465,10 @@ function normalizeLinearTriggerError(error) {
     return message;
 }
 
-async function handleTriggerLinearBotJobsRun(rawPayload) {
+async function handleTriggerLinearRun(rawPayload, triggerPath = '/trigger-linear') {
     try {
         const payload = sanitizeLinearTriggerRunPayload(rawPayload);
-        const { response, payload: serverPayload } = await callLinearTriggerServer('/trigger-linear', {
+        const { response, payload: serverPayload } = await callLinearTriggerServer(triggerPath, {
             method: 'POST',
             body: payload
         });
@@ -514,9 +484,16 @@ async function handleTriggerLinearBotJobsRun(rawPayload) {
         }
 
         if (!response.ok || !serverPayload?.ok) {
+            const serverError = sanitizeSingleLine(serverPayload?.error, 240);
+            if (response.status === 404 || serverError.toLowerCase() === 'not found.') {
+                return {
+                    success: false,
+                    error: 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).'
+                };
+            }
             return {
                 success: false,
-                error: sanitizeSingleLine(serverPayload?.error, 240) || `Trigger service failed with status ${response.status}.`
+                error: serverError || `Trigger service failed with status ${response.status}.`
             };
         }
 
@@ -530,6 +507,14 @@ async function handleTriggerLinearBotJobsRun(rawPayload) {
             error: normalizeLinearTriggerError(error)
         };
     }
+}
+
+async function handleTriggerLinearBotJobsRun(rawPayload) {
+    return handleTriggerLinearRun(rawPayload, '/trigger-linear');
+}
+
+async function handleTriggerLinearReconcileRun(rawPayload) {
+    return handleTriggerLinearRun(rawPayload, '/trigger-linear-reconcile');
 }
 
 async function handleGetLinearBotJobsTriggerStatus() {
@@ -2491,11 +2476,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { success: true };
         }
         if (message.action === 'openPractice') return await handleOpenPractice(message.input, message.settingType);
-        if (message.action === 'createLinearIssueAndNotifySlack') {
-            return await handleCreateLinearIssueAndNotifySlack(message.payload);
+        if (message.action === 'createLinearIssueFromEnv' || message.action === 'createLinearIssueAndNotifySlack') {
+            return await handleCreateLinearIssueFromEnv(message.payload);
+        }
+        if (message.action === 'syncLinearSlackWorkspaceTargets') {
+            return await handleSyncLinearSlackWorkspaceTargets();
         }
         if (message.action === 'triggerLinearBotJobsRun') {
             return await handleTriggerLinearBotJobsRun(message.payload);
+        }
+        if (message.action === 'triggerLinearReconcileRun') {
+            return await handleTriggerLinearReconcileRun(message.payload);
         }
         if (message.action === 'getLinearBotJobsTriggerStatus') {
             return await handleGetLinearBotJobsTriggerStatus();

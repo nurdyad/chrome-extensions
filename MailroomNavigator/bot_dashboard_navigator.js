@@ -14,6 +14,7 @@
     let isMouseInMetaPanel = false;
     let metaHideTimer = null;
     let metaReanchorTimer = null;
+    const createdIssueByDedupeKey = new Map();
 
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
@@ -31,6 +32,90 @@
 
     function collapseText(value) {
         return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function extractNumericId(value) {
+        const match = String(value || '').match(/\d+/);
+        return match ? match[0] : '';
+    }
+
+    function extractJobId(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+
+        const urlMatch = raw.match(/\/admin_panel\/bots\/jobs\/([^/?#\s]+)/i);
+        if (urlMatch?.[1]) {
+            try {
+                return decodeURIComponent(urlMatch[1]).trim();
+            } catch (e) {
+                return urlMatch[1].trim();
+            }
+        }
+
+        const uuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+        if (uuidMatch) return uuidMatch[0];
+
+        const numericMatch = raw.match(/\b\d+\b/);
+        if (numericMatch) return numericMatch[0];
+
+        if (/^[A-Za-z0-9_-]{8,}$/.test(raw)) return raw;
+        return '';
+    }
+
+    function buildLinearIssuePayloadFromRow(rowData, fallbackDocId = '') {
+        const documentId = extractNumericId(rowData?.document || fallbackDocId);
+        if (!documentId) return null;
+
+        const failedJobId = extractJobId(rowData?.jobId || '');
+        const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '');
+        const title = practiceName
+            ? `Stuck letter: ${documentId} (${practiceName})`
+            : `Stuck letter: ${documentId}`;
+        const letterAdminLink = `https://app.betterletter.ai/admin_panel/letter/${documentId}`;
+        const failedJobLink = failedJobId
+            ? `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(failedJobId)}`
+            : 'https://app.betterletter.ai/admin_panel/bots/jobs/';
+
+        const description = [
+            `Letter ID: ${documentId}`,
+            `Failed job ID: ${failedJobId || 'N/A'}`,
+            'File size: N/A',
+            `Practice: ${practiceName || 'N/A'}`,
+            '',
+            'Letter admin link:',
+            letterAdminLink,
+            '',
+            'Failed job link:',
+            failedJobLink
+        ].join('\n');
+
+        return {
+            documentId,
+            failedJobId,
+            fileSizeBytes: 'N/A',
+            practiceName: practiceName || 'N/A',
+            letterAdminLink,
+            failedJobLink,
+            title,
+            description,
+            priority: 0
+        };
+    }
+
+    function sendRuntimeMessage(message) {
+        return new Promise((resolve, reject) => {
+            try {
+                chrome.runtime.sendMessage(message, (response) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(String(chrome.runtime.lastError.message || 'Runtime message failed.')));
+                        return;
+                    }
+                    resolve(response || {});
+                });
+            } catch (error) {
+                reject(error);
+            }
+        });
     }
 
     function copyToClipboard(text, onSuccess) {
@@ -102,8 +187,8 @@
             position: 'absolute',
             zIndex: '2147483647',
             display: 'none',
-            flexDirection: 'row',
-            gap: '3px',
+            flexDirection: 'column',
+            gap: '4px',
             background: '#ffffff',
             padding: '3px 5px',
             border: '1px solid #007bff',
@@ -111,9 +196,9 @@
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
             fontFamily: 'system-ui, -apple-system, sans-serif',
             pointerEvents: 'auto',
-            flexWrap: 'nowrap',
             alignItems: 'center',
-            whiteSpace: 'nowrap'
+            whiteSpace: 'nowrap',
+            minWidth: 'fit-content'
         });
 
         floatingNavPanel.addEventListener('mouseenter', () => { isMouseInDocPanel = true; });
@@ -155,14 +240,102 @@
         copyIdBtn.style.color = '#333';
         copyIdBtn.style.border = '1px solid #ccc';
 
-        floatingNavPanel.append(
+        const createIssueBtn = createButton({
+            label: 'Issue',
+            color: '#2563eb',
+            title: 'Create Linear issue for this document',
+            onClick: async (btn) => {
+                const originalLabel = btn.textContent || 'Issue';
+                const originalBg = btn.style.background;
+                const docId = extractNumericId(activeDocIdElement?.textContent);
+                const rowData = activeDocIdElement ? getRowDataFromElement(activeDocIdElement) : null;
+                const payload = buildLinearIssuePayloadFromRow(rowData, docId);
+                if (!payload?.documentId) return;
+                const dedupeKey = payload.failedJobId || payload.documentId;
+                const existingIssue = dedupeKey ? createdIssueByDedupeKey.get(dedupeKey) : null;
+                if (existingIssue?.identifier) {
+                    btn.textContent = String(existingIssue.identifier);
+                    btn.style.background = '#0f766e';
+                    if (existingIssue.url) openUrlInNewTab(existingIssue.url);
+                    setTimeout(() => {
+                        btn.textContent = originalLabel;
+                        btn.style.background = originalBg;
+                    }, 1500);
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.textContent = 'Creating...';
+                btn.style.background = '#1d4ed8';
+
+                try {
+                    const response = await sendRuntimeMessage({
+                        action: 'createLinearIssueFromEnv',
+                        payload
+                    });
+
+                    if (!response?.success || !response?.issue?.identifier) {
+                        const reason = collapseText(response?.error || 'Could not create issue.');
+                        throw new Error(reason);
+                    }
+
+                    if (dedupeKey) {
+                        createdIssueByDedupeKey.set(dedupeKey, {
+                            identifier: String(response.issue.identifier || ''),
+                            url: collapseText(response.issue.url || '')
+                        });
+                    }
+                    btn.textContent = String(response.issue.identifier || 'Created');
+                    btn.style.background = '#16a34a';
+                    setTimeout(() => {
+                        btn.textContent = originalLabel;
+                        btn.style.background = originalBg;
+                        btn.disabled = false;
+                    }, 1800);
+                } catch (error) {
+                    btn.textContent = 'Failed';
+                    btn.style.background = '#dc2626';
+                    btn.title = collapseText(error?.message || 'Could not create issue.');
+                    setTimeout(() => {
+                        btn.textContent = originalLabel;
+                        btn.style.background = originalBg;
+                        btn.disabled = false;
+                    }, 2200);
+                }
+            }
+        });
+
+        const primaryRow = document.createElement('div');
+        Object.assign(primaryRow.style, {
+            display: 'flex',
+            flexDirection: 'row',
+            gap: '3px',
+            alignItems: 'center',
+            flexWrap: 'nowrap'
+        });
+
+        const secondaryRow = document.createElement('div');
+        Object.assign(secondaryRow.style, {
+            display: 'flex',
+            flexDirection: 'row',
+            gap: '3px',
+            alignItems: 'center',
+            flexWrap: 'nowrap',
+            width: '100%'
+        });
+
+        createIssueBtn.style.flex = '1 1 auto';
+        createIssueBtn.style.justifyContent = 'center';
+
+        primaryRow.append(
             createNavBtn('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`),
             createNavBtn('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`),
             createNavBtn('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`),
-            createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`),
-            copyFilterBtn,
-            copyIdBtn
+            createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`)
         );
+
+        secondaryRow.append(createIssueBtn, copyFilterBtn, copyIdBtn);
+        floatingNavPanel.append(primaryRow, secondaryRow);
 
         document.body.appendChild(floatingNavPanel);
         return floatingNavPanel;

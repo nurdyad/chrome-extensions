@@ -4,7 +4,7 @@ MailroomNavigator is a single BetterLetter extension that combines three workspa
 
 1. `Navigator` for practice lookup/navigation
 2. `Job Panel` for document/job triage and link actions
-3. `Others` for utility workflows (email formatter, workflow bulk create, Linear + Slack, bookmarklet tools)
+3. `Others` for utility workflows (email formatter, workflow bulk create, Linear issue, bookmarklet tools)
 
 Use `SETUP.md` for installation on a new machine.
 
@@ -125,23 +125,24 @@ Use `SETUP.md` for installation on a new machine.
   - `Test Parse`
 - Includes progress and status badges.
 
-#### Linear Issue + Slack
+#### Linear Issue
 
-- Creates a Linear issue and posts to Slack.
-- Inputs:
-  - Linear API key
-  - Team key
-  - title
-  - description
-  - priority
-  - Slack delivery mode (bot token/channel or webhook)
+- Creates a Linear issue using local `.env` credentials (no key/team inputs in panel).
+- Input flow:
+  - paste Document ID or full stuck-letter detail block
+  - click `Generate Details` to build title + description
+  - optional Slack sync:
+    - click `Sync Slack` to load workspace channels/users into suggestions
+    - enable `Notify Slack`
+    - choose target type: `Channel` or `User (DM)`
+    - pick/paste target ID (`C.../G...` for channel, `U...` for user)
+  - review/edit and click `Create Linear Issue`
 - Buttons:
-  - `Create + Post`
-  - `Save Config`
+  - `Generate Details`
+  - `Create Linear Issue`
   - `Trigger Linear` (calls local trigger service)
-  - `Clear Saved Config`
 - Status badges:
-  - `linearSlackStatus`
+  - `linearSlackStatus` (issue generation/create status)
   - `linearTriggerStatus`
 
 #### Bookmarklet Tools
@@ -176,7 +177,7 @@ MailroomNavigator/
 | `manifest.json` | Chrome extension manifest (permissions, scripts, commands, resources). |
 | `panel.html` | Main extension UI layout for all tabs and controls. |
 | `panel.js` | Main controller wiring UI events to modules and background actions. |
-| `background.js` | Service worker: orchestration, caching, tab operations, Linear/Slack actions, summary jobs. |
+| `background.js` | Service worker: orchestration, caching, tab operations, Linear issue actions, summary jobs. |
 | `state.js` | Shared in-memory state used by panel modules. |
 | `utils.js` | Shared helpers (toasts, debounce, safe DOM writes, small utilities). |
 | `README.md` | Feature and architecture overview (this file). |
@@ -276,4 +277,4 @@ See:
 - Runtime artifacts are ignored:
   - `.automation-state/`
   - `logs/`
-- Do not commit real API tokens (Linear/Slack) or auth state files.
+- Do not commit real API tokens (Linear) or auth state files.

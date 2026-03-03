@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Practice Onboarding Automation",
+  "version": "0.1.0",
+  "description": "Create and configure BetterLetter practices from Airtable onboarding data.",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://app.betterletter.ai/*",
+    "https://api.airtable.com/*",
+    "https://docs.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.betterletter.ai/*",
+        "https://docs.google.com/document/*",
+        "https://docs.google.com/*/document/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

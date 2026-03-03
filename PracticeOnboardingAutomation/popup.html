@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Practice Onboarding Automation</title>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d1d5db;
+      --accent: #0f4c81;
+      --accent-hover: #0c3f6a;
+      --danger: #b91c1c;
+      --success: #166534;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 14px;
+      width: 390px;
+      font-family: var(--sans);
+      background: linear-gradient(180deg, #eef2f7 0%, #f8fafc 100%);
+      color: var(--text);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      box-shadow: 0 2px 8px rgba(15, 76, 129, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .hint {
+      margin: 0 0 10px 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .field {
+      margin-bottom: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      background: #fff;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+      margin-bottom: 10px;
+    }
+
+    button {
+      width: 100%;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    #status {
+      min-height: 18px;
+      font-size: 12px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    #status.error {
+      color: var(--danger);
+    }
+
+    #status.success {
+      color: var(--success);
+    }
+
+    #status.running {
+      color: var(--accent);
+    }
+
+    .log {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      height: 120px;
+      overflow: auto;
+      padding: 8px;
+      font-size: 11px;
+      font-family: var(--mono);
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Practice Onboarding Automation</h1>
+    <p class="hint">Runs: Airtable -> BetterLetter create practice -> service + EHR + Docman settings.</p>
+
+    <div class="field">
+      <label for="airtableToken">Airtable Personal Access Token</label>
+      <input id="airtableToken" type="password" autocomplete="off" placeholder="pat...">
+    </div>
+
+    <div class="field">
+      <label for="airtableBaseId">Airtable Base ID</label>
+      <input id="airtableBaseId" type="text" autocomplete="off" placeholder="appXXXXXXXXXXXXXX">
+    </div>
+
+    <div class="field">
+      <label for="airtableTable">Airtable Table Name or Table ID</label>
+      <input id="airtableTable" type="text" autocomplete="off" placeholder="Onboarding">
+    </div>
+
+    <div class="field">
+      <label for="airtableView">Airtable View (optional)</label>
+      <input id="airtableView" type="text" autocomplete="off" placeholder="Grid view">
+    </div>
+
+    <div class="field">
+      <label for="airtableRecordId">Airtable Record ID (optional)</label>
+      <input id="airtableRecordId" type="text" autocomplete="off" placeholder="recXXXXXXXXXXXXXX">
+    </div>
+
+    <div class="button-row">
+      <button id="runButton" type="button">Run Onboarding</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="log" class="log"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

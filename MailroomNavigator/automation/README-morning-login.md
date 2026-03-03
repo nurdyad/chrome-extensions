@@ -24,6 +24,8 @@ For full extension install across platforms, see `MailroomNavigator/SETUP.md`.
    - `user_email`, `user_password`
    - `ADMIN_PANEL_USERNAME`, `ADMIN_PANEL_PASSWORD`
    - `OTP_EMAIL_IMAP_HOST`, `OTP_EMAIL_USERNAME`, `OTP_EMAIL_PASSWORD`
+   - `LINEAR_API_KEY`, `LINEAR_TEAM_KEY` (if using extension "Create Linear Issue")
+   - `SLACK_BOT_TOKEN` (optional, only if Slack sync is enabled in panel)
    - plus any optional OTP tuning keys you already use
 
 ## Install
@@ -35,9 +37,11 @@ chmod +x morning-login-runner.sh install-morning-login-launchagent.sh uninstall-
 ./install-morning-login-launchagent.sh --hour 7 --minute 0 --interval 300
 ```
 
-## Trigger Linear From Extension Button
+## Trigger Linear + Create Linear Issue From Extension
 
-The `Trigger Linear` button in the extension calls a local service that runs `bot-jobs-linear/bot-jobs.js`.
+The extension uses a local service for:
+- `Trigger Linear` (runs `bot-jobs-linear/bot-jobs.js`)
+- `Create Linear Issue` (creates issue in Linear; optional Slack sync uses `SLACK_BOT_TOKEN`, with workspace targets loaded via panel `Sync Slack`)
 
 Install the local trigger service:
 

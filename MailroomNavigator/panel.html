@@ -269,7 +269,7 @@
 
     </div>
 
-    <!-- View 3: Others (Email formatter, workflows, Linear/Slack, bookmarklet tools) -->
+    <!-- View 3: Others (Email formatter, workflows, Linear issue, bookmarklet tools) -->
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
 
       <div class="section-container">
@@ -320,18 +320,10 @@ Mike Drinkwater"></textarea>
       </div>
 
       <div class="section-container" style="margin-top: 12px;">
-        <h3>Linear Issue + Slack</h3>
-        <label for="linearApiKeyInput">Linear API Key</label>
-        <input id="linearApiKeyInput" type="password" autocomplete="off" placeholder="Paste Linear API key">
+        <h3>Linear Issue</h3>
 
-        <label for="linearTeamKeyInput">Linear Team Key</label>
-        <input id="linearTeamKeyInput" type="text" autocomplete="off" placeholder="e.g. ENG">
-
-        <label for="linearIssueTitleInput">Issue Title</label>
-        <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Short summary">
-
-        <label for="linearIssueDescriptionInput">Issue Description</label>
-        <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Describe the problem, steps, and context."></textarea>
+        <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
+        <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
 
         <div class="linear-slack-grid">
           <div>
@@ -344,38 +336,56 @@ Mike Drinkwater"></textarea>
               <option value="4">Low</option>
             </select>
           </div>
-          <div>
-            <label for="slackDeliveryModeInput">Slack Delivery</label>
-            <select id="slackDeliveryModeInput">
-              <option value="bot">Bot Token + Channel</option>
-              <option value="webhook">Incoming Webhook</option>
-            </select>
+          <div style="display: flex; align-items: end;">
+            <button id="generateLinearIssueDraftBtn" class="btn btn-sm btn-ghost" style="width: 100%;">Generate Details</button>
           </div>
         </div>
 
-        <div id="slackBotModeFields" class="linear-slack-mode-block">
-          <label for="slackBotTokenInput">Slack Bot Token</label>
-          <input id="slackBotTokenInput" type="password" autocomplete="off" placeholder="xoxb-...">
-          <label for="slackChannelIdInput">Slack Channel ID</label>
-          <input id="slackChannelIdInput" type="text" autocomplete="off" placeholder="e.g. C0123456789">
-        </div>
+        <label for="linearIssueTitleInput">Issue Title</label>
+        <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Generated from Document ID">
 
-        <div id="slackWebhookModeFields" class="linear-slack-mode-block" style="display: none;">
-          <label for="slackWebhookUrlInput">Slack Incoming Webhook URL</label>
-          <input id="slackWebhookUrlInput" type="password" autocomplete="off" placeholder="https://hooks.slack.com/services/...">
-        </div>
+        <label for="linearIssueDescriptionInput">Issue Description</label>
+        <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Generated details will appear here."></textarea>
 
-        <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Ready.</div>
+        <div class="linear-slack-grid" style="margin-top: 8px;">
+          <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+            <input id="linearSlackNotifyEnabledInput" type="checkbox">
+            Notify Slack
+          </label>
+          <button id="syncLinearSlackWorkspaceBtn" class="btn btn-sm btn-ghost" type="button">Sync Slack</button>
+        </div>
+        <div class="linear-slack-grid" style="margin-top: 6px;">
+          <div>
+            <label for="linearSlackTargetTypeInput">Slack Target Type</label>
+            <select id="linearSlackTargetTypeInput">
+              <option value="channel">Channel</option>
+              <option value="user">User (DM)</option>
+            </select>
+          </div>
+          <div>
+            <label for="linearSlackTargetInput">Slack Channel/User ID</label>
+            <input id="linearSlackTargetInput" type="text" autocomplete="off" list="linearSlackTargetSuggestions" placeholder="e.g. C0123ABCD or U0123ABCD">
+            <datalist id="linearSlackTargetSuggestions"></datalist>
+          </div>
+        </div>
+        <div id="linearSlackTargetHint" class="validation-badge neutral">Slack sync disabled.</div>
+
+        <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Paste a Document ID and click Generate Details.</div>
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create Linear Issue</button>
+          <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="background: #0f766e;">Trigger Linear</button>
+        </div>
+        <div style="margin-top: 8px;">
+          <button id="reconcileLinearBotIssuesBtn" class="btn btn-sm" style="width: 100%; background: #1d4ed8;">Reconcile Linear</button>
+        </div>
         <label style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
           <input id="triggerLinearDryRunInput" type="checkbox">
           Trigger Linear in Dry Run mode (no new issues created)
         </label>
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create + Post</button>
-          <button id="saveLinearSlackConfigBtn" class="btn btn-sm btn-ghost">Save Config</button>
-          <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #0f766e;">Trigger Linear</button>
-          <button id="clearLinearSlackConfigBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #b45309;">Clear Saved Config</button>
-        </div>
+        <label style="display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px;">
+          <input id="reconcileLinearDryRunInput" type="checkbox">
+          Reconcile Linear in Dry Run mode (preview done updates)
+        </label>
         <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger idle.</div>
       </div>
 

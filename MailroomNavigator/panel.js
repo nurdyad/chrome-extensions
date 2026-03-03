@@ -171,6 +171,13 @@ async function openUrlsWithLoading(urls, actionButtons = []) {
             await chrome.tabs.create({ url });
             await new Promise(resolve => setTimeout(resolve, 60));
         }
+    } catch (error) {
+        const message = String(error?.message || error || '').toLowerCase();
+        if (message.includes('extension context invalidated')) {
+            showToast('Extension reloaded. Refresh this page and reopen the panel.');
+            return;
+        }
+        showToast('Failed to open one or more pages.');
     } finally {
         actionButtons.forEach(btn => { if (btn) btn.disabled = false; });
     }
@@ -448,23 +455,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     const runWorkflowBulkBtn = document.getElementById('runWorkflowBulkBtn');
     const testWorkflowParseBtn = document.getElementById('testWorkflowParseBtn');
 
-    const linearApiKeyInput = document.getElementById('linearApiKeyInput');
-    const linearTeamKeyInput = document.getElementById('linearTeamKeyInput');
+    const linearIssueSourceInput = document.getElementById('linearIssueSourceInput');
+    const generateLinearIssueDraftBtn = document.getElementById('generateLinearIssueDraftBtn');
     const linearIssueTitleInput = document.getElementById('linearIssueTitleInput');
     const linearIssueDescriptionInput = document.getElementById('linearIssueDescriptionInput');
     const linearIssuePriorityInput = document.getElementById('linearIssuePriorityInput');
-    const slackDeliveryModeInput = document.getElementById('slackDeliveryModeInput');
-    const slackBotModeFields = document.getElementById('slackBotModeFields');
-    const slackWebhookModeFields = document.getElementById('slackWebhookModeFields');
-    const slackBotTokenInput = document.getElementById('slackBotTokenInput');
-    const slackChannelIdInput = document.getElementById('slackChannelIdInput');
-    const slackWebhookUrlInput = document.getElementById('slackWebhookUrlInput');
+    const linearSlackNotifyEnabledInput = document.getElementById('linearSlackNotifyEnabledInput');
+    const syncLinearSlackWorkspaceBtn = document.getElementById('syncLinearSlackWorkspaceBtn');
+    const linearSlackTargetTypeInput = document.getElementById('linearSlackTargetTypeInput');
+    const linearSlackTargetInput = document.getElementById('linearSlackTargetInput');
+    const linearSlackTargetSuggestions = document.getElementById('linearSlackTargetSuggestions');
+    const linearSlackTargetHint = document.getElementById('linearSlackTargetHint');
     const linearSlackStatus = document.getElementById('linearSlackStatus');
     const createLinearSlackIssueBtn = document.getElementById('createLinearSlackIssueBtn');
-    const saveLinearSlackConfigBtn = document.getElementById('saveLinearSlackConfigBtn');
-    const clearLinearSlackConfigBtn = document.getElementById('clearLinearSlackConfigBtn');
     const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
+    const reconcileLinearBotIssuesBtn = document.getElementById('reconcileLinearBotIssuesBtn');
     const triggerLinearDryRunInput = document.getElementById('triggerLinearDryRunInput');
+    const reconcileLinearDryRunInput = document.getElementById('reconcileLinearDryRunInput');
     const linearTriggerStatus = document.getElementById('linearTriggerStatus');
 
     let recentDocIds = [];
@@ -478,11 +485,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     let dashboardRowsLoadedAt = 0;
     let dashboardRowsSourceTabId = null;
     const DASHBOARD_SUGGESTION_STALE_MS = 45000;
-    const LINEAR_SLACK_CONFIG_KEY = 'linearSlackConfigV1';
+    const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
+    const LINEAR_SLACK_TARGET_CACHE_STORAGE_KEY = 'linearSlackTargetsCacheV1';
     const LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS = 3500;
     const LINEAR_TRIGGER_STATUS_POLL_WINDOW_MS = 4 * 60 * 1000;
     let linearTriggerStatusPollTimer = null;
     let linearTriggerStatusPollDeadlineMs = 0;
+    let linearIssueContext = null;
+    let linearSlackTargetsCache = { channels: [], users: [], syncedAt: '' };
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -639,6 +649,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (type === 'doc') {
                 if (manualDocIdInput) manualDocIdInput.value = id;
                 updateDocValidation();
+                syncJobStatusFromManualDocId();
                 hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
                 await openUrlsWithLoading([getDocumentActionUrl('jobs', id)], [btnJobs]);
             } else {
@@ -718,6 +729,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             '✕ Invalid Document ID.'
         );
         return id;
+    };
+
+    const syncJobStatusFromManualDocId = ({ clearWhenNoMatch = false } = {}) => {
+        if (!jobStatusInput) return null;
+        const documentId = extractNumericId(manualDocIdInput?.value);
+        const row = documentId ? getRowForDocId(documentId) : null;
+        const nextJobId = row?.jobId || '';
+
+        if (nextJobId) {
+            if (jobStatusInput.value !== nextJobId) {
+                jobStatusInput.value = nextJobId;
+            }
+            updateJobValidation();
+            return nextJobId;
+        }
+
+        if (clearWhenNoMatch && jobStatusInput.value) {
+            jobStatusInput.value = '';
+            updateJobValidation();
+        }
+
+        return null;
     };
 
     const updateJobValidation = () => {
@@ -841,6 +874,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 manualDocIdInput.value = row.documentId || '';
                 recordSuggestionSelection('doc', row).catch(() => undefined);
                 updateDocValidation();
+                syncJobStatusFromManualDocId();
                 hideDashboardAutocomplete(docIdAutocompleteResultsContainer);
             }
         });
@@ -1111,6 +1145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 dashboardRowsSourceTabId = dashboardTab.id;
                 renderRecentIdChips();
                 updateDocValidation();
+                syncJobStatusFromManualDocId();
                 updateJobValidation();
                 return dashboardRows;
             } catch (error) {
@@ -1440,9 +1475,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         })
         .filter(Boolean);
 
-    // --- Linear + Slack Issue Helpers ---
-    // We keep string sanitation on the panel side to reduce accidental bad payloads,
-    // then repeat strict validation in the background worker before any network call.
+    // --- Linear Issue Helpers ---
+    // Keep panel-side sanitization lightweight, then validate again in background/local server.
     const trimField = (value, maxLength = 4096) => String(value || '').trim().slice(0, maxLength);
     const trimMultilineField = (value, maxLength = 12000) => String(value || '')
         .replace(/\r\n/g, '\n')
@@ -1450,9 +1484,286 @@ document.addEventListener('DOMContentLoaded', async () => {
         .trim()
         .slice(0, maxLength);
 
-    const isLikelySlackBotToken = (value) => /^xox[a-z]-[A-Za-z0-9-]+$/i.test(String(value || '').trim());
-    const isLikelySlackChannelId = (value) => /^[CGD][A-Z0-9]{8,}$/i.test(String(value || '').trim());
-    const isLikelySlackWebhookUrl = (value) => /^https:\/\/hooks\.slack(?:-gov)?\.com\/services\/[A-Za-z0-9/_-]+$/i.test(String(value || '').trim());
+    const extractDocumentIdFromText = (value) => {
+        const raw = String(value || '');
+        const directMatch = raw.match(/\b(?:letter|document)\s*id\s*:\s*(\d+)\b/i);
+        if (directMatch?.[1]) return directMatch[1];
+
+        const linkMatch = raw.match(/\/admin_panel\/letter\/(\d+)\b/i);
+        if (linkMatch?.[1]) return linkMatch[1];
+
+        const trimmed = raw.trim();
+        if (/^\d+$/.test(trimmed)) return trimmed;
+
+        const numericTokens = raw.match(/\b\d+\b/g) || [];
+        if (numericTokens.length === 1) return numericTokens[0];
+        const firstLikelyDocumentId = numericTokens.find((token) => token.length >= 6);
+        return firstLikelyDocumentId || '';
+    };
+
+    const normalizeSlackTargetType = (value) => (
+        String(value || '').trim().toLowerCase() === 'user' ? 'user' : 'channel'
+    );
+
+    const sanitizeSlackTargetValue = (value) => trimField(value, 180);
+
+    const extractSlackEntityId = (value) => {
+        const match = String(value || '').toUpperCase().match(/\b([A-Z][A-Z0-9]{8,})\b/);
+        return match?.[1] || '';
+    };
+
+    const isLikelySlackChannelName = (value) => /^[a-z0-9._-]{2,80}$/i.test(String(value || '').trim().replace(/^#/, ''));
+
+    const normalizeSlackTargetEntry = (entry, fallbackType = 'channel') => {
+        if (!entry || typeof entry !== 'object') return null;
+        const id = sanitizeSlackTargetValue(entry.id);
+        if (!id) return null;
+        const type = normalizeSlackTargetType(entry.type || fallbackType);
+        const name = trimField(entry.name, 120);
+        const label = trimField(entry.label, 180)
+            || (type === 'user'
+                ? (name ? `${name} (${id})` : id)
+                : (name ? `#${name} (${id})` : id));
+        return { id, name, label, type };
+    };
+
+    const normalizeSlackTargetList = (list, type) => {
+        const source = Array.isArray(list) ? list : [];
+        const map = new Map();
+        source.forEach((item) => {
+            const normalized = normalizeSlackTargetEntry(item, type);
+            if (!normalized || map.has(normalized.id)) return;
+            map.set(normalized.id, normalized);
+        });
+        return [...map.values()];
+    };
+
+    const normalizeSlackTargetCache = (rawCache = {}) => ({
+        channels: normalizeSlackTargetList(rawCache?.channels, 'channel'),
+        users: normalizeSlackTargetList(rawCache?.users, 'user'),
+        syncedAt: trimField(rawCache?.syncedAt, 80)
+    });
+
+    const getSlackSyncSummaryText = () => {
+        const channelCount = linearSlackTargetsCache.channels.length;
+        const userCount = linearSlackTargetsCache.users.length;
+        const syncedAtRaw = trimField(linearSlackTargetsCache.syncedAt, 80);
+        const syncedAtDate = syncedAtRaw ? new Date(syncedAtRaw) : null;
+        const syncedAtText = syncedAtDate && !Number.isNaN(syncedAtDate.getTime())
+            ? syncedAtDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+        if (!channelCount && !userCount) return 'Not synced yet.';
+        return `Synced ${channelCount} channels / ${userCount} users${syncedAtText ? ` at ${syncedAtText}` : ''}.`;
+    };
+
+    const getSlackTargetSuggestionsForType = (targetType) => (
+        normalizeSlackTargetType(targetType) === 'user'
+            ? linearSlackTargetsCache.users
+            : linearSlackTargetsCache.channels
+    );
+
+    const resolveSlackTargetIdFromInput = (value, targetType) => {
+        const directId = extractSlackEntityId(value);
+        if (directId) return directId;
+
+        const list = getSlackTargetSuggestionsForType(targetType);
+        const lookup = collapseText(value).toLowerCase().replace(/^[@#]/, '');
+        if (!lookup) return '';
+
+        const byName = list.find((item) => collapseText(item.name).toLowerCase() === lookup);
+        if (byName?.id) return byName.id;
+
+        const byLabelPrefix = list.find((item) => collapseText(item.label).toLowerCase().startsWith(lookup));
+        if (byLabelPrefix?.id) return byLabelPrefix.id;
+
+        return '';
+    };
+
+    const formatSlackTargetDisplayValue = (targetId, targetType) => {
+        const normalizedId = extractSlackEntityId(targetId);
+        if (!normalizedId) return '';
+        const list = getSlackTargetSuggestionsForType(targetType);
+        const entry = list.find((item) => item.id.toUpperCase() === normalizedId);
+        return entry?.label || normalizedId;
+    };
+
+    const renderSlackTargetSuggestions = () => {
+        if (!linearSlackTargetSuggestions) return;
+        linearSlackTargetSuggestions.innerHTML = '';
+        const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+        const list = getSlackTargetSuggestionsForType(targetType);
+        list.forEach((item) => {
+            const option = document.createElement('option');
+            option.value = item.label || item.id;
+            linearSlackTargetSuggestions.appendChild(option);
+        });
+    };
+
+    const saveSlackTargetCache = async () => {
+        await chrome.storage.local.set({
+            [LINEAR_SLACK_TARGET_CACHE_STORAGE_KEY]: linearSlackTargetsCache
+        });
+    };
+
+    const loadSlackTargetCache = async () => {
+        const { [LINEAR_SLACK_TARGET_CACHE_STORAGE_KEY]: rawCache } = await chrome.storage.local.get([
+            LINEAR_SLACK_TARGET_CACHE_STORAGE_KEY
+        ]);
+        linearSlackTargetsCache = normalizeSlackTargetCache(rawCache || {});
+        renderSlackTargetSuggestions();
+    };
+
+    const getLinearSlackPrefsFromForm = () => {
+        const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+        const rawTarget = sanitizeSlackTargetValue(linearSlackTargetInput?.value);
+        const resolvedTarget = resolveSlackTargetIdFromInput(rawTarget, targetType);
+        const target = resolvedTarget || rawTarget.replace(/^[@#]/, '');
+        return {
+            enabled: Boolean(linearSlackNotifyEnabledInput?.checked),
+            targetType,
+            target
+        };
+    };
+
+    const setLinearSlackTargetHint = (message, tone = null) => {
+        if (!linearSlackTargetHint) return;
+        linearSlackTargetHint.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') linearSlackTargetHint.classList.add('valid');
+        else if (tone === 'invalid') linearSlackTargetHint.classList.add('invalid');
+        else linearSlackTargetHint.classList.add('neutral');
+        linearSlackTargetHint.textContent = message;
+    };
+
+    const updateLinearSlackTargetUi = () => {
+        const prefs = getLinearSlackPrefsFromForm();
+        const isUserTarget = prefs.targetType === 'user';
+        const suggestionCount = getSlackTargetSuggestionsForType(prefs.targetType).length;
+        const syncSummary = getSlackSyncSummaryText();
+        const rawTargetInput = sanitizeSlackTargetValue(linearSlackTargetInput?.value);
+        const resolvedTargetId = resolveSlackTargetIdFromInput(rawTargetInput, prefs.targetType);
+        const selectedTargetDisplay = formatSlackTargetDisplayValue(resolvedTargetId, prefs.targetType) || resolvedTargetId;
+
+        if (linearSlackTargetTypeInput) linearSlackTargetTypeInput.value = prefs.targetType;
+        if (linearSlackTargetInput) {
+            linearSlackTargetInput.placeholder = isUserTarget ? 'e.g. U0123ABCD' : 'e.g. C0123ABCD';
+            linearSlackTargetInput.disabled = !prefs.enabled;
+        }
+        if (linearSlackTargetTypeInput) {
+            linearSlackTargetTypeInput.disabled = !prefs.enabled;
+        }
+        renderSlackTargetSuggestions();
+
+        if (!prefs.enabled) {
+            setLinearSlackTargetHint(`Slack sync disabled. ${syncSummary}`);
+            return;
+        }
+
+        if (!rawTargetInput) {
+            setLinearSlackTargetHint(
+                isUserTarget
+                    ? `Enter Slack user ID (U...) for DM notifications.${suggestionCount ? ` ${suggestionCount} suggestions ready.` : ' Click Sync Slack to load suggestions.'}`
+                    : `Enter Slack channel ID (C... or G...).${suggestionCount ? ` ${suggestionCount} suggestions ready.` : ' Click Sync Slack to load suggestions.'}`,
+                'invalid'
+            );
+            return;
+        }
+
+        if (!resolvedTargetId) {
+            if (!isUserTarget && isLikelySlackChannelName(rawTargetInput)) {
+                setLinearSlackTargetHint(
+                    `Will resolve channel name "${rawTargetInput.replace(/^#/, '')}" on submit. ${syncSummary}`,
+                    'neutral'
+                );
+                return;
+            }
+            setLinearSlackTargetHint(
+                isUserTarget
+                    ? 'Select a synced user suggestion or paste a valid Slack user ID.'
+                    : 'Select a synced channel suggestion or paste a valid Slack channel ID.',
+                'invalid'
+            );
+            return;
+        }
+
+        setLinearSlackTargetHint(
+            isUserTarget
+                ? `Slack DM target: ${selectedTargetDisplay} · ${syncSummary}`
+                : `Slack channel target: ${selectedTargetDisplay} · ${syncSummary}`,
+            'valid'
+        );
+    };
+
+    const syncSlackWorkspaceTargets = async () => {
+        if (syncLinearSlackWorkspaceBtn) {
+            syncLinearSlackWorkspaceBtn.disabled = true;
+            syncLinearSlackWorkspaceBtn.textContent = 'Syncing…';
+        }
+
+        try {
+            setLinearSlackTargetHint('Syncing Slack workspace targets…', 'neutral');
+            const response = await chrome.runtime.sendMessage({
+                action: 'syncLinearSlackWorkspaceTargets'
+            });
+
+            if (!response?.success || !response?.targets) {
+                throw new Error(trimField(response?.error, 260) || 'Could not sync Slack workspace.');
+            }
+
+            linearSlackTargetsCache = normalizeSlackTargetCache(response.targets);
+            await saveSlackTargetCache();
+            const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+            const resolvedTargetId = resolveSlackTargetIdFromInput(linearSlackTargetInput?.value, targetType);
+            if (resolvedTargetId && linearSlackTargetInput) {
+                linearSlackTargetInput.value = formatSlackTargetDisplayValue(resolvedTargetId, targetType) || resolvedTargetId;
+            }
+            updateLinearSlackTargetUi();
+            showToast('Slack workspace synced.');
+        } catch (error) {
+            const reason = trimField(error?.message, 260) || 'Could not sync Slack workspace.';
+            setLinearSlackTargetHint(reason, 'invalid');
+            showToast(reason);
+        } finally {
+            if (syncLinearSlackWorkspaceBtn) {
+                syncLinearSlackWorkspaceBtn.disabled = false;
+                syncLinearSlackWorkspaceBtn.textContent = 'Sync Slack';
+            }
+        }
+    };
+
+    const saveLinearSlackPrefs = async () => {
+        const prefs = getLinearSlackPrefsFromForm();
+        await chrome.storage.local.set({
+            [LINEAR_SLACK_PREFS_STORAGE_KEY]: prefs
+        });
+    };
+
+    const loadLinearSlackPrefs = async () => {
+        const { [LINEAR_SLACK_PREFS_STORAGE_KEY]: rawPrefs } = await chrome.storage.local.get([
+            LINEAR_SLACK_PREFS_STORAGE_KEY
+        ]);
+
+        const prefs = rawPrefs && typeof rawPrefs === 'object'
+            ? {
+                enabled: Boolean(rawPrefs.enabled),
+                targetType: normalizeSlackTargetType(rawPrefs.targetType),
+                target: sanitizeSlackTargetValue(rawPrefs.target)
+            }
+            : {
+                enabled: false,
+                targetType: 'channel',
+                target: ''
+            };
+
+        if (linearSlackNotifyEnabledInput) linearSlackNotifyEnabledInput.checked = prefs.enabled;
+        if (linearSlackTargetTypeInput) linearSlackTargetTypeInput.value = prefs.targetType;
+        if (linearSlackTargetInput) {
+            const targetId = extractSlackEntityId(prefs.target);
+            linearSlackTargetInput.value = targetId
+                ? (formatSlackTargetDisplayValue(targetId, prefs.targetType) || targetId)
+                : prefs.target;
+        }
+        updateLinearSlackTargetUi();
+    };
 
     const setLinearSlackStatus = (message, tone = null) => {
         if (!linearSlackStatus) return;
@@ -1472,21 +1783,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         linearTriggerStatus.textContent = message;
     };
 
-    const setLinearTriggerButtonState = (state) => {
-        if (!triggerLinearBotJobsBtn) return;
+    const setLinearTriggerButtonState = (state, runType = 'trigger') => {
         const normalized = String(state || 'idle').toLowerCase();
+        const normalizedRunType = String(runType || '').toLowerCase() === 'reconcile' ? 'reconcile' : 'trigger';
+
+        if (triggerLinearBotJobsBtn) {
+            triggerLinearBotJobsBtn.disabled = false;
+            triggerLinearBotJobsBtn.textContent = 'Trigger Linear';
+        }
+        if (reconcileLinearBotIssuesBtn) {
+            reconcileLinearBotIssuesBtn.disabled = false;
+            reconcileLinearBotIssuesBtn.textContent = 'Reconcile Linear';
+        }
+
         if (normalized === 'pending') {
-            triggerLinearBotJobsBtn.disabled = true;
-            triggerLinearBotJobsBtn.textContent = 'Triggering…';
+            if (triggerLinearBotJobsBtn) triggerLinearBotJobsBtn.disabled = true;
+            if (reconcileLinearBotIssuesBtn) reconcileLinearBotIssuesBtn.disabled = true;
+            if (normalizedRunType === 'reconcile') {
+                if (reconcileLinearBotIssuesBtn) reconcileLinearBotIssuesBtn.textContent = 'Reconciling…';
+            } else if (triggerLinearBotJobsBtn) {
+                triggerLinearBotJobsBtn.textContent = 'Triggering…';
+            }
             return;
         }
+
         if (normalized === 'running') {
-            triggerLinearBotJobsBtn.disabled = true;
-            triggerLinearBotJobsBtn.textContent = 'Running…';
+            if (triggerLinearBotJobsBtn) triggerLinearBotJobsBtn.disabled = true;
+            if (reconcileLinearBotIssuesBtn) reconcileLinearBotIssuesBtn.disabled = true;
+            if (normalizedRunType === 'reconcile') {
+                if (reconcileLinearBotIssuesBtn) reconcileLinearBotIssuesBtn.textContent = 'Running…';
+            } else if (triggerLinearBotJobsBtn) {
+                triggerLinearBotJobsBtn.textContent = 'Running…';
+            }
             return;
         }
-        triggerLinearBotJobsBtn.disabled = false;
-        triggerLinearBotJobsBtn.textContent = 'Trigger Linear';
     };
 
     const formatLinearTriggerTime = (value) => {
@@ -1501,15 +1831,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         const runId = trimField(run.runId, 64) || 'unknown';
         const started = formatLinearTriggerTime(run.startedAt);
         const ended = formatLinearTriggerTime(run.endedAt);
+        const runType = String(run.runType || '').toLowerCase() === 'reconcile' ? 'reconcile' : 'trigger';
+        const runLabel = runType === 'reconcile' ? 'Reconcile' : 'Trigger';
         const dryRun = run.dryRun ? ' (dry run)' : '';
+        const summaryLines = Array.isArray(run.summaryLines)
+            ? run.summaryLines.map((line) => trimField(line, 240)).filter(Boolean).slice(0, 10)
+            : [];
         if (isActive || String(run.status || '').toLowerCase() === 'running') {
-            return `Run ${runId} is running${dryRun}${started ? ` since ${started}` : ''}.`;
+            return `${runLabel} run ${runId} is running${dryRun}${started ? ` since ${started}` : ''}.`;
         }
+        let headline = '';
         if (String(run.status || '').toLowerCase() === 'success') {
-            return `Run ${runId} finished successfully${dryRun}${ended ? ` at ${ended}` : ''}.`;
+            headline = `${runLabel} run ${runId} finished successfully${dryRun}${ended ? ` at ${ended}` : ''}.`;
+        } else {
+            const reason = trimField(run.error, 180) || `exit code ${String(run.exitCode ?? 'unknown')}`;
+            headline = `${runLabel} run ${runId} failed${dryRun}${ended ? ` at ${ended}` : ''}: ${reason}`;
         }
-        const reason = trimField(run.error, 180) || `exit code ${String(run.exitCode ?? 'unknown')}`;
-        return `Run ${runId} failed${dryRun}${ended ? ` at ${ended}` : ''}: ${reason}`;
+        return summaryLines.length ? [headline, ...summaryLines].join('\n') : headline;
     };
 
     const stopLinearTriggerStatusPolling = () => {
@@ -1531,7 +1869,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const lastRun = health.lastRun && typeof health.lastRun === 'object' ? health.lastRun : null;
 
         if (isRunning && activeRun) {
-            setLinearTriggerButtonState('running');
+            setLinearTriggerButtonState('running', activeRun.runType);
             setLinearTriggerStatus(formatLinearTriggerRunSummary(activeRun, true), 'neutral');
             return true;
         }
@@ -1595,7 +1933,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const triggerLinearBotJobsRun = async () => {
         try {
             const isDryRun = Boolean(triggerLinearDryRunInput?.checked);
-            setLinearTriggerButtonState('pending');
+            setLinearTriggerButtonState('pending', 'trigger');
             setLinearTriggerStatus(
                 isDryRun ? 'Triggering bot-jobs-linear dry run…' : 'Triggering bot-jobs-linear run…',
                 'neutral'
@@ -1610,7 +1948,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const summary = formatLinearTriggerRunSummary(response.run, true) || 'Run started.';
                 setLinearTriggerStatus(summary, 'valid');
                 showToast(isDryRun ? 'bot-jobs-linear dry run triggered.' : 'bot-jobs-linear run triggered.');
-                setLinearTriggerButtonState('running');
+                setLinearTriggerButtonState('running', response?.run?.runType || 'trigger');
                 startLinearTriggerStatusPolling();
                 return;
             }
@@ -1619,7 +1957,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const summary = formatLinearTriggerRunSummary(response.run, true) || 'A run is already in progress.';
                 setLinearTriggerStatus(summary, 'neutral');
                 showToast('A Linear run is already in progress.');
-                setLinearTriggerButtonState('running');
+                setLinearTriggerButtonState('running', response?.run?.runType || 'trigger');
                 startLinearTriggerStatusPolling();
                 return;
             }
@@ -1633,145 +1971,199 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    // Show only the relevant Slack credential block based on selected delivery mode.
-    const updateSlackModeVisibility = () => {
-        const mode = String(slackDeliveryModeInput?.value || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
-        if (slackBotModeFields) slackBotModeFields.style.display = mode === 'bot' ? 'block' : 'none';
-        if (slackWebhookModeFields) slackWebhookModeFields.style.display = mode === 'webhook' ? 'block' : 'none';
+    const triggerLinearReconcileRun = async () => {
+        try {
+            const isDryRun = Boolean(reconcileLinearDryRunInput?.checked);
+            setLinearTriggerButtonState('pending', 'reconcile');
+            setLinearTriggerStatus(
+                isDryRun ? 'Triggering Linear reconcile dry run…' : 'Triggering Linear reconcile run…',
+                'neutral'
+            );
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'triggerLinearReconcileRun',
+                payload: { dryRun: isDryRun }
+            });
+
+            if (response?.success && response?.run) {
+                const summary = formatLinearTriggerRunSummary(response.run, true) || 'Reconcile run started.';
+                setLinearTriggerStatus(summary, 'valid');
+                showToast(isDryRun ? 'Linear reconcile dry run triggered.' : 'Linear reconcile run triggered.');
+                setLinearTriggerButtonState('running', response?.run?.runType || 'reconcile');
+                startLinearTriggerStatusPolling();
+                return;
+            }
+
+            if (response?.running && response?.run) {
+                const summary = formatLinearTriggerRunSummary(response.run, true) || 'A run is already in progress.';
+                setLinearTriggerStatus(summary, 'neutral');
+                showToast('A Linear run is already in progress.');
+                setLinearTriggerButtonState('running', response?.run?.runType || 'trigger');
+                startLinearTriggerStatusPolling();
+                return;
+            }
+
+            throw new Error(trimField(response?.error, 260) || 'Could not trigger Linear reconcile run.');
+        } catch (error) {
+            const message = trimField(error?.message, 260) || 'Could not trigger Linear reconcile run.';
+            setLinearTriggerStatus(message, 'invalid');
+            setLinearTriggerButtonState('idle');
+            showToast(message);
+        }
     };
 
-    const getLinearSlackPayloadFromForm = () => {
-        const priorityRaw = Number.parseInt(String(linearIssuePriorityInput?.value || '0'), 10);
-        const priority = [0, 1, 2, 3, 4].includes(priorityRaw) ? priorityRaw : 0;
-        const slackMode = String(slackDeliveryModeInput?.value || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
+    const getStructuredField = (text, label) => {
+        const pattern = new RegExp(`\\b${label}\\s*:\\s*([^\\n]+)`, 'i');
+        const match = String(text || '').match(pattern);
+        return trimField(match?.[1] || '', 1000);
+    };
+
+    const getStructuredLink = (text, label) => {
+        const pattern = new RegExp(`\\b${label}\\s*:\\s*(https?:\\/\\/\\S+)`, 'i');
+        const match = String(text || '').match(pattern);
+        return trimField(match?.[1] || '', 1200);
+    };
+
+    const buildLinearIssueDraft = (rawInput) => {
+        const sourceText = trimMultilineField(rawInput, 6000);
+        const documentId = extractDocumentIdFromText(sourceText);
+        const dashboardRow = documentId ? getRowForDocId(documentId) : null;
+
+        const failedJobIdFromText = extractJobId(getStructuredField(sourceText, 'Failed\\s*job\\s*ID'));
+        const failedJobId = failedJobIdFromText || trimField(dashboardRow?.jobId, 120);
+
+        const practiceFromText = getStructuredField(sourceText, 'Practice');
+        const practiceName = practiceFromText
+            || trimField(dashboardRow?.practiceName || dashboardRow?.practice, 240);
+
+        const fileSizeBytes = getStructuredField(sourceText, 'File\\s*size');
+        const parsedLetterLink = getStructuredLink(sourceText, 'Letter\\s*admin\\s*link');
+        const parsedFailedJobLink = getStructuredLink(sourceText, 'Failed\\s*job\\s*link');
+
+        const letterAdminLink = parsedLetterLink
+            || (documentId ? `https://app.betterletter.ai/admin_panel/letter/${documentId}` : 'https://app.betterletter.ai/admin_panel/letter/');
+        const failedJobLink = parsedFailedJobLink
+            || (failedJobId
+                ? `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(failedJobId)}`
+                : 'https://app.betterletter.ai/admin_panel/bots/jobs/');
+
+        const title = practiceName
+            ? `Stuck letter: ${documentId} (${practiceName})`
+            : `Stuck letter: ${documentId}`;
+
+        const description = [
+            `Letter ID: ${documentId || 'N/A'}`,
+            `Failed job ID: ${failedJobId || 'N/A'}`,
+            `File size: ${fileSizeBytes || 'N/A'}`,
+            `Practice: ${practiceName || 'N/A'}`,
+            '',
+            'Letter admin link:',
+            letterAdminLink,
+            '',
+            'Failed job link:',
+            failedJobLink
+        ].join('\n');
 
         return {
-            linearApiKey: trimField(linearApiKeyInput?.value, 300),
-            linearTeamKey: trimField(linearTeamKeyInput?.value, 32),
+            documentId,
+            failedJobId,
+            fileSizeBytes,
+            practiceName,
+            letterAdminLink,
+            failedJobLink,
+            title,
+            description
+        };
+    };
+
+    const generateLinearIssueDraft = ({ silent = false } = {}) => {
+        const sourceInput = trimMultilineField(linearIssueSourceInput?.value, 6000);
+        const fallbackDocId = extractNumericId(manualDocIdInput?.value);
+        const draft = buildLinearIssueDraft(sourceInput || fallbackDocId);
+
+        if (!draft.documentId) {
+            if (!silent) {
+                setLinearSlackStatus('Provide a valid Document ID (or details block containing Letter ID).', 'invalid');
+                showToast('Provide a valid Document ID.');
+            }
+            return null;
+        }
+
+        if (linearIssueTitleInput && !trimField(linearIssueTitleInput.value, 240)) {
+            linearIssueTitleInput.value = draft.title;
+        }
+        if (linearIssueDescriptionInput && !trimMultilineField(linearIssueDescriptionInput.value, 12000)) {
+            linearIssueDescriptionInput.value = draft.description;
+        }
+
+        linearIssueContext = {
+            documentId: draft.documentId,
+            failedJobId: draft.failedJobId,
+            fileSizeBytes: draft.fileSizeBytes,
+            practiceName: draft.practiceName,
+            letterAdminLink: draft.letterAdminLink,
+            failedJobLink: draft.failedJobLink
+        };
+
+        if (!silent) {
+            const row = draft.documentId ? getRowForDocId(draft.documentId) : null;
+            const metadataHint = row ? ` · ${row.jobType || 'job'} · ${truncateText(row.latestError || row.status, 80)}` : '';
+            setLinearSlackStatus(`Generated issue details for Document ${draft.documentId}${metadataHint}`, 'valid');
+            showToast(`Generated details for ${draft.documentId}.`);
+        }
+
+        return draft;
+    };
+
+    const getLinearIssuePayloadFromForm = () => {
+        const priorityRaw = Number.parseInt(String(linearIssuePriorityInput?.value || '0'), 10);
+        const priority = [0, 1, 2, 3, 4].includes(priorityRaw) ? priorityRaw : 0;
+
+        return {
+            documentId: trimField(linearIssueContext?.documentId, 32),
+            failedJobId: trimField(linearIssueContext?.failedJobId, 120),
+            fileSizeBytes: trimField(linearIssueContext?.fileSizeBytes, 120),
+            practiceName: trimField(linearIssueContext?.practiceName, 240),
+            letterAdminLink: trimField(linearIssueContext?.letterAdminLink, 1200),
+            failedJobLink: trimField(linearIssueContext?.failedJobLink, 1200),
             title: trimField(linearIssueTitleInput?.value, 240),
             description: trimMultilineField(linearIssueDescriptionInput?.value, 12000),
             priority,
-            slack: {
-                mode: slackMode,
-                botToken: trimField(slackBotTokenInput?.value, 300),
-                channelId: trimField(slackChannelIdInput?.value, 64),
-                webhookUrl: trimField(slackWebhookUrlInput?.value, 600)
-            }
+            slack: getLinearSlackPrefsFromForm()
         };
     };
 
-    const validateLinearSlackPayload = (payload) => {
-        if (!payload.linearApiKey) return 'Linear API key is required.';
-        if (!payload.linearTeamKey) return 'Linear Team key is required.';
+    const validateLinearIssuePayload = (payload) => {
+        if (!payload.documentId) return 'Generate details first so Document ID is included.';
         if (!payload.title) return 'Issue title is required.';
-
-        if (payload.slack?.mode === 'webhook') {
-            if (!payload.slack.webhookUrl) return 'Slack webhook URL is required.';
-            if (!isLikelySlackWebhookUrl(payload.slack.webhookUrl)) return 'Slack webhook URL format looks invalid.';
-            return '';
+        if (!payload.description) return 'Issue description is required.';
+        if (payload?.slack?.enabled && !payload?.slack?.target) {
+            return payload?.slack?.targetType === 'user'
+                ? 'Slack user ID is required when Slack sync is enabled.'
+                : 'Slack channel ID is required when Slack sync is enabled.';
         }
-
-        if (!payload.slack?.botToken) return 'Slack bot token is required.';
-        if (!isLikelySlackBotToken(payload.slack.botToken)) return 'Slack bot token format looks invalid.';
-        if (!payload.slack.channelId) return 'Slack channel ID is required.';
-        if (!isLikelySlackChannelId(payload.slack.channelId)) return 'Slack channel ID format looks invalid.';
+        if (payload?.slack?.enabled && payload?.slack?.targetType === 'user') {
+            const userId = extractSlackEntityId(payload?.slack?.target);
+            if (!/^U[A-Z0-9]{8,}$/i.test(userId)) {
+                return 'Select a synced user suggestion or paste a valid Slack user ID (U...).';
+            }
+        }
         return '';
     };
 
-    // Config is saved only when the user explicitly clicks "Save Config".
-    // We keep it in chrome.storage.local (not sync) to avoid cross-device propagation.
-    const saveLinearSlackConfig = async () => {
-        const payload = getLinearSlackPayloadFromForm();
-
-        if (!payload.linearApiKey || !payload.linearTeamKey) {
-            setLinearSlackStatus('Linear API key and Team key are required to save config.', 'invalid');
-            return;
+    const createLinearIssue = async () => {
+        if (!linearIssueContext || !linearIssueContext.documentId) {
+            generateLinearIssueDraft({ silent: true });
         }
 
-        if (payload.slack.mode === 'webhook') {
-            if (!payload.slack.webhookUrl || !isLikelySlackWebhookUrl(payload.slack.webhookUrl)) {
-                setLinearSlackStatus('Provide a valid Slack webhook URL before saving.', 'invalid');
-                return;
-            }
-        } else {
-            if (!payload.slack.botToken || !isLikelySlackBotToken(payload.slack.botToken)) {
-                setLinearSlackStatus('Provide a valid Slack bot token before saving.', 'invalid');
-                return;
-            }
-            if (!payload.slack.channelId || !isLikelySlackChannelId(payload.slack.channelId)) {
-                setLinearSlackStatus('Provide a valid Slack channel ID before saving.', 'invalid');
-                return;
-            }
-        }
-
-        const config = {
-            linearApiKey: payload.linearApiKey,
-            linearTeamKey: payload.linearTeamKey,
-            priority: payload.priority,
-            slack: {
-                mode: payload.slack.mode,
-                botToken: payload.slack.botToken,
-                channelId: payload.slack.channelId,
-                webhookUrl: payload.slack.webhookUrl
-            }
-        };
-
-        await chrome.storage.local.set({ [LINEAR_SLACK_CONFIG_KEY]: config });
-        setLinearSlackStatus('Config saved locally on this browser profile.', 'valid');
-        showToast('Linear/Slack config saved.');
-    };
-
-    const loadLinearSlackConfig = async () => {
-        const result = await chrome.storage.local.get([LINEAR_SLACK_CONFIG_KEY]);
-        const config = result?.[LINEAR_SLACK_CONFIG_KEY];
-        if (!config || typeof config !== 'object') {
-            updateSlackModeVisibility();
-            return;
-        }
-
-        if (linearApiKeyInput) linearApiKeyInput.value = trimField(config.linearApiKey, 300);
-        if (linearTeamKeyInput) linearTeamKeyInput.value = trimField(config.linearTeamKey, 32);
-        if (linearIssuePriorityInput) {
-            const savedPriority = Number.parseInt(String(config.priority ?? 0), 10);
-            linearIssuePriorityInput.value = String([0, 1, 2, 3, 4].includes(savedPriority) ? savedPriority : 0);
-        }
-
-        const slackConfig = config.slack && typeof config.slack === 'object' ? config.slack : {};
-        if (slackDeliveryModeInput) {
-            slackDeliveryModeInput.value = String(slackConfig.mode || 'bot').toLowerCase() === 'webhook' ? 'webhook' : 'bot';
-        }
-        if (slackBotTokenInput) slackBotTokenInput.value = trimField(slackConfig.botToken, 300);
-        if (slackChannelIdInput) slackChannelIdInput.value = trimField(slackConfig.channelId, 64);
-        if (slackWebhookUrlInput) slackWebhookUrlInput.value = trimField(slackConfig.webhookUrl, 600);
-
-        updateSlackModeVisibility();
-        setLinearSlackStatus('Saved config loaded. Issue title/description are not auto-saved.', 'neutral');
-    };
-
-    const clearLinearSlackConfig = async () => {
-        await chrome.storage.local.remove([LINEAR_SLACK_CONFIG_KEY]);
-
-        if (linearApiKeyInput) linearApiKeyInput.value = '';
-        if (linearTeamKeyInput) linearTeamKeyInput.value = '';
-        if (linearIssuePriorityInput) linearIssuePriorityInput.value = '0';
-        if (slackBotTokenInput) slackBotTokenInput.value = '';
-        if (slackChannelIdInput) slackChannelIdInput.value = '';
-        if (slackWebhookUrlInput) slackWebhookUrlInput.value = '';
-        if (slackDeliveryModeInput) slackDeliveryModeInput.value = 'bot';
-
-        updateSlackModeVisibility();
-        setLinearSlackStatus('Saved config cleared.', 'neutral');
-        showToast('Saved config cleared.');
-    };
-
-    const createLinearIssueAndNotifySlack = async () => {
-        const payload = getLinearSlackPayloadFromForm();
-        const validationError = validateLinearSlackPayload(payload);
+        const payload = getLinearIssuePayloadFromForm();
+        const validationError = validateLinearIssuePayload(payload);
         if (validationError) {
             setLinearSlackStatus(validationError, 'invalid');
             showToast(validationError);
             return;
         }
+        await saveLinearSlackPrefs().catch(() => undefined);
 
         try {
             if (createLinearSlackIssueBtn) {
@@ -1779,38 +2171,49 @@ document.addEventListener('DOMContentLoaded', async () => {
                 createLinearSlackIssueBtn.textContent = 'Submitting…';
             }
 
-            setLinearSlackStatus('Creating issue in Linear and sending Slack notification…', 'neutral');
+            setLinearSlackStatus('Creating issue in Linear…', 'neutral');
             const response = await chrome.runtime.sendMessage({
-                action: 'createLinearIssueAndNotifySlack',
+                action: 'createLinearIssueFromEnv',
                 payload
             });
 
-            if (response?.success && response?.issue?.identifier) {
-                const issueId = trimField(response.issue.identifier, 64);
-                const issueUrl = trimField(response.issue.url, 1000);
-                setLinearSlackStatus(`Created ${issueId}\nSlack message sent successfully.`, 'valid');
-                if (issueUrl) showToast(`Issue created: ${issueId}`);
+            if (!response?.success || !response?.issue?.identifier) {
+                throw new Error(trimField(response?.error, 260) || 'Failed to create issue.');
+            }
+
+            const issueId = trimField(response.issue.identifier, 64);
+            const issueUrl = trimField(response.issue.url, 1000);
+            const slack = response?.slack && typeof response.slack === 'object' ? response.slack : null;
+            const slackAttempted = Boolean(slack?.attempted);
+            const slackSuccess = Boolean(slack?.success);
+
+            if (slackAttempted && !slackSuccess) {
+                const slackError = trimField(slack?.error, 220) || 'Slack notification failed.';
+                setLinearSlackStatus(`Created ${issueId}\n${issueUrl}\nSlack failed: ${slackError}`, 'invalid');
+                showToast(`Issue created: ${issueId} (Slack failed)`);
                 return;
             }
 
-            if (response?.partial && response?.issue?.identifier) {
-                const issueId = trimField(response.issue.identifier, 64);
-                const reason = trimField(response.error, 220) || 'Slack notification failed.';
-                setLinearSlackStatus(`Issue ${issueId} created.\nSlack failed: ${reason}`, 'invalid');
-                showToast('Issue created, but Slack failed.');
+            if (slackAttempted && slackSuccess) {
+                const slackTarget = trimField(slack?.target, 80);
+                const targetLabel = trimField(slack?.targetType, 12) === 'user'
+                    ? `DM ${slackTarget || 'user'}`
+                    : `channel ${slackTarget || 'target'}`;
+                setLinearSlackStatus(`Created ${issueId}\n${issueUrl}\nSlack sent to ${targetLabel}.`, 'valid');
+                showToast(`Issue created + Slack sent: ${issueId}`);
                 return;
             }
 
-            const err = trimField(response?.error, 260) || 'Failed to create issue.';
-            throw new Error(err);
+            setLinearSlackStatus(`Created ${issueId}\n${issueUrl}`, 'valid');
+            showToast(`Issue created: ${issueId}`);
         } catch (error) {
-            const message = trimField(error?.message, 260) || 'Linear/Slack request failed.';
+            const message = trimField(error?.message, 260) || 'Linear request failed.';
             setLinearSlackStatus(message, 'invalid');
             showToast(message);
         } finally {
             if (createLinearSlackIssueBtn) {
                 createLinearSlackIssueBtn.disabled = false;
-                createLinearSlackIssueBtn.textContent = 'Create + Post';
+                createLinearSlackIssueBtn.textContent = 'Create Linear Issue';
             }
         }
     };
@@ -1967,6 +2370,8 @@ ${error?.message || String(error)}`, 'invalid');
         if (workflowSkipDuplicates) workflowSkipDuplicates.checked = Boolean(saved.workflowSkipDuplicates);
         if (workflowTitleCase) workflowTitleCase.checked = Boolean(saved.workflowTitleCase);
     });
+    await loadSlackTargetCache();
+    await loadLinearSlackPrefs();
 
     workflowNamesInput?.addEventListener('input', () => {
         const parsed = parseWorkflowNames(workflowNamesInput.value);
@@ -1983,23 +2388,57 @@ ${error?.message || String(error)}`, 'invalid');
     });
 
     runWorkflowBulkBtn?.addEventListener('click', runBulkWorkflowCreation);
-    slackDeliveryModeInput?.addEventListener('change', updateSlackModeVisibility);
-    saveLinearSlackConfigBtn?.addEventListener('click', () => {
-        saveLinearSlackConfig().catch(() => {
-            setLinearSlackStatus('Could not save config.', 'invalid');
-            showToast('Could not save config.');
-        });
+
+    generateLinearIssueDraftBtn?.addEventListener('click', () => {
+        if (linearIssueSourceInput && !trimMultilineField(linearIssueSourceInput.value, 6000)) {
+            const fallbackDocId = extractNumericId(manualDocIdInput?.value);
+            if (fallbackDocId) linearIssueSourceInput.value = fallbackDocId;
+        }
+        const draft = generateLinearIssueDraft();
+        if (!draft) return;
+        if (linearIssueTitleInput) linearIssueTitleInput.value = draft.title;
+        if (linearIssueDescriptionInput) linearIssueDescriptionInput.value = draft.description;
     });
-    clearLinearSlackConfigBtn?.addEventListener('click', () => {
-        clearLinearSlackConfig().catch(() => {
-            setLinearSlackStatus('Could not clear saved config.', 'invalid');
-            showToast('Could not clear saved config.');
-        });
+
+    linearIssueSourceInput?.addEventListener('input', () => {
+        linearIssueContext = null;
     });
+
+    syncLinearSlackWorkspaceBtn?.addEventListener('click', () => {
+        syncSlackWorkspaceTargets().catch(() => undefined);
+    });
+    linearSlackNotifyEnabledInput?.addEventListener('change', () => {
+        updateLinearSlackTargetUi();
+        saveLinearSlackPrefs().catch(() => undefined);
+    });
+    linearSlackTargetTypeInput?.addEventListener('change', () => {
+        const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+        const resolvedTargetId = resolveSlackTargetIdFromInput(linearSlackTargetInput?.value, targetType);
+        if (resolvedTargetId && linearSlackTargetInput) {
+            linearSlackTargetInput.value = formatSlackTargetDisplayValue(resolvedTargetId, targetType) || resolvedTargetId;
+        }
+        updateLinearSlackTargetUi();
+        saveLinearSlackPrefs().catch(() => undefined);
+    });
+    linearSlackTargetInput?.addEventListener('input', () => {
+        updateLinearSlackTargetUi();
+    });
+    linearSlackTargetInput?.addEventListener('change', () => {
+        const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+        const resolvedTargetId = resolveSlackTargetIdFromInput(linearSlackTargetInput?.value, targetType);
+        if (resolvedTargetId && linearSlackTargetInput) {
+            linearSlackTargetInput.value = formatSlackTargetDisplayValue(resolvedTargetId, targetType) || resolvedTargetId;
+        } else if (linearSlackTargetInput) {
+            linearSlackTargetInput.value = sanitizeSlackTargetValue(linearSlackTargetInput.value);
+        }
+        updateLinearSlackTargetUi();
+        saveLinearSlackPrefs().catch(() => undefined);
+    });
+
     createLinearSlackIssueBtn?.addEventListener('click', () => {
-        createLinearIssueAndNotifySlack().catch(() => {
-            setLinearSlackStatus('Linear/Slack action failed.', 'invalid');
-            showToast('Linear/Slack action failed.');
+        createLinearIssue().catch(() => {
+            setLinearSlackStatus('Linear issue action failed.', 'invalid');
+            showToast('Linear issue action failed.');
         });
     });
     triggerLinearBotJobsBtn?.addEventListener('click', () => {
@@ -2009,9 +2448,17 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Could not trigger bot-jobs-linear run.');
         });
     });
-    updateSlackModeVisibility();
-    await loadLinearSlackConfig();
-    await pollLinearTriggerStatus({ silent: true });
+    reconcileLinearBotIssuesBtn?.addEventListener('click', () => {
+        triggerLinearReconcileRun().catch(() => {
+            setLinearTriggerStatus('Could not trigger Linear reconcile run.', 'invalid');
+            setLinearTriggerButtonState('idle');
+            showToast('Could not trigger Linear reconcile run.');
+        });
+    });
+    const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
+    if (isLinearRunActiveOnLoad) {
+        startLinearTriggerStatusPolling();
+    }
 
     const refreshDocSuggestions = async ({ force = false } = {}) => {
         await syncDashboardSuggestionRows({ force, silent: true });
@@ -2025,6 +2472,7 @@ ${error?.message || String(error)}`, 'invalid');
 
     manualDocIdInput?.addEventListener('input', () => {
         updateDocValidation();
+        syncJobStatusFromManualDocId();
         showDocIdSuggestions();
     });
     manualDocIdInput?.addEventListener('focus', async () => {
