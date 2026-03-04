@@ -90,6 +90,47 @@ label {
   justify-content: center;
 }
 
+.nav-action-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.nav-action-grid .btn {
+  grid-column: span 2;
+  min-height: 28px;
+  padding: 4px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow: 0 2px 6px rgba(20, 40, 70, 0.08);
+}
+
+.nav-action-grid .btn:nth-child(4),
+.nav-action-grid .btn:nth-child(5) {
+  grid-column: span 3;
+}
+
+.nav-action-grid .btn svg {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+}
+
+.nav-action-grid .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(20, 40, 70, 0.12);
+}
+
+.nav-action-grid .btn:disabled {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: none;
+}
+
 /* This ensures the suggestion list sticks exactly to the input box */
 .search-container {
   position: relative; /* Crucial: This holds the absolute list inside */
@@ -130,6 +171,50 @@ label {
     padding: 6px 2px; /* Tighter padding to fit text on one line */
 }
 
+.bookmarklet-section label {
+    margin-bottom: 6px;
+}
+
+.bookmarklet-launch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.bookmarklet-launch-btn {
+    min-height: 28px;
+    padding: 4px 7px;
+    border-radius: 9px;
+    background: linear-gradient(180deg, #fbfdff 0%, #f2f7fc 100%) !important;
+    color: #1f5f99 !important;
+    border: 1px solid #d3e2f1 !important;
+    box-shadow: 0 2px 6px rgba(28, 86, 132, 0.06);
+    flex-direction: row;
+    justify-content: center;
+    gap: 6px;
+    text-align: left;
+}
+
+.bookmarklet-launch-btn:hover:not(:disabled) {
+    background: linear-gradient(180deg, #ffffff 0%, #f2f8ff 100%) !important;
+    border-color: #b8d4ee !important;
+    box-shadow: 0 4px 8px rgba(28, 86, 132, 0.09);
+}
+
+.bookmarklet-launch-btn svg {
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+}
+
+.bookmarklet-launch-btn span {
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
 .practice-input-grid {
     display: grid;
     grid-template-columns: 3fr 1fr 1fr;
@@ -155,57 +240,164 @@ label {
     margin-bottom: 0;
 }
 
-.jobs-row {
-    display: flex;
-    gap: 9px;
-    margin-top: 6px;
+.jobs-section {
+    padding: 8px;
 }
 
-.job-col {
-    flex: 1;
+.jobs-shell {
     display: flex;
     flex-direction: column;
+    gap: 4px;
 }
 
-.jobs-row label {
-    margin-bottom: 4px;
+.job-panel {
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px;
+    border: 1px solid #d5e2ee;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fafcff 0%, #eef6fd 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.job-panel-unified {
+    display: flex;
+}
+
+.job-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.job-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.job-panel-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    color: #3a5875;
 }
 
 .job-checklist {
-    border: 1px solid #b9cadb;
-    border-radius: var(--border-radius);
-    background: #fff;
-    padding: 6px 8px;
-    max-height: 160px;
+    border: 1px solid #d6e2ee;
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(244, 249, 255, 0.96) 100%);
+    padding: 4px;
+    max-height: 132px;
     overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    align-content: start;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #9ebad3 transparent;
 }
 
 .job-check-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 0;
+    justify-content: space-between;
     margin: 0;
-    font-size: 12px;
-    line-height: 1.25;
+    min-width: 0;
+    font-size: 10px;
+    line-height: 1.15;
     color: #1f3f5a;
     cursor: pointer;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.72);
+    transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+    min-height: 28px;
+    position: relative;
+}
+
+.job-check-item:hover {
+    background: #f2f8ff;
+    border-color: #d0e3f6;
+}
+
+.job-check-item.is-selected {
+    background: linear-gradient(180deg, #eef6ff 0%, #e2f0ff 100%);
+    border-color: #8fbeea;
+    color: #174d79;
+    box-shadow: 0 8px 14px rgba(47, 143, 203, 0.1);
+}
+
+.job-check-item.is-selected::after {
+    content: '✓';
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin-left: 6px;
+    border-radius: 999px;
+    background: #1f77c7;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+}
+
+.job-check-all {
+    grid-column: 1 / -1;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #eaf4ff;
+    border-color: #b2d2ef;
+    font-weight: 600;
+    color: #174d79;
+    box-shadow: none;
 }
 
 .job-check-item input[type="checkbox"] {
-    margin: 0;
-    flex-shrink: 0;
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+    height: 0;
+}
+
+.job-check-text {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .job-open-btn {
-    margin-top: 6px;
+    margin-top: 0;
+    min-width: 66px;
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    border-radius: 9px;
+}
+
+.job-clear-btn {
+    min-width: 52px;
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 10px;
+    border-radius: 9px;
 }
 
 .jobs-helper-text {
-    margin-top: 6px;
-    font-size: 11px;
+    margin-top: 2px;
+    font-size: 9px;
+    line-height: 1.25;
     color: var(--dark-gray);
 }
 
@@ -508,6 +700,12 @@ label {
     min-height: 120px;
 }
 
+.bookmarklet-tool-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
 .bookmarklet-tool-chip {
     border: 1px solid #c6d8ea;
     border-radius: 8px;
@@ -523,6 +721,61 @@ label {
     min-width: 120px;
     margin: 0;
     height: 34px;
+}
+
+.bookmarklet-tool-label {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1f456b;
+}
+
+.bookmarklet-tool-textarea {
+    width: 100%;
+    min-height: 140px;
+    resize: vertical;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid #c9d7e5;
+    border-radius: 10px;
+    background: #fff;
+    font-size: 12px;
+    line-height: 1.5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    color: #1f3349;
+}
+
+.bookmarklet-tool-checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: #36556f;
+}
+
+.bookmarklet-tool-checklist label {
+    margin: 0;
+}
+
+.bookmarklet-tool-status {
+    white-space: pre-wrap;
+    margin-top: 0;
+}
+
+.bookmarklet-tool-progress {
+    width: 100%;
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
+    display: none;
+}
+
+.bookmarklet-tool-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: #16a34a;
+    transition: width 0.2s;
 }
 
 .bookmarklet-tool-btn {

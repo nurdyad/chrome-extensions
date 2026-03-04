@@ -15,6 +15,16 @@
     let metaHideTimer = null;
     let metaReanchorTimer = null;
     const createdIssueByDedupeKey = new Map();
+    let restrictedToolsAccess = {
+        enabled: true,
+        allowed: false,
+        reason: '',
+        features: {
+            dashboard_hover_tools: false,
+            linear_create_issue: false
+        }
+    };
+    let listenersStarted = false;
 
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
@@ -116,6 +126,48 @@
                 reject(error);
             }
         });
+    }
+
+    async function ensureRestrictedToolsAccess(forceRefresh = false) {
+        if (!forceRefresh && restrictedToolsAccess && (restrictedToolsAccess.allowed || restrictedToolsAccess.reason)) {
+            return restrictedToolsAccess;
+        }
+
+        try {
+            const response = await sendRuntimeMessage({
+                action: 'getExtensionAccessState',
+                payload: { forceRefresh }
+            });
+            if (response?.success && response?.access) {
+                restrictedToolsAccess = {
+                    enabled: true,
+                    allowed: Boolean(response.access.allowed),
+                    reason: collapseText(response.access.reason || ''),
+                    features: {
+                        dashboard_hover_tools: Boolean(response.access?.features?.dashboard_hover_tools),
+                        linear_create_issue: Boolean(response.access?.features?.linear_create_issue)
+                    }
+                };
+                return restrictedToolsAccess;
+            }
+        } catch (error) {
+            // Fall through to deny-by-default if access state cannot be resolved.
+        }
+
+        restrictedToolsAccess = {
+            enabled: true,
+            allowed: false,
+            reason: 'MailroomNavigator access could not be verified.',
+            features: {
+                dashboard_hover_tools: false,
+                linear_create_issue: false
+            }
+        };
+        return restrictedToolsAccess;
+    }
+
+    function hasRestrictedFeature(featureKey) {
+        return Boolean(restrictedToolsAccess?.features?.[featureKey]);
     }
 
     function copyToClipboard(text, onSuccess) {
@@ -327,15 +379,28 @@
         createIssueBtn.style.flex = '1 1 auto';
         createIssueBtn.style.justifyContent = 'center';
 
-        primaryRow.append(
-            createNavBtn('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`),
-            createNavBtn('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`),
-            createNavBtn('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`),
-            createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`)
-        );
+        if (hasRestrictedFeature('dashboard_hover_tools')) {
+            primaryRow.append(
+                createNavBtn('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`),
+                createNavBtn('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`),
+                createNavBtn('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`),
+                createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`)
+            );
+        }
 
-        secondaryRow.append(createIssueBtn, copyFilterBtn, copyIdBtn);
-        floatingNavPanel.append(primaryRow, secondaryRow);
+        if (hasRestrictedFeature('linear_create_issue')) {
+            secondaryRow.append(createIssueBtn);
+        }
+        if (hasRestrictedFeature('dashboard_hover_tools')) {
+            secondaryRow.append(copyFilterBtn, copyIdBtn);
+        }
+
+        if (primaryRow.childNodes.length > 0) {
+            floatingNavPanel.append(primaryRow);
+        }
+        if (secondaryRow.childNodes.length > 0) {
+            floatingNavPanel.append(secondaryRow);
+        }
 
         document.body.appendChild(floatingNavPanel);
         return floatingNavPanel;
@@ -668,6 +733,7 @@
     }
 
     function attachMetaListeners() {
+        if (!hasRestrictedFeature('dashboard_hover_tools')) return;
         const rows = document.querySelectorAll('table tbody tr');
         rows.forEach(row => {
             if (row.dataset.blMetaBound === 'true') return;
@@ -736,6 +802,17 @@
     }
 
     const observer = new MutationObserver(() => attachListeners());
-    observer.observe(document.body, { childList: true, subtree: true });
-    attachListeners();
+
+    async function init() {
+        const access = await ensureRestrictedToolsAccess(false);
+        if (!hasRestrictedFeature('dashboard_hover_tools') && !hasRestrictedFeature('linear_create_issue')) {
+            return;
+        }
+        if (listenersStarted) return;
+        listenersStarted = true;
+        observer.observe(document.body, { childList: true, subtree: true });
+        attachListeners();
+    }
+
+    init().catch(() => undefined);
 })();

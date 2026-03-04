@@ -1,12 +1,13 @@
 // Navigator view logic: practice lookup, quick navigation actions, and practice status rendering.
 import { state, setCurrentSelectedOdsCode } from './state.js';
-import { showStatus } from './utils.js';
+import { copyTextToClipboard, showStatus, showToast } from './utils.js';
 
 const ALL_PRACTICES_CODE = 'ALL';
 const ALL_PRACTICES_LABEL = 'All practices';
 const LIVE_COUNT_KEYS = ['preparing', 'edit', 'review', 'coding', 'rejected'];
 const statusFetchInFlightByOds = new Map();
 const lastKnownLiveCountsByOds = new Map();
+let statusDisplayInteractionsBound = false;
 
 // navigator.js - Safety check to prevent duplicate buttons
 export function cleanDuplicateButtons() {
@@ -75,6 +76,7 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
 
   setCurrentSelectedOdsCode(normalized.ods);
   const hasConcretePractice = /^[A-Z]\d{5}$/.test(String(normalized.ods || '').toUpperCase());
+  const isAllPractices = String(normalized.ods || '').toUpperCase() === ALL_PRACTICES_CODE;
 
   if (updateInput) {
       const el = document.getElementById('practiceInput');
@@ -84,7 +86,7 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   hidePracticeSuggestions();
   hideCdbSuggestions();
 
-  setNavigatorButtonsState(hasConcretePractice);
+  setNavigatorButtonsState({ hasConcretePractice, isAllPractices });
   if (triggerStatus) {
     if (hasConcretePractice) {
       displayPracticeStatus({ keepExisting: true, preferCached: true, silent: false });
@@ -102,7 +104,7 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
 // --- 3. Clear Selection ---
 export function clearSelectedPractice() {
   setCurrentSelectedOdsCode(null);
-  setNavigatorButtonsState(false);
+  setNavigatorButtonsState({ hasConcretePractice: false, isAllPractices: false });
   const statusDisplayEl = document.getElementById('statusDisplay');
   if (statusDisplayEl) statusDisplayEl.style.display = 'none';
   hidePracticeSuggestions();
@@ -122,15 +124,25 @@ export function hideCdbSuggestions() {
 }
 
 // --- 4. Enable/Disable Buttons ---
-export function setNavigatorButtonsState(enable) {
-    const ids = [
-        'usersBtn', 'collectionBtn', 'preparingBtn', 'rejectedBtn', 
-        'openEhrSettingsBtn', 'taskRecipientsBtn'
-    ];
-    
-    ids.forEach(id => {
+export function setNavigatorButtonsState(stateOrEnabled) {
+    const normalized = typeof stateOrEnabled === 'object' && stateOrEnabled !== null
+        ? stateOrEnabled
+        : { hasConcretePractice: Boolean(stateOrEnabled), isAllPractices: false };
+
+    const hasConcretePractice = Boolean(normalized.hasConcretePractice);
+    const isAllPractices = Boolean(normalized.isAllPractices);
+    const allowBroadActions = hasConcretePractice || isAllPractices;
+
+    [
+        ['collectionBtn', allowBroadActions],
+        ['preparingBtn', allowBroadActions],
+        ['rejectedBtn', allowBroadActions],
+        ['usersBtn', hasConcretePractice],
+        ['openEhrSettingsBtn', hasConcretePractice],
+        ['taskRecipientsBtn', hasConcretePractice]
+    ].forEach(([id, enabled]) => {
         const el = document.getElementById(id);
-        if (el) el.disabled = !enable;
+        if (el) el.disabled = !enabled;
     });
 }
 
@@ -227,20 +239,151 @@ function buildCachedStatusSnapshot(odsCode) {
     };
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function formatStatusValue(value, fallback = 'N/A') {
+    const text = String(value ?? '').trim();
+    return text || fallback;
+}
+
+function getMetricToneClass(key, rawValue) {
+    const value = parseCountNumber(rawValue);
+    if (value === null) return 'is-neutral';
+    if (key === 'rejected') return value > 0 ? 'is-danger' : 'is-success';
+    if (key === 'preparing') return value > 0 ? 'is-warning' : 'is-neutral';
+    if (key === 'edit' || key === 'review') return value > 0 ? 'is-info' : 'is-neutral';
+    if (key === 'coding') return value > 0 ? 'is-accent' : 'is-neutral';
+    return 'is-neutral';
+}
+
+function getLiveTotal(counts) {
+    let total = 0;
+    let hasAny = false;
+    LIVE_COUNT_KEYS.forEach((key) => {
+        const parsed = parseCountNumber(counts?.[key]);
+        if (parsed === null) return;
+        total += parsed;
+        hasAny = true;
+    });
+    return hasAny ? total : 'N/A';
+}
+
+function getEhrChipClass(ehrType) {
+    const normalized = String(ehrType || '').trim().toLowerCase();
+    if (normalized === 'emis') return 'is-ehr-emis';
+    if (normalized === 'docman_emis') return 'is-ehr-docman-emis';
+    return 'is-neutral';
+}
+
+function getServiceChipClass(serviceLevel) {
+    const normalized = String(serviceLevel || '').trim().toLowerCase();
+    if (normalized === 'full') return 'is-service-full';
+    if (normalized === 'self') return 'is-service-self';
+    if (normalized === 'hybrid') return 'is-service-hybrid';
+    return 'is-neutral';
+}
+
+function ensureStatusDisplayInteractions() {
+    if (statusDisplayInteractionsBound) return;
+    const statusDisplayEl = document.getElementById('statusDisplay');
+    if (!statusDisplayEl) return;
+
+    statusDisplayEl.addEventListener('click', async (event) => {
+        const copyTarget = event.target instanceof Element
+            ? event.target.closest('[data-copy-value]')
+            : null;
+        if (!copyTarget) return;
+
+        const copyValue = String(copyTarget.getAttribute('data-copy-value') || '').trim();
+        const copyLabel = String(copyTarget.getAttribute('data-copy-label') || 'Value').trim();
+        if (!copyValue) return;
+
+        try {
+            const copied = await copyTextToClipboard(copyValue);
+            if (!copied) throw new Error('copy failed');
+            showToast(`${copyLabel} copied.`);
+        } catch (error) {
+            showToast('Copy failed.');
+        }
+    });
+
+    statusDisplayInteractionsBound = true;
+}
+
 function buildPracticeStatusHtml(status, counts) {
+    const displayName = formatStatusValue(
+        status?.name || status?.practiceName || status?.practiceCDB || status?.odsCode,
+        'Practice Status'
+    );
+    const odsCode = formatStatusValue(status?.odsCode);
+    const ehrType = formatStatusValue(status?.ehrType);
+    const serviceLevel = formatStatusValue(status?.serviceLevel);
+    const practiceCdb = formatStatusValue(status?.practiceCDB);
+    const collectionQuota = formatStatusValue(status?.collectionQuota);
+    const collectedToday = formatStatusValue(status?.collectedToday);
+    const totalLive = getLiveTotal(counts);
+
+    const summaryCards = [
+        ['Active', totalLive, 'is-primary'],
+        ['Quota', collectionQuota, ''],
+        ['Collected', collectedToday, '']
+    ].map(([label, value, toneClass]) => `
+        <div class="practice-status-summary-card ${toneClass}">
+            <span class="practice-status-summary-label">${escapeHtml(label)}</span>
+            <span class="practice-status-summary-value"${label === 'Active' ? ' data-live-total' : ''}>${escapeHtml(String(value))}</span>
+        </div>
+    `).join('');
+
+    const metricCards = [
+        ['preparing', 'Preparing'],
+        ['edit', 'Edit'],
+        ['review', 'Review'],
+        ['coding', 'Coding'],
+        ['rejected', 'Rejected']
+    ].map(([key, label]) => `
+        <div class="practice-status-metric ${getMetricToneClass(key, counts?.[key])}" data-live-metric-card="${key}">
+            <span class="practice-status-metric-label">${escapeHtml(label)}</span>
+            <span class="practice-status-metric-value" data-live-count="${key}">${formatCount(counts?.[key])}</span>
+        </div>
+    `).join('');
+
     return `
-        <div class="status-info-box" data-status-ods="${status.odsCode || ''}">
-            <div class="info-row"><strong>ODS Code:</strong> <span>${status.odsCode || 'N/A'}</span></div>
-            <div class="info-row"><strong>EHR Type:</strong> <span>${status.ehrType || 'N/A'}</span></div>
-            <div class="info-row"><strong>Quota:</strong> <span>${status.collectionQuota || 'N/A'}</span></div>
-            <div class="info-row"><strong>Collected:</strong> <span>${status.collectedToday || 'N/A'}</span></div>
-            <div class="info-row"><strong>Service Level:</strong> <span>${status.serviceLevel || 'N/A'}</span></div>
-            <div class="info-row"><strong>CDB:</strong> <span>${status.practiceCDB || 'N/A'}</span></div>
-            <div class="info-row"><strong>Preparing:</strong> <span data-live-count="preparing">${formatCount(counts.preparing)}</span></div>
-            <div class="info-row"><strong>Edit:</strong> <span data-live-count="edit">${formatCount(counts.edit)}</span></div>
-            <div class="info-row"><strong>Review:</strong> <span data-live-count="review">${formatCount(counts.review)}</span></div>
-            <div class="info-row"><strong>Coding:</strong> <span data-live-count="coding">${formatCount(counts.coding)}</span></div>
-            <div class="info-row" style="border-bottom: none;"><strong>Rejected:</strong> <span data-live-count="rejected">${formatCount(counts.rejected)}</span></div>
+        <div class="status-info-box practice-status-card" data-status-ods="${escapeHtml(status.odsCode || '')}">
+            <div class="practice-status-hero">
+                <div class="practice-status-kicker">Practice Status</div>
+                <div class="practice-status-hero-row">
+                    <div class="practice-status-heading">
+                        <div class="practice-status-title">${escapeHtml(displayName)}</div>
+                        <div class="practice-status-subtitle">Live BetterLetter summary</div>
+                    </div>
+                    <div class="practice-status-summary-strip">
+                        ${summaryCards}
+                    </div>
+                </div>
+                <div class="practice-status-chip-row">
+                    <button class="practice-status-chip practice-status-chip-button is-primary" type="button" data-copy-value="${escapeHtml(odsCode)}" data-copy-label="ODS" title="Copy ODS code">
+                        ${escapeHtml(`ODS: ${odsCode}`)}
+                    </button>
+                    <span class="practice-status-chip ${getEhrChipClass(ehrType)}">${escapeHtml(ehrType)}</span>
+                    <span class="practice-status-chip ${getServiceChipClass(serviceLevel)}">${escapeHtml(serviceLevel)}</span>
+                    <button class="practice-status-chip practice-status-chip-button is-cdb" type="button" data-copy-value="${escapeHtml(practiceCdb)}" data-copy-label="CDB" title="Copy CDB">
+                        ${escapeHtml(`CDB: ${practiceCdb}`)}
+                    </button>
+                </div>
+            </div>
+            <div class="practice-status-section-head">
+                <span class="practice-status-section-caption">Live mailroom counts</span>
+            </div>
+            <div class="practice-status-metrics">
+                ${metricCards}
+            </div>
         </div>
     `;
 }
@@ -250,7 +393,13 @@ function applyLiveCountsToStatusDisplay(counts) {
         const el = document.querySelector(`#statusDisplay [data-live-count="${key}"]`);
         if (!el) return;
         el.textContent = formatCount(counts?.[key]);
+        const metricCardEl = document.querySelector(`#statusDisplay [data-live-metric-card="${key}"]`);
+        if (!metricCardEl) return;
+        metricCardEl.classList.remove('is-neutral', 'is-info', 'is-warning', 'is-accent', 'is-success', 'is-danger');
+        metricCardEl.classList.add(getMetricToneClass(key, counts?.[key]));
     });
+    const totalEl = document.querySelector('#statusDisplay [data-live-total]');
+    if (totalEl) totalEl.textContent = String(getLiveTotal(counts));
     const displayedOds = String(
         document.querySelector('#statusDisplay .status-info-box')?.getAttribute('data-status-ods') || ''
     ).toUpperCase();
@@ -290,6 +439,7 @@ export async function displayPracticeStatus(options = {}) {
     const statusDisplayEl = document.getElementById('statusDisplay');
     const selectedOds = String(state.currentSelectedOdsCode || '').toUpperCase();
     if (!statusDisplayEl || !/^[A-Z]\d{5}$/.test(selectedOds)) return;
+    ensureStatusDisplayInteractions();
     const displayedOdsBeforeFetch = String(
         document.querySelector('#statusDisplay .status-info-box')?.getAttribute('data-status-ods') || ''
     ).toUpperCase();

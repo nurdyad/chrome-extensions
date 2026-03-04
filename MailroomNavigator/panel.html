@@ -11,6 +11,12 @@
 </head>
 <body>
   <div class="extension-wrapper"> 
+    <div id="accessControlNotice" class="validation-badge neutral" style="display: none; margin-bottom: 10px; white-space: pre-wrap;"></div>
+    <div id="identityDetectionPanel" class="section-container" style="display: none; margin-bottom: 12px;">
+      <h3>BetterLetter Session Required</h3>
+      <div id="identityDetectionStatus" class="validation-badge neutral" style="white-space: pre-wrap;">Open a signed-in BetterLetter tab so MailroomNavigator can identify your account.</div>
+      <pre id="identityDetectionDiagnostics" class="validation-badge neutral" style="display: none; margin-top: 8px; white-space: pre-wrap; overflow: auto; max-height: 220px; font-size: 11px;"></pre>
+    </div>
     <!-- Top-level view switcher: Navigator / Job Panel / Others -->
     <div class="btn-row global-nav-buttons-row">
       <button id="navigatorGlobalToggleBtn" class="btn active-tab">
@@ -42,140 +48,181 @@
 
     <!-- View 1: Practice Navigator -->
     <div id="practiceNavigatorView" class="view-transition">
-      <h1>
-        Practice Navigator
-        <span id="liveIndicator" class="live-dot" title="Auto-scan active"></span>
-      </h1>
-      
-      <div style="margin-bottom: 15px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-          <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
-          <div style="display: flex; gap: 4px;"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
+      <div id="practiceNavigatorCoreSection">
+        <h1>
+          Practice Navigator
+          <span id="liveIndicator" class="live-dot" title="Auto-scan active"></span>
+        </h1>
+        
+        <div style="margin-bottom: 15px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+            <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
+            <div style="display: flex; gap: 4px;"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                </button>
+                <button id="usersBtn" class="btn btn-sm" disabled title="View Users">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                </button>
+                <button id="practicesBtn" class="btn btn-sm" title="All Practices">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                </button>
+            </div>
+          </div>
+
+          <div class="search-container" style="position: relative;">
+            <div class="input-with-button" style="margin-bottom: 0;">
+              <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
+              <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
+                  <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
+                </svg>
               </button>
-              <button id="usersBtn" class="btn btn-sm" disabled title="View Users">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                  <circle cx="9" cy="7" r="4"></circle>
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-              </svg>
-              </button>
-              <button id="practicesBtn" class="btn btn-sm" title="All Practices">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-              </button>
+            </div>
+            <ul id="suggestions"></ul>
           </div>
         </div>
 
-        <div class="search-container" style="position: relative;">
+        <div class="action-grid nav-action-grid">
+          <button id="collectionBtn" class="btn btn-sm" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+            </svg>
+            Collection
+          </button>
+
+          <button id="preparingBtn" class="btn btn-sm" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            Preparing
+          </button>
+
+          <button id="rejectedBtn" class="btn btn-sm" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+            Rejected
+          </button>
+
+          <button id="openEhrSettingsBtn" class="btn btn-sm" disabled style="background-color: #6c757d;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <line x1="12" y1="8" x2="12" y2="16"></line>
+              <line x1="8" y1="12" x2="16" y2="12"></line>
+            </svg>
+            Settings
+          </button>
+
+          <button id="taskRecipientsBtn" class="btn btn-sm" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="8.5" cy="7" r="4"></circle>
+              <line x1="20" y1="8" x2="20" y2="14"></line>
+              <line x1="23" y1="11" x2="17" y2="11"></line>
+            </svg>
+            Task Recipients
+          </button>
+        </div>
+
+        <div class="section-container jobs-section">
+          <div class="jobs-shell">
+            <section class="job-panel job-panel-unified">
+              <div class="job-panel-head">
+                <label class="job-panel-title" for="botJobsChecklistNav">Bot Jobs</label>
+                <div class="job-panel-actions">
+                  <button id="clearBotJobsNavBtn" class="btn btn-sm btn-ghost job-clear-btn" type="button" title="Clear selected bot jobs" disabled>Clear</button>
+                  <button id="openBotJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn" title="Open selected bot jobs" type="button">Open</button>
+                </div>
+              </div>
+              <div id="botJobsChecklistNav" class="job-checklist">
+                <label class="job-check-item job-check-all"><input type="checkbox" data-select-all="true"><span class="job-check-text">All jobs</span></label>
+                <label class="job-check-item"><input type="checkbox" value="generate_output"><span class="job-check-text">Generate Output</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_validate"><span class="job-check-text">Validate</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_import"><span class="job-check-text">Import</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_file"><span class="job-check-text">File</span></label>
+                <label class="job-check-item" title="Merge Tasks for Same Recipient"><input type="checkbox" value="merge_tasks_for_same_recipient"><span class="job-check-text">Merge Same Recipient</span></label>
+                <label class="job-check-item"><input type="checkbox" value="publish_tasks"><span class="job-check-text">Publish Tasks</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_review"><span class="job-check-text">Review</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_delete_original"><span class="job-check-text">Delete Original</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_upload"><span class="job-check-text">Upload</span></label>
+                <label class="job-check-item"><input type="checkbox" value="docman_rejection"><span class="job-check-text">Rejection</span></label>
+                <label class="job-check-item"><input type="checkbox" value="emis_api_consultation"><span class="job-check-text">EMIS API</span></label>
+              </div>
+            </section>
+          </div>
+          <div class="jobs-helper-text">Single click selects. Double click opens that job directly. Use <strong>All jobs</strong> for the full set.</div>
+        </div>
+
+      <div id="bookmarkletToolsSection" class="section-container bookmarklet-section" style="margin-top: 12px;">
+        <h3>Bookmarklet Tools</h3>
+        <label>Quick tools and active-tab helpers</label>
+        <div class="bookmarklet-launch-grid">
+          <button id="runUuidPickerToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+              <path d="M14 17h7"></path>
+              <path d="M17.5 14v7"></path>
+            </svg>
+            <span>UUID Picker</span>
+          </button>
+          <button id="runWorkflowGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 6h13"></path>
+              <path d="M8 12h13"></path>
+              <path d="M8 18h13"></path>
+              <path d="M3 6h.01"></path>
+              <path d="M3 12h.01"></path>
+              <path d="M3 18h.01"></path>
+            </svg>
+            <span>Custom Workflow</span>
+          </button>
+          <button id="runListDocmanGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M20 8v6"></path>
+              <path d="M23 11h-6"></path>
+            </svg>
+            <span>Docman Groups</span>
+          </button>
+          <button id="runEmailFormatterToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+              <path d="m22 7-8.97 5.7a2 2 0 0 1-2.06 0L2 7"></path>
+            </svg>
+            <span>Email Formatter</span>
+          </button>
+        </div>
+      </div>
+
+        <div class="search-container" style="position: relative; width: 100%; max-width: 100%; margin-top: 12px;">
+          <label for="cdbSearchInput">Search by Practice CDB</label>
           <div class="input-with-button" style="margin-bottom: 0;">
-            <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
-            <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
-                <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
-              </svg>
-            </button>
+            <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
           </div>
-          <ul id="suggestions"></ul>
+          <ul id="cdbSuggestions"></ul> 
         </div>
+        <div id="cdbSearchResult"></div>
+        <div id="status"></div>
+        <div id="statusDisplay"></div>
       </div>
-
-      <div class="action-grid">
-        <button id="collectionBtn" class="btn btn-sm" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-              <line x1="12" y1="22.08" x2="12" y2="12"></line>
-          </svg>
-          Collection
-        </button>
-
-        <button id="preparingBtn" class="btn btn-sm" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline points="12 6 12 12 16 14"></polyline>
-          </svg>
-          Preparing
-        </button>
-
-        <button id="rejectedBtn" class="btn btn-sm" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-          Rejected
-        </button>
-
-        <button id="openEhrSettingsBtn" class="btn btn-sm" disabled style="background-color: #6c757d;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-            <line x1="12" y1="8" x2="12" y2="16"></line>
-            <line x1="8" y1="12" x2="16" y2="12"></line>
-          </svg>
-          Settings
-        </button>
-
-        <button id="taskRecipientsBtn" class="btn btn-sm" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="8.5" cy="7" r="4"></circle>
-            <line x1="20" y1="8" x2="20" y2="14"></line>
-            <line x1="23" y1="11" x2="17" y2="11"></line>
-          </svg>
-          Task Recipients
-        </button>
-      </div>
-
-      <div class="section-container">
-        <div class="jobs-row">
-          <div class="job-col">
-            <label for="docmanJobChecklistNav">Docman Jobs</label>
-            <div id="docmanJobChecklistNav" class="job-checklist">
-              <label class="job-check-item"><input type="checkbox" value="generate_output"> Generate Output</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_validate"> Docman Validate</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_import"> Docman Import</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_file"> Docman File</label>
-              <label class="job-check-item"><input type="checkbox" value="merge_tasks_for_same_recipient"> Merge Tasks for Same Recipient</label>
-              <label class="job-check-item"><input type="checkbox" value="publish_tasks"> Publish Tasks</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_review"> Docman Review</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_delete_original"> Docman Delete Original</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_upload"> Docman Upload</label>
-              <label class="job-check-item"><input type="checkbox" value="docman_rejection"> Docman Rejection</label>
-            </div>
-            <button id="openDocmanJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn">Open Selected</button>
-          </div>
-
-          <div class="job-col">
-            <label for="emisJobChecklistNav">EMIS Jobs</label>
-            <div id="emisJobChecklistNav" class="job-checklist">
-              <label class="job-check-item"><input type="checkbox" value="emis_api_consultation"> EMIS API Consultation</label>
-              <label class="job-check-item"><input type="checkbox" value="emis_unmatch"> EMIS Unmatch</label>
-              <label class="job-check-item"><input type="checkbox" value="emis_prepare"> EMIS Prepare</label>
-              <label class="job-check-item"><input type="checkbox" value="emis_delete_originals"> EMIS Delete Originals</label>
-              <label class="job-check-item"><input type="checkbox" value="emis_rejection"> EMIS Rejection</label>
-            </div>
-            <button id="openEmisJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn">Open Selected</button>
-          </div>
-        </div>
-        <div class="jobs-helper-text">Select one or more jobs with checkboxes.</div>
-      </div>
-      
-      <div class="search-container" style="position: relative; width: 100%; max-width: 100%;">
-        <label for="cdbSearchInput">Search by Practice CDB</label>
-        <div class="input-with-button" style="margin-bottom: 0;">
-          <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
-        </div>
-        <ul id="cdbSuggestions"></ul> 
-      </div>
-      <div id="cdbSearchResult"></div>
-      <div id="status"></div>
-      <div id="statusDisplay"></div>
     </div>
 
     <!-- View 2: Job Panel -->
@@ -269,133 +316,112 @@
 
     </div>
 
-    <!-- View 3: Others (Email formatter, workflows, Linear issue, bookmarklet tools) -->
+    <!-- View 3: Others (Linear issue + access control) -->
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
 
-      <div class="section-container">
-        <h3>Email Formatter</h3>
-        <textarea id="inputEmailFormatter" placeholder="Paste email addresses here..."></textarea>
-        <div class="button-grid" style="margin-bottom: 12px;">
-          <button id="convertEmailBtn" class="btn btn-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-            </svg>
-            Convert
-          </button>
-          <button id="nameOnlyBtn" class="btn btn-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>
-            </svg>
-            Name
-          </button>
-        </div>
-        <textarea id="outputEmailFormatter" readonly placeholder="Comma-separated output..."></textarea>
-        <button id="copyEmailBtn" class="btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-          Copy
-        </button>
-      </div>
-
-      <div class="section-container" style="margin-top: 12px;">
-        <h3>Custom Workflow Groups</h3>
-        <label for="workflowNamesInput">Paste workflow names (one per line, or paste Airtable rows)</label>
-        <textarea id="workflowNamesInput" class="bulk-input" placeholder="e.g.
-John Smith
-Mike Drinkwater"></textarea>
-        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
-          <label style="margin: 0;"><input type="checkbox" id="workflowSkipDuplicates" checked> Skip existing workflow names</label>
-          <label style="margin: 0;"><input type="checkbox" id="workflowTitleCase"> Convert names to Title Case</label>
-        </div>
-        <div id="workflowStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Ready.</div>
-        <div id="workflowProgressTrack" style="width:100%; height:8px; background:#e5e7eb; border-radius:6px; overflow:hidden; margin-top:8px; display:none;">
-          <div id="workflowProgressBar" style="height:100%; width:0%; background:#16a34a; transition: width 0.2s;"></div>
-        </div>
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="runWorkflowBulkBtn" class="btn btn-sm">Run Bulk Create</button>
-          <button id="testWorkflowParseBtn" class="btn btn-sm">Test Parse</button>
-        </div>
-      </div>
-
-      <div class="section-container" style="margin-top: 12px;">
+      <div id="linearIssueSection" class="section-container" style="margin-top: 12px;">
         <h3>Linear Issue</h3>
 
-        <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
-        <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
+        <div id="linearCreateIssueControls">
+          <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
+          <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
 
-        <div class="linear-slack-grid">
-          <div>
-            <label for="linearIssuePriorityInput">Priority</label>
-            <select id="linearIssuePriorityInput">
-              <option value="0">No priority</option>
-              <option value="1">Urgent</option>
-              <option value="2">High</option>
-              <option value="3">Normal</option>
-              <option value="4">Low</option>
-            </select>
+          <div class="linear-slack-grid">
+            <div>
+              <label for="linearIssuePriorityInput">Priority</label>
+              <select id="linearIssuePriorityInput">
+                <option value="0">No priority</option>
+                <option value="1">Urgent</option>
+                <option value="2">High</option>
+                <option value="3">Normal</option>
+                <option value="4">Low</option>
+              </select>
+            </div>
+            <div style="display: flex; align-items: end;">
+              <button id="generateLinearIssueDraftBtn" class="btn btn-sm btn-ghost" style="width: 100%;">Generate Details</button>
+            </div>
           </div>
-          <div style="display: flex; align-items: end;">
-            <button id="generateLinearIssueDraftBtn" class="btn btn-sm btn-ghost" style="width: 100%;">Generate Details</button>
-          </div>
+
+          <label for="linearIssueTitleInput">Issue Title</label>
+          <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Generated from Document ID">
+
+          <label for="linearIssueDescriptionInput">Issue Description</label>
+          <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Generated details will appear here."></textarea>
         </div>
 
-        <label for="linearIssueTitleInput">Issue Title</label>
-        <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Generated from Document ID">
-
-        <label for="linearIssueDescriptionInput">Issue Description</label>
-        <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Generated details will appear here."></textarea>
-
-        <div class="linear-slack-grid" style="margin-top: 8px;">
-          <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
-            <input id="linearSlackNotifyEnabledInput" type="checkbox">
-            Notify Slack
-          </label>
-          <button id="syncLinearSlackWorkspaceBtn" class="btn btn-sm btn-ghost" type="button">Sync Slack</button>
-        </div>
-        <div class="linear-slack-grid" style="margin-top: 6px;">
-          <div>
-            <label for="linearSlackTargetTypeInput">Slack Target Type</label>
-            <select id="linearSlackTargetTypeInput">
-              <option value="channel">Channel</option>
-              <option value="user">User (DM)</option>
-            </select>
+        <div id="linearSlackControls">
+          <div class="linear-slack-grid" style="margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+              <input id="linearSlackNotifyEnabledInput" type="checkbox">
+              Notify Slack
+            </label>
+            <button id="syncLinearSlackWorkspaceBtn" class="btn btn-sm btn-ghost" type="button">Sync Slack</button>
           </div>
-          <div>
-            <label for="linearSlackTargetInput">Slack Channel/User ID</label>
-            <input id="linearSlackTargetInput" type="text" autocomplete="off" list="linearSlackTargetSuggestions" placeholder="e.g. C0123ABCD or U0123ABCD">
-            <datalist id="linearSlackTargetSuggestions"></datalist>
+          <div class="linear-slack-grid" style="margin-top: 6px;">
+            <div>
+              <label for="linearSlackTargetTypeInput">Slack Target Type</label>
+              <select id="linearSlackTargetTypeInput">
+                <option value="channel">Channel</option>
+                <option value="user">User (DM)</option>
+              </select>
+            </div>
+            <div>
+              <label for="linearSlackTargetInput">Slack Channel/User ID</label>
+              <input id="linearSlackTargetInput" type="text" autocomplete="off" list="linearSlackTargetSuggestions" placeholder="e.g. C0123ABCD or U0123ABCD">
+              <datalist id="linearSlackTargetSuggestions"></datalist>
+            </div>
           </div>
+          <div id="linearSlackTargetHint" class="validation-badge neutral">Slack sync disabled.</div>
         </div>
-        <div id="linearSlackTargetHint" class="validation-badge neutral">Slack sync disabled.</div>
 
         <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Paste a Document ID and click Generate Details.</div>
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <div id="linearActionButtonsRow" class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create Linear Issue</button>
           <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="background: #0f766e;">Trigger Linear</button>
         </div>
-        <div style="margin-top: 8px;">
+        <div id="reconcileLinearControls" style="margin-top: 8px;">
           <button id="reconcileLinearBotIssuesBtn" class="btn btn-sm" style="width: 100%; background: #1d4ed8;">Reconcile Linear</button>
         </div>
-        <label style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
+        <label id="triggerLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
           <input id="triggerLinearDryRunInput" type="checkbox">
           Trigger Linear in Dry Run mode (no new issues created)
         </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px;">
+        <label id="reconcileLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px;">
           <input id="reconcileLinearDryRunInput" type="checkbox">
           Reconcile Linear in Dry Run mode (preview done updates)
         </label>
         <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger idle.</div>
       </div>
 
-      <div class="section-container">
-        <h3>Bookmarklet Tools</h3>
-        <label>Run on the active BetterLetter tab</label>
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr; gap: 8px;">
-          <button id="runUuidPickerToolBtn" class="btn btn-sm">UUID Picker</button>
-          <button id="runListDocmanGroupsToolBtn" class="btn btn-sm">Get Docman Group Names</button>
+      <div id="extensionUserManagementSection" class="section-container" style="margin-top: 12px; display: none;">
+        <h3>Access Control</h3>
+        <div id="extensionUserManagementSummary" class="validation-badge neutral" style="white-space: pre-wrap;">Owner only.</div>
+
+        <label for="managedUserEmailInput">BetterLetter User Email</label>
+        <input id="managedUserEmailInput" type="email" autocomplete="off" placeholder="e.g. teammate@betterletter.ai">
+
+        <div class="linear-slack-grid" style="margin-top: 8px;">
+          <div>
+            <label for="managedUserRoleInput">Role</label>
+            <select id="managedUserRoleInput">
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: end;">
+            <button id="clearManagedUserFormBtn" class="btn btn-sm btn-ghost" type="button" style="width: 100%;">Clear Form</button>
+          </div>
         </div>
+
+        <label style="margin-top: 10px;">Enabled Features</label>
+        <div id="managedUserFeaturesGrid" class="job-checklist" style="max-height: none;"></div>
+
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="saveManagedUserBtn" class="btn btn-sm" type="button">Save User</button>
+          <button id="refreshManagedUsersBtn" class="btn btn-sm btn-ghost" type="button">Refresh List</button>
+        </div>
+
+        <div id="extensionManagedUsersList" class="recent-id-meta-list" style="margin-top: 12px;"></div>
       </div>
     </div>
 

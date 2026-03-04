@@ -67,6 +67,16 @@ const SLACK_API_BASE_URL = "https://slack.com/api";
 const SLACK_SYNC_MEMBER_ONLY = String(process.env.SLACK_SYNC_MEMBER_ONLY || "1")
   .trim()
   .toLowerCase() !== "0";
+const ACCESS_CONTROL_OWNER_EMAIL = normalizeEmail(
+  process.env.MAILROOMNAV_OWNER_EMAIL
+    || "nur.siddique@dyad.net",
+);
+const ACCESS_CONTROL_ISSUE_TITLE = sanitizeSingleLine(
+  process.env.MAILROOMNAV_ACCESS_CONTROL_ISSUE_TITLE
+    || "[MailroomNavigator] Access Control",
+  180,
+);
+const ACCESS_CONTROL_CACHE_TTL_MS = 30 * 1000;
 const LOG_DIR = String(process.env.LINEAR_TRIGGER_LOG_DIR || join(REPO_ROOT, "logs"));
 const STATE_DIR = String(process.env.LINEAR_TRIGGER_STATE_DIR || join(REPO_ROOT, ".automation-state"));
 const SERVER_LOG_PATH = join(LOG_DIR, "linear-trigger-server.log");
@@ -85,6 +95,11 @@ const allowNoOrigin = String(process.env.LINEAR_TRIGGER_ALLOW_NO_ORIGIN || "1")
 let activeRun = null;
 let lastRun = null;
 let resolvedLinearTeam = null;
+let accessControlCache = {
+  loadedAt: 0,
+  issue: null,
+  policy: null,
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -108,6 +123,215 @@ function sanitizeStringList(values, maxItems = 8, maxLength = 220) {
     .map((value) => sanitizeSingleLine(value, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+function normalizeEmail(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalized)) return "";
+  return normalized;
+}
+
+const ACCESS_CONTROL_MARKER_START = "<!-- MAILROOMNAV_ACCESS_CONTROL_START -->";
+const ACCESS_CONTROL_MARKER_END = "<!-- MAILROOMNAV_ACCESS_CONTROL_END -->";
+const ACCESS_CONTROL_FEATURE_CATALOG = [
+  { key: "practice_navigator", label: "Navigator", description: "Practice Navigator, practice links, live counts, and related admin pages." },
+  { key: "job_panel", label: "Job Panel", description: "Quick document search, job status checks, and bulk job/admin links." },
+  { key: "email_formatter", label: "Email Formatter", description: "Use the Email Formatter tool from Bookmarklet Tools." },
+  { key: "linear_create_issue", label: "Create Linear Issue", description: "Manual Linear issue creation from the panel or document hover actions." },
+  { key: "linear_trigger", label: "Trigger Linear", description: "Run automated bot-jobs issue creation." },
+  { key: "linear_reconcile", label: "Reconcile Linear", description: "Mark resolved bot-job issues done in Linear." },
+  { key: "slack_sync", label: "Slack Sync", description: "Sync Slack workspace targets and send Slack notifications from the Linear panel." },
+  { key: "workflow_groups", label: "Workflow Groups", description: "Use the Custom Workflow Groups tool from Bookmarklet Tools." },
+  { key: "bookmarklet_tools", label: "Bookmarklet Tools", description: "Use UUID picker, Docman group discovery, and related modal tools." },
+  { key: "dashboard_hover_tools", label: "Dashboard Hover Tools", description: "Use Jobs/Admin/Issue hover actions on BetterLetter dashboards." },
+];
+const ACCESS_CONTROL_FEATURE_KEYS = ACCESS_CONTROL_FEATURE_CATALOG.map((feature) => feature.key);
+const ACCESS_CONTROL_FEATURE_KEY_SET = new Set(ACCESS_CONTROL_FEATURE_KEYS);
+
+function normalizeAccessRole(role) {
+  const normalized = sanitizeSingleLine(role, 40).toLowerCase();
+  if (normalized === "owner") return "owner";
+  if (normalized === "admin") return "admin";
+  return "user";
+}
+
+function normalizeAccessFeatures(rawFeatures = []) {
+  if (!Array.isArray(rawFeatures)) return [];
+  const unique = new Set();
+  rawFeatures.forEach((featureKey) => {
+    const normalized = sanitizeSingleLine(featureKey, 64);
+    if (!ACCESS_CONTROL_FEATURE_KEY_SET.has(normalized)) return;
+    unique.add(normalized);
+  });
+  return [...unique];
+}
+
+function buildAccessFeatureMap(rawFeatures = [], forceAll = false) {
+  const granted = forceAll ? ACCESS_CONTROL_FEATURE_KEYS : normalizeAccessFeatures(rawFeatures);
+  const grantedSet = new Set(granted);
+  return Object.fromEntries(ACCESS_CONTROL_FEATURE_KEYS.map((featureKey) => [featureKey, grantedSet.has(featureKey)]));
+}
+
+function sanitizeAccessUserRecord(rawUser = null, fallbackEmail = "") {
+  const email = normalizeEmail(rawUser?.email || fallbackEmail);
+  if (!email) return null;
+  const role = normalizeAccessRole(rawUser?.role);
+  const features = role === "owner"
+    ? [...ACCESS_CONTROL_FEATURE_KEYS]
+    : normalizeAccessFeatures(rawUser?.features);
+  return {
+    email,
+    role,
+    features,
+    createdAt: sanitizeSingleLine(rawUser?.createdAt, 80),
+    updatedAt: sanitizeSingleLine(rawUser?.updatedAt, 80),
+    createdBy: normalizeEmail(rawUser?.createdBy),
+    updatedBy: normalizeEmail(rawUser?.updatedBy),
+  };
+}
+
+function sanitizeAccessControlPolicy(rawPolicy = null) {
+  const users = {};
+  const sourceUsers = rawPolicy?.users && typeof rawPolicy.users === "object" ? rawPolicy.users : {};
+  Object.entries(sourceUsers).forEach(([emailKey, rawUser]) => {
+    const sanitizedUser = sanitizeAccessUserRecord(rawUser, emailKey);
+    if (!sanitizedUser || sanitizedUser.role === "owner") return;
+    users[sanitizedUser.email] = sanitizedUser;
+  });
+  return {
+    version: 1,
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    initializedAt: sanitizeSingleLine(rawPolicy?.initializedAt, 80),
+    updatedAt: sanitizeSingleLine(rawPolicy?.updatedAt, 80),
+    users,
+  };
+}
+
+function buildDefaultAccessPolicy() {
+  const now = nowIso();
+  return sanitizeAccessControlPolicy({
+    initializedAt: now,
+    updatedAt: now,
+    users: {},
+  });
+}
+
+function serializeAccessControlPolicy(policy) {
+  const normalizedPolicy = sanitizeAccessControlPolicy(policy);
+  return JSON.stringify(normalizedPolicy, null, 2);
+}
+
+function parseAccessControlPolicyFromDescription(description = "") {
+  const source = String(description || "");
+  const startIndex = source.indexOf(ACCESS_CONTROL_MARKER_START);
+  const endIndex = source.indexOf(ACCESS_CONTROL_MARKER_END);
+  if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) return null;
+  const jsonBlock = source.slice(startIndex + ACCESS_CONTROL_MARKER_START.length, endIndex).trim();
+  if (!jsonBlock) return null;
+  try {
+    return sanitizeAccessControlPolicy(JSON.parse(jsonBlock));
+  } catch {
+    return null;
+  }
+}
+
+function buildAccessControlIssueDescription(policy) {
+  return [
+    "# MailroomNavigator access control",
+    "",
+    `Owner: ${ACCESS_CONTROL_OWNER_EMAIL}`,
+    "",
+    "This issue stores the centrally synced access-control policy used by the MailroomNavigator extension.",
+    "",
+    ACCESS_CONTROL_MARKER_START,
+    serializeAccessControlPolicy(policy),
+    ACCESS_CONTROL_MARKER_END,
+  ].join("\n");
+}
+
+function sanitizeAccessControlIssue(rawIssue = null) {
+  if (!rawIssue || typeof rawIssue !== "object") return null;
+  const id = sanitizeSingleLine(rawIssue.id, 64);
+  if (!id) return null;
+  return {
+    id,
+    identifier: sanitizeSingleLine(rawIssue.identifier, 64),
+    title: sanitizeSingleLine(rawIssue.title, 180),
+    description: sanitizeMultiline(rawIssue.description, 40000),
+    url: sanitizeSingleLine(rawIssue.url, 1000),
+  };
+}
+
+function listManagedAccessUsers(policy) {
+  return Object.values(policy?.users || {})
+    .map((user) => sanitizeAccessUserRecord(user))
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
+      return a.email.localeCompare(b.email);
+    });
+}
+
+function buildResolvedAccess(email, policy) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPolicy = sanitizeAccessControlPolicy(policy);
+
+  if (!normalizedEmail) {
+    return {
+      enabled: true,
+      initialized: Boolean(normalizedPolicy.initializedAt),
+      allowed: false,
+      isOwner: false,
+      canManageUsers: false,
+      role: "",
+      email: "",
+      reason: "Could not detect the current BetterLetter user email from your BetterLetter session.",
+      features: buildAccessFeatureMap([], false),
+    };
+  }
+
+  if (normalizedEmail === ACCESS_CONTROL_OWNER_EMAIL) {
+    return {
+      enabled: true,
+      initialized: true,
+      allowed: true,
+      isOwner: true,
+      canManageUsers: true,
+      role: "owner",
+      email: normalizedEmail,
+      reason: "",
+      features: buildAccessFeatureMap([], true),
+    };
+  }
+
+  const managedUser = sanitizeAccessUserRecord(normalizedPolicy.users?.[normalizedEmail], normalizedEmail);
+  if (!managedUser) {
+    return {
+      enabled: true,
+      initialized: true,
+      allowed: false,
+      isOwner: false,
+      canManageUsers: false,
+      role: "",
+      email: normalizedEmail,
+      reason: "You do not have MailroomNavigator access. Ask Nur to add your BetterLetter email.",
+      features: buildAccessFeatureMap([], false),
+    };
+  }
+
+  const features = buildAccessFeatureMap(managedUser.features, false);
+  const hasAnyFeature = Object.values(features).some(Boolean);
+  return {
+    enabled: true,
+    initialized: true,
+    allowed: hasAnyFeature,
+    isOwner: false,
+    canManageUsers: false,
+    role: managedUser.role,
+    email: normalizedEmail,
+    reason: hasAnyFeature ? "" : "Your account exists but no features are enabled yet.",
+    features,
+  };
 }
 
 function clampLinearPriority(value) {
@@ -362,6 +586,275 @@ async function createLinearIssue(payload) {
       url: sanitizeSingleLine(issue.url, 1200),
       priority: clampLinearPriority(issue.priority),
     },
+  };
+}
+
+async function findAccessControlIssue() {
+  const now = Date.now();
+  if (
+    accessControlCache?.issue?.id
+    && accessControlCache?.policy
+    && now - Number(accessControlCache.loadedAt || 0) < ACCESS_CONTROL_CACHE_TTL_MS
+  ) {
+    return {
+      issue: sanitizeAccessControlIssue(accessControlCache.issue),
+      policy: sanitizeAccessControlPolicy(accessControlCache.policy),
+    };
+  }
+
+  const team = await resolveLinearTeam();
+  const query = `
+    query FindAccessControlIssue($teamId: String!, $first: Int!, $after: String) {
+      team(id: $teamId) {
+        issues(first: $first, after: $after) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            url
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  let after = null;
+  let foundIssue = null;
+
+  for (let page = 0; page < 20; page += 1) {
+    const data = await runLinearGraphqlRequest(query, {
+      teamId: team.id,
+      first: 100,
+      after,
+    });
+    const issuesRoot = data?.team?.issues;
+    const nodes = Array.isArray(issuesRoot?.nodes)
+      ? issuesRoot.nodes
+      : Array.isArray(issuesRoot?.edges)
+        ? issuesRoot.edges.map((edge) => edge?.node).filter(Boolean)
+        : [];
+    foundIssue = nodes
+      .map((issue) => sanitizeAccessControlIssue(issue))
+      .find((issue) => issue?.title === ACCESS_CONTROL_ISSUE_TITLE) || null;
+    if (foundIssue) break;
+    const pageInfo = issuesRoot?.pageInfo || {};
+    if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 260)) break;
+    after = sanitizeSingleLine(pageInfo.endCursor, 260);
+  }
+
+  const policy = foundIssue?.description
+    ? parseAccessControlPolicyFromDescription(foundIssue.description) || buildDefaultAccessPolicy()
+    : buildDefaultAccessPolicy();
+
+  accessControlCache = {
+    loadedAt: now,
+    issue: foundIssue,
+    policy,
+  };
+
+  return {
+    issue: foundIssue,
+    policy,
+  };
+}
+
+async function createAccessControlIssue() {
+  const team = await resolveLinearTeam();
+  const policy = buildDefaultAccessPolicy();
+  const mutation = `
+    mutation CreateAccessControlIssue($input: IssueCreateInput!) {
+      issueCreate(input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          description
+          url
+        }
+      }
+    }
+  `;
+  const input = {
+    teamId: team.id,
+    title: ACCESS_CONTROL_ISSUE_TITLE,
+    description: buildAccessControlIssueDescription(policy),
+  };
+  const data = await runLinearGraphqlRequest(mutation, { input });
+  const issue = sanitizeAccessControlIssue(data?.issueCreate?.issue);
+  if (!data?.issueCreate?.success || !issue?.id) {
+    throw new Error("Could not create the MailroomNavigator access-control issue in Linear.");
+  }
+  accessControlCache = {
+    loadedAt: Date.now(),
+    issue,
+    policy,
+  };
+  return { issue, policy };
+}
+
+async function ensureAccessControlStore() {
+  const existing = await findAccessControlIssue();
+  if (existing?.issue?.id) return existing;
+  return createAccessControlIssue();
+}
+
+async function saveAccessControlPolicy(issueId, policy) {
+  const normalizedPolicy = sanitizeAccessControlPolicy(policy);
+  const mutation = `
+    mutation UpdateAccessControlIssue($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          description
+          url
+        }
+      }
+    }
+  `;
+  const data = await runLinearGraphqlRequest(mutation, {
+    id: sanitizeSingleLine(issueId, 64),
+    input: {
+      description: buildAccessControlIssueDescription(normalizedPolicy),
+    },
+  });
+  const issue = sanitizeAccessControlIssue(data?.issueUpdate?.issue);
+  if (!data?.issueUpdate?.success || !issue?.id) {
+    throw new Error("Could not update the MailroomNavigator access-control issue.");
+  }
+  accessControlCache = {
+    loadedAt: Date.now(),
+    issue,
+    policy: normalizedPolicy,
+  };
+  return { issue, policy: normalizedPolicy };
+}
+
+async function resolveAccessControl(email) {
+  if (!ACCESS_CONTROL_OWNER_EMAIL) {
+    throw new Error("MAILROOMNAV owner email is not configured.");
+  }
+  const normalizedEmail = normalizeEmail(email);
+
+  if (normalizedEmail === ACCESS_CONTROL_OWNER_EMAIL) {
+    const store = await ensureAccessControlStore();
+    return {
+      access: {
+        ...buildResolvedAccess(normalizedEmail, store.policy),
+        featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+        ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+      },
+      issue: store.issue,
+      policy: store.policy,
+    };
+  }
+
+  const store = await findAccessControlIssue();
+  return {
+    access: {
+      ...buildResolvedAccess(normalizedEmail, store.policy),
+      featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+      ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    },
+    issue: store.issue,
+    policy: store.policy,
+  };
+}
+
+async function getAccessControlManagement(actorEmail) {
+  const resolved = await resolveAccessControl(actorEmail);
+  if (!resolved?.access?.isOwner) {
+    throw new Error(resolved?.access?.reason || "Only the MailroomNavigator owner can manage access.");
+  }
+  const ensuredStore = resolved.issue?.id ? resolved : await resolveAccessControl(ACCESS_CONTROL_OWNER_EMAIL);
+  return {
+    access: ensuredStore.access,
+    management: {
+      ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+      users: listManagedAccessUsers(ensuredStore.policy),
+      featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+    },
+    issue: ensuredStore.issue,
+    policy: ensuredStore.policy,
+  };
+}
+
+async function saveAccessControlUser({ actorEmail, email, role, features }) {
+  const actor = normalizeEmail(actorEmail);
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) {
+    throw new Error("A valid BetterLetter email is required.");
+  }
+  if (targetEmail === ACCESS_CONTROL_OWNER_EMAIL) {
+    throw new Error("The owner account is fixed and cannot be edited here.");
+  }
+
+  const { issue, policy } = await getAccessControlManagement(actor);
+  const now = nowIso();
+  const existingUser = sanitizeAccessUserRecord(policy.users?.[targetEmail], targetEmail);
+  const nextUser = sanitizeAccessUserRecord({
+    email: targetEmail,
+    role: normalizeAccessRole(role),
+    features: normalizeAccessFeatures(features),
+    createdAt: existingUser?.createdAt || now,
+    updatedAt: now,
+    createdBy: existingUser?.createdBy || actor,
+    updatedBy: actor,
+  }, targetEmail);
+
+  const nextPolicy = sanitizeAccessControlPolicy({
+    ...policy,
+    initializedAt: policy.initializedAt || now,
+    updatedAt: now,
+    users: {
+      ...policy.users,
+      [targetEmail]: nextUser,
+    },
+  });
+  const saved = await saveAccessControlPolicy(issue.id, nextPolicy);
+  return {
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    users: listManagedAccessUsers(saved.policy),
+    featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+  };
+}
+
+async function deleteAccessControlUser({ actorEmail, email }) {
+  const actor = normalizeEmail(actorEmail);
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) {
+    throw new Error("A valid BetterLetter email is required.");
+  }
+  if (targetEmail === ACCESS_CONTROL_OWNER_EMAIL) {
+    throw new Error("The owner account cannot be deleted.");
+  }
+
+  const { issue, policy } = await getAccessControlManagement(actor);
+  const existingUser = sanitizeAccessUserRecord(policy.users?.[targetEmail], targetEmail);
+  if (!existingUser) {
+    throw new Error("That user does not exist.");
+  }
+
+  const nextUsers = { ...policy.users };
+  delete nextUsers[targetEmail];
+  const nextPolicy = sanitizeAccessControlPolicy({
+    ...policy,
+    updatedAt: nowIso(),
+    users: nextUsers,
+  });
+  const saved = await saveAccessControlPolicy(issue.id, nextPolicy);
+  return {
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    users: listManagedAccessUsers(saved.policy),
+    featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
   };
 }
 
@@ -1030,8 +1523,91 @@ const server = createServer(async (req, res) => {
         slack: {
           configured: Boolean(SLACK_BOT_TOKEN),
         },
+        access: {
+          enabled: Boolean(ACCESS_CONTROL_OWNER_EMAIL),
+          ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+        },
         serverTime: nowIso(),
       });
+      return;
+    }
+
+    if (method === "POST" && path === "/access/resolve") {
+      try {
+        const body = await parseJsonBody(req);
+        const email = sanitizeSingleLine(body?.email, 240);
+        const resolved = await resolveAccessControl(email);
+        sendJson(res, 200, origin, {
+          ok: true,
+          access: resolved.access,
+        });
+      } catch (error) {
+        sendJson(res, 500, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not resolve MailroomNavigator access.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/management") {
+      try {
+        const body = await parseJsonBody(req);
+        const actorEmail = sanitizeSingleLine(body?.actorEmail, 240);
+        const resolved = await getAccessControlManagement(actorEmail);
+        sendJson(res, 200, origin, {
+          ok: true,
+          access: resolved.access,
+          management: resolved.management,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not load MailroomNavigator user management.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/save-user") {
+      try {
+        const body = await parseJsonBody(req);
+        const management = await saveAccessControlUser({
+          actorEmail: sanitizeSingleLine(body?.actorEmail, 240),
+          email: sanitizeSingleLine(body?.email, 240),
+          role: sanitizeSingleLine(body?.role, 40),
+          features: Array.isArray(body?.features) ? body.features : [],
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          management,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not save MailroomNavigator user.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/delete-user") {
+      try {
+        const body = await parseJsonBody(req);
+        const management = await deleteAccessControlUser({
+          actorEmail: sanitizeSingleLine(body?.actorEmail, 240),
+          email: sanitizeSingleLine(body?.email, 240),
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          management,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not delete MailroomNavigator user.",
+        });
+      }
       return;
     }
 

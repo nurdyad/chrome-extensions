@@ -1,13 +1,106 @@
 // Main panel controller for all three views (Navigator, Job Panel, Others).
 // This file wires DOM events to feature modules and background actions.
 import { state, setCachedPractices } from './state.js';
-import { showToast, showStatus, openTabWithTimeout } from './utils.js';
+import { showToast, showStatus, openTabWithTimeout, extractNameFromEmail } from './utils.js';
 import * as Navigator from './navigator.js';
 import * as Jobs from './jobs.js';
-import * as Email from './email.js';
 
 let practiceCacheLoadPromise = null;
 let isCdbHydrationTriggered = false;
+let extensionAccessState = null;
+let extensionUserManagementState = { users: [], featureCatalog: [] };
+let accessNoticeHideTimer = null;
+const PANEL_HOST_TAB_ID = (() => {
+    try {
+        const rawValue = new URLSearchParams(window.location.search).get('hostTabId');
+        const parsed = Number.parseInt(String(rawValue || ''), 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    } catch (error) {
+        return null;
+    }
+})();
+
+const EXTENSION_FEATURE_CATALOG = [
+    { key: 'practice_navigator', label: 'Navigator', description: 'Practice Navigator, practice links, live counts, and related admin pages.' },
+    { key: 'job_panel', label: 'Job Panel', description: 'Quick document search, job status checks, and bulk job/admin links.' },
+    { key: 'email_formatter', label: 'Email Formatter', description: 'Use the Email Formatter tool from Bookmarklet Tools.' },
+    { key: 'linear_create_issue', label: 'Create Linear Issue', description: 'Manual Linear issue creation from the panel or document hover actions.' },
+    { key: 'linear_trigger', label: 'Trigger Linear', description: 'Run automated bot-jobs issue creation.' },
+    { key: 'linear_reconcile', label: 'Reconcile Linear', description: 'Mark resolved bot-job issues done in Linear.' },
+    { key: 'slack_sync', label: 'Slack Sync', description: 'Sync Slack workspace targets and send Slack notifications from the Linear panel.' },
+    { key: 'workflow_groups', label: 'Workflow Groups', description: 'Use the Custom Workflow Groups tool from Bookmarklet Tools.' },
+    { key: 'bookmarklet_tools', label: 'Bookmarklet Tools', description: 'Use UUID picker, Docman group discovery, and related modal tools.' },
+    { key: 'dashboard_hover_tools', label: 'Dashboard Hover Tools', description: 'Use Jobs/Admin/Issue hover actions on BetterLetter dashboards.' }
+];
+const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => feature.key);
+const NAVIGATOR_VIEW_FEATURE_KEYS = [
+    'practice_navigator',
+    'email_formatter',
+    'workflow_groups',
+    'bookmarklet_tools'
+];
+const LINEAR_VIEW_FEATURE_KEYS = [
+    'linear_create_issue',
+    'linear_trigger',
+    'linear_reconcile',
+    'slack_sync'
+];
+const VIEW_FEATURE_REQUIREMENTS = {
+    practiceNavigatorView: NAVIGATOR_VIEW_FEATURE_KEYS,
+    jobManagerView: ['job_panel'],
+    emailFormatterView: LINEAR_VIEW_FEATURE_KEYS
+};
+
+function buildDefaultFeatureAccess() {
+    return Object.fromEntries(EXTENSION_FEATURE_KEYS.map((featureKey) => [featureKey, false]));
+}
+
+function normalizePanelAccessState(rawAccess = null) {
+    const featureCatalog = Array.isArray(rawAccess?.featureCatalog) && rawAccess.featureCatalog.length > 0
+        ? rawAccess.featureCatalog
+        : EXTENSION_FEATURE_CATALOG;
+    const features = buildDefaultFeatureAccess();
+    EXTENSION_FEATURE_KEYS.forEach((featureKey) => {
+        features[featureKey] = Boolean(rawAccess?.features?.[featureKey]);
+    });
+    return {
+        enabled: true,
+        initialized: Boolean(rawAccess?.initialized),
+        allowed: Boolean(rawAccess?.allowed),
+        isOwner: Boolean(rawAccess?.isOwner),
+        canManageUsers: Boolean(rawAccess?.canManageUsers),
+        role: String(rawAccess?.role || '').trim().slice(0, 40),
+        email: String(rawAccess?.email || '').trim().slice(0, 240),
+        reason: String(rawAccess?.reason || '').trim().slice(0, 260),
+        detectionSource: String(rawAccess?.detectionSource || '').trim().slice(0, 120),
+        features,
+        featureCatalog
+    };
+}
+
+function hasExtensionFeature(featureKey) {
+    if (!extensionAccessState) return false;
+    if (extensionAccessState.isOwner) return true;
+    return Boolean(extensionAccessState.features?.[featureKey]);
+}
+
+function hasAnyExtensionFeature(featureKeys = []) {
+    if (!Array.isArray(featureKeys) || featureKeys.length === 0) return false;
+    return featureKeys.some((featureKey) => hasExtensionFeature(featureKey));
+}
+
+function canAccessView(viewId) {
+    const requiredFeatures = VIEW_FEATURE_REQUIREMENTS[viewId] || [];
+    return hasAnyExtensionFeature(requiredFeatures);
+}
+
+function getAvailableViewIds() {
+    return Object.keys(VIEW_FEATURE_REQUIREMENTS).filter((viewId) => canAccessView(viewId));
+}
+
+function getInitialAccessibleViewId() {
+    return getAvailableViewIds()[0] || '';
+}
 
 async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = {}) {
     if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
@@ -60,9 +153,11 @@ async function triggerCdbHydration() {
 
 // --- 1. Global View Switcher ---
 function showView(viewId) {
+    const fallbackViewId = getInitialAccessibleViewId();
+    const resolvedViewId = canAccessView(viewId) ? viewId : fallbackViewId;
     ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.style.display = (id === viewId) ? 'block' : 'none';
+        if (el) el.style.display = (resolvedViewId && id === resolvedViewId) ? 'block' : 'none';
     });
     
     const navIds = {
@@ -75,11 +170,227 @@ function showView(viewId) {
         const btn = document.getElementById(btnId);
         if (btn) btn.classList.remove('active-tab');
     });
-    const activeBtn = document.getElementById(navIds[viewId]);
+    const activeBtn = document.getElementById(navIds[resolvedViewId]);
     if (activeBtn) activeBtn.classList.add('active-tab');
 
-    if (viewId === 'jobManagerView') {
+    if (resolvedViewId === 'jobManagerView') {
         Jobs.fetchAndPopulateData();
+    }
+}
+
+async function fetchExtensionAccessState({ forceRefresh = false } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getExtensionAccessState',
+        payload: {
+            forceRefresh,
+            preferredTabId: PANEL_HOST_TAB_ID
+        }
+    });
+    if (!response?.success || !response?.access) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not resolve MailroomNavigator access.');
+    }
+    return response.access;
+}
+
+async function fetchExtensionUserManagement({ forceRefresh = false } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getExtensionUserManagement',
+        payload: {
+            forceRefresh,
+            preferredTabId: PANEL_HOST_TAB_ID
+        }
+    });
+    if (!response?.success || !response?.management) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load MailroomNavigator user management.');
+    }
+    return response.management;
+}
+
+async function fetchExtensionIdentityDiagnostics({ forceRefresh = false } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getExtensionIdentityDiagnostics',
+        payload: {
+            forceRefresh,
+            preferredTabId: PANEL_HOST_TAB_ID
+        }
+    });
+    if (!response?.success || !response?.diagnostics) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load BetterLetter identity diagnostics.');
+    }
+    return response.diagnostics;
+}
+
+function renderExtensionAccessState(access) {
+    const notice = document.getElementById('accessControlNotice');
+    const identityPanel = document.getElementById('identityDetectionPanel');
+    const identityStatus = document.getElementById('identityDetectionStatus');
+    const identityDiagnostics = document.getElementById('identityDetectionDiagnostics');
+    const navButtonsRow = document.querySelector('.global-nav-buttons-row');
+    const views = [
+        document.getElementById('practiceNavigatorView'),
+        document.getElementById('jobManagerView'),
+        document.getElementById('emailFormatterView')
+    ];
+
+    extensionAccessState = normalizePanelAccessState(access);
+
+    if (!notice) return;
+
+    const emailLine = extensionAccessState.email
+        ? `Current BetterLetter user: ${extensionAccessState.email}`
+        : 'Current BetterLetter user: not detected';
+    const sourceLine = extensionAccessState.detectionSource
+        ? `Detection source: ${extensionAccessState.detectionSource}`
+        : '';
+
+    if (accessNoticeHideTimer) {
+        clearTimeout(accessNoticeHideTimer);
+        accessNoticeHideTimer = null;
+    }
+
+    notice.style.display = 'block';
+    if (identityStatus) {
+        identityStatus.textContent = [emailLine, extensionAccessState.reason || 'Open a signed-in BetterLetter tab and refresh the panel.', sourceLine]
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    if (extensionAccessState.allowed) {
+        notice.classList.remove('invalid');
+        notice.classList.add('valid');
+        notice.style.display = 'block';
+        notice.textContent = [emailLine, extensionAccessState.isOwner ? 'Owner access granted.' : 'Access granted to assigned MailroomNavigator features.', sourceLine]
+            .filter(Boolean)
+            .join('\n');
+        if (identityPanel) identityPanel.style.display = 'none';
+        if (identityDiagnostics) {
+            identityDiagnostics.style.display = 'none';
+            identityDiagnostics.textContent = '';
+        }
+        if (navButtonsRow) navButtonsRow.style.display = '';
+        accessNoticeHideTimer = setTimeout(() => {
+            notice.style.display = 'none';
+        }, 10000);
+        return;
+    }
+
+    notice.classList.remove('valid');
+    notice.classList.add('invalid');
+    notice.style.display = 'block';
+    notice.textContent = [emailLine, extensionAccessState.reason || 'Access denied.', sourceLine]
+        .filter(Boolean)
+        .join('\n');
+    if (navButtonsRow) navButtonsRow.style.display = 'none';
+    if (identityPanel) identityPanel.style.display = !extensionAccessState.email ? 'block' : 'none';
+    if (identityDiagnostics) {
+        identityDiagnostics.style.display = 'none';
+        identityDiagnostics.textContent = '';
+    }
+    views.forEach((view) => {
+        if (!view) return;
+        view.style.display = 'none';
+    });
+}
+
+function renderIdentityDiagnostics(diagnostics = null) {
+    const identityDiagnostics = document.getElementById('identityDetectionDiagnostics');
+    if (!identityDiagnostics) return;
+    if (!diagnostics || typeof diagnostics !== 'object') {
+        identityDiagnostics.style.display = 'none';
+        identityDiagnostics.textContent = '';
+        return;
+    }
+
+    const lines = [];
+    lines.push(`Panel hostTabId: ${PANEL_HOST_TAB_ID ?? 'none'}`);
+    lines.push(`Preferred tabId: ${diagnostics.preferredTabId ?? 'none'}`);
+    if (diagnostics?.storedSnapshot?.email) {
+        lines.push(`Stored snapshot: ${diagnostics.storedSnapshot.email} (${diagnostics.storedSnapshot.source || 'unknown'})`);
+    } else {
+        lines.push('Stored snapshot: none');
+    }
+    lines.push(`Candidate tabs: ${Array.isArray(diagnostics?.tabs) ? diagnostics.tabs.length : 0}`);
+
+    (Array.isArray(diagnostics?.tabs) ? diagnostics.tabs : []).slice(0, 6).forEach((tab, index) => {
+        lines.push('');
+        lines.push(`[${index + 1}] tabId=${tab.tabId} active=${tab.active ? 'yes' : 'no'} status=${tab.status || 'unknown'} signIn=${tab.isSignIn ? 'yes' : 'no'}`);
+        if (tab.url) lines.push(`url: ${tab.url}`);
+        if (tab.title) lines.push(`title: ${tab.title}`);
+        if (tab.datasetEmail || tab.datasetSource) {
+            lines.push(`dataset: ${tab.datasetEmail || 'none'} ${tab.datasetSource ? `(${tab.datasetSource})` : ''}`.trim());
+        }
+        if (tab.mainWorld?.email || tab.mainWorld?.source) {
+            lines.push(`main: ${tab.mainWorld.email || 'none'} ${tab.mainWorld.source ? `(${tab.mainWorld.source})` : ''}`.trim());
+        } else {
+            lines.push('main: none');
+        }
+        if (tab.isolatedWorld?.email || tab.isolatedWorld?.source) {
+            lines.push(`isolated: ${tab.isolatedWorld.email || 'none'} ${tab.isolatedWorld.source ? `(${tab.isolatedWorld.source})` : ''}`.trim());
+        } else {
+            lines.push('isolated: none');
+        }
+        if (tab.routeProbe?.email || tab.routeProbe?.source) {
+            lines.push(`route: ${tab.routeProbe.email || 'none'} ${tab.routeProbe.source ? `(${tab.routeProbe.source})` : ''}`.trim());
+        } else {
+            lines.push('route: none');
+        }
+        if (tab.error) lines.push(`error: ${tab.error}`);
+    });
+
+    identityDiagnostics.textContent = lines.join('\n');
+    identityDiagnostics.style.display = 'block';
+}
+
+function setElementVisible(elementOrId, shouldShow, displayValue = '') {
+    const element = typeof elementOrId === 'string' ? document.getElementById(elementOrId) : elementOrId;
+    if (!element) return;
+    element.style.display = shouldShow ? displayValue : 'none';
+}
+
+function applyExtensionFeatureAccessToUi() {
+    const navRow = document.querySelector('.global-nav-buttons-row');
+    const accessAllowed = Boolean(extensionAccessState?.allowed);
+    const availableViewIds = getAvailableViewIds();
+
+    const navButtonMap = {
+        practiceNavigatorView: document.getElementById('navigatorGlobalToggleBtn'),
+        jobManagerView: document.getElementById('jobManagerGlobalToggleBtn'),
+        emailFormatterView: document.getElementById('emailFormatterGlobalToggleBtn')
+    };
+
+    Object.entries(navButtonMap).forEach(([viewId, button]) => {
+        if (!button) return;
+        const showButton = accessAllowed && canAccessView(viewId);
+        button.style.display = showButton ? '' : 'none';
+    });
+
+    if (navRow) {
+        navRow.style.display = accessAllowed && availableViewIds.length > 0 ? '' : 'none';
+    }
+
+    setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
+    setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
+    setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
+    setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
+    setElementVisible('runEmailFormatterToolBtn', hasExtensionFeature('email_formatter'));
+    setElementVisible('runWorkflowGroupsToolBtn', hasExtensionFeature('workflow_groups'));
+    setElementVisible('linearIssueSection', hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync']));
+    setElementVisible('linearCreateIssueControls', hasExtensionFeature('linear_create_issue'));
+    setElementVisible('linearSlackControls', hasExtensionFeature('slack_sync'));
+    setElementVisible('createLinearSlackIssueBtn', hasExtensionFeature('linear_create_issue'), '');
+    setElementVisible('triggerLinearBotJobsBtn', hasExtensionFeature('linear_trigger'), '');
+    setElementVisible('triggerLinearDryRunLabel', hasExtensionFeature('linear_trigger'), 'flex');
+    setElementVisible('reconcileLinearControls', hasExtensionFeature('linear_reconcile'));
+    setElementVisible('reconcileLinearDryRunLabel', hasExtensionFeature('linear_reconcile'), 'flex');
+    setElementVisible('linearTriggerStatus', hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync']));
+    setElementVisible('extensionUserManagementSection', Boolean(extensionAccessState?.isOwner));
+
+    const actionRow = document.getElementById('linearActionButtonsRow');
+    const canCreateIssue = hasExtensionFeature('linear_create_issue');
+    const canTriggerLinear = hasExtensionFeature('linear_trigger');
+    if (actionRow) {
+        actionRow.style.display = (canCreateIssue || canTriggerLinear) ? 'grid' : 'none';
+        actionRow.style.gridTemplateColumns = canCreateIssue && canTriggerLinear ? '1fr 1fr' : '1fr';
     }
 }
 
@@ -229,11 +540,325 @@ document.addEventListener('DOMContentLoaded', async () => {
     Navigator.cleanDuplicateButtons();
 
     resizeToFitContent();
+
+    const identityDetectionStatus = document.getElementById('identityDetectionStatus');
+    const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
+    const managedUserEmailInput = document.getElementById('managedUserEmailInput');
+    const managedUserRoleInput = document.getElementById('managedUserRoleInput');
+    const managedUserFeaturesGrid = document.getElementById('managedUserFeaturesGrid');
+    const clearManagedUserFormBtn = document.getElementById('clearManagedUserFormBtn');
+    const saveManagedUserBtn = document.getElementById('saveManagedUserBtn');
+    const refreshManagedUsersBtn = document.getElementById('refreshManagedUsersBtn');
+    const extensionManagedUsersList = document.getElementById('extensionManagedUsersList');
+    let managedUserEditingEmail = '';
+
+    const getFeatureCatalogForUi = () => Array.isArray(extensionAccessState?.featureCatalog) && extensionAccessState.featureCatalog.length > 0
+        ? extensionAccessState.featureCatalog
+        : EXTENSION_FEATURE_CATALOG;
+
+    const normalizeManagedUserEmail = (value) => String(value || '').trim().toLowerCase().slice(0, 240);
+
+    const getManagedUserSelectedFeatures = () => {
+        if (!managedUserFeaturesGrid) return [];
+        return [...managedUserFeaturesGrid.querySelectorAll('input[type="checkbox"]:checked')]
+            .map((input) => String(input.value || '').trim())
+            .filter(Boolean);
+    };
+
+    const renderManagedUserFeatureCheckboxes = (selectedFeatures = []) => {
+        if (!managedUserFeaturesGrid) return;
+        const role = String(managedUserRoleInput?.value || 'user').trim().toLowerCase();
+        const selectedFeatureSet = new Set(Array.isArray(selectedFeatures) ? selectedFeatures : []);
+        managedUserFeaturesGrid.innerHTML = '';
+
+        getFeatureCatalogForUi().forEach((feature) => {
+            const row = document.createElement('label');
+            row.className = 'job-check-item';
+            row.style.alignItems = 'flex-start';
+            row.style.display = 'flex';
+            row.style.gap = '8px';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = feature.key;
+            checkbox.checked = role === 'admin' ? selectedFeatureSet.has(feature.key) : selectedFeatureSet.has(feature.key);
+            checkbox.disabled = false;
+
+            const copy = document.createElement('span');
+            const title = document.createElement('strong');
+            title.textContent = feature.label;
+            const description = document.createElement('div');
+            description.textContent = feature.description;
+            description.style.fontSize = '11px';
+            description.style.color = '#6b7280';
+            copy.append(title, description);
+
+            row.append(checkbox, copy);
+            managedUserFeaturesGrid.appendChild(row);
+        });
+    };
+
+    const resetManagedUserForm = () => {
+        managedUserEditingEmail = '';
+        if (managedUserEmailInput) managedUserEmailInput.value = '';
+        if (managedUserRoleInput) managedUserRoleInput.value = 'user';
+        renderManagedUserFeatureCheckboxes([]);
+        if (saveManagedUserBtn) saveManagedUserBtn.textContent = 'Save User';
+    };
+
+    const populateManagedUserForm = (user) => {
+        managedUserEditingEmail = normalizeManagedUserEmail(user?.email);
+        if (managedUserEmailInput) managedUserEmailInput.value = managedUserEditingEmail;
+        if (managedUserRoleInput) managedUserRoleInput.value = String(user?.role || 'user');
+        renderManagedUserFeatureCheckboxes(Array.isArray(user?.features) ? user.features : []);
+        if (saveManagedUserBtn) saveManagedUserBtn.textContent = managedUserEditingEmail ? 'Update User' : 'Save User';
+    };
+
+    const renderManagedUsersList = () => {
+        if (!extensionManagedUsersList) return;
+        extensionManagedUsersList.innerHTML = '';
+
+        const users = Array.isArray(extensionUserManagementState?.users) ? extensionUserManagementState.users : [];
+        if (users.length === 0) {
+            extensionManagedUsersList.textContent = 'No managed users yet.';
+            extensionManagedUsersList.style.color = '#6b7280';
+            return;
+        }
+
+        extensionManagedUsersList.style.color = '';
+        users.forEach((user) => {
+            const row = document.createElement('div');
+            row.style.border = '1px solid #d1d5db';
+            row.style.borderRadius = '8px';
+            row.style.padding = '10px';
+            row.style.marginTop = '8px';
+            row.style.background = '#f8fafc';
+
+            const header = document.createElement('div');
+            header.style.display = 'flex';
+            header.style.justifyContent = 'space-between';
+            header.style.alignItems = 'center';
+            header.style.gap = '8px';
+
+            const title = document.createElement('div');
+            title.innerHTML = `<strong>${user.email}</strong><br><span style="font-size:11px; color:#6b7280;">${user.role === 'admin' ? 'Admin' : 'User'}</span>`;
+
+            const actions = document.createElement('div');
+            actions.style.display = 'flex';
+            actions.style.gap = '6px';
+
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'btn btn-sm btn-ghost';
+            editBtn.textContent = 'Edit';
+            editBtn.addEventListener('click', () => populateManagedUserForm(user));
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'btn btn-sm';
+            deleteBtn.style.background = '#dc2626';
+            deleteBtn.textContent = 'Delete';
+            deleteBtn.addEventListener('click', async () => {
+                if (!window.confirm(`Delete ${user.email} from MailroomNavigator access?`)) return;
+                try {
+                    deleteBtn.disabled = true;
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'deleteExtensionManagedUser',
+                        payload: { email: user.email }
+                    });
+                    if (!response?.success) {
+                        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not delete user.');
+                    }
+                    extensionUserManagementState = response.management || extensionUserManagementState;
+                    renderManagedUsersList();
+                    resetManagedUserForm();
+                    if (extensionUserManagementSummary) {
+                        extensionUserManagementSummary.className = 'validation-badge valid';
+                        extensionUserManagementSummary.textContent = `Removed ${user.email}.`;
+                    }
+                    const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
+                    renderExtensionAccessState(refreshedAccess);
+                    applyExtensionFeatureAccessToUi();
+                    const nextViewId = getInitialAccessibleViewId();
+                    showView(nextViewId);
+                } catch (error) {
+                    if (extensionUserManagementSummary) {
+                        extensionUserManagementSummary.className = 'validation-badge invalid';
+                        extensionUserManagementSummary.textContent = String(error?.message || 'Could not delete user.').trim().slice(0, 260);
+                    }
+                } finally {
+                    deleteBtn.disabled = false;
+                }
+            });
+
+            actions.append(editBtn, deleteBtn);
+            header.append(title, actions);
+
+            const featureList = document.createElement('div');
+            featureList.style.marginTop = '8px';
+            featureList.style.fontSize = '12px';
+            featureList.style.color = '#374151';
+            featureList.textContent = `Features: ${(Array.isArray(user.features) && user.features.length > 0) ? user.features.join(', ') : 'none'}`;
+
+            row.append(header, featureList);
+            extensionManagedUsersList.appendChild(row);
+        });
+    };
+
+    const refreshExtensionUserManagementUi = async ({ forceRefresh = false } = {}) => {
+        if (!extensionAccessState?.isOwner) {
+            extensionUserManagementState = { users: [], featureCatalog: getFeatureCatalogForUi() };
+            renderManagedUserFeatureCheckboxes([]);
+            renderManagedUsersList();
+            return;
+        }
+        const management = await fetchExtensionUserManagement({ forceRefresh });
+        extensionUserManagementState = management;
+        renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
+        renderManagedUsersList();
+        if (extensionUserManagementSummary) {
+            extensionUserManagementSummary.className = 'validation-badge neutral';
+            extensionUserManagementSummary.textContent = `Owner: ${extensionAccessState.email}\nSynced users: ${Array.isArray(management?.users) ? management.users.length : 0}`;
+        }
+    };
+
+    try {
+        const access = await fetchExtensionAccessState({ forceRefresh: true });
+        renderExtensionAccessState(access);
+        applyExtensionFeatureAccessToUi();
+        if (!access?.email) {
+            try {
+                const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
+                renderIdentityDiagnostics(diagnostics);
+            } catch (diagnosticError) {
+                renderIdentityDiagnostics({
+                    preferredTabId: PANEL_HOST_TAB_ID,
+                    tabs: [],
+                    storedSnapshot: null,
+                    error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
+                });
+            }
+        } else {
+            renderIdentityDiagnostics(null);
+        }
+    } catch (error) {
+        renderExtensionAccessState({
+            initialized: false,
+            allowed: false,
+            email: '',
+            reason: String(error?.message || 'Could not resolve MailroomNavigator access.').trim().slice(0, 260),
+            detectionSource: ''
+        });
+        applyExtensionFeatureAccessToUi();
+        try {
+            const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
+            renderIdentityDiagnostics(diagnostics);
+        } catch (diagnosticError) {
+            renderIdentityDiagnostics({
+                preferredTabId: PANEL_HOST_TAB_ID,
+                tabs: [],
+                storedSnapshot: null,
+                error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
+            });
+        }
+    }
     
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
     document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView'));
     document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView'));
+
+    managedUserRoleInput?.addEventListener('change', () => {
+        renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
+    });
+
+    clearManagedUserFormBtn?.addEventListener('click', () => {
+        resetManagedUserForm();
+        if (extensionUserManagementSummary) {
+            extensionUserManagementSummary.className = 'validation-badge neutral';
+            extensionUserManagementSummary.textContent = 'Ready.';
+        }
+    });
+
+    refreshManagedUsersBtn?.addEventListener('click', () => {
+        refreshExtensionUserManagementUi({ forceRefresh: true })
+            .then(() => {
+                if (extensionUserManagementSummary) {
+                    extensionUserManagementSummary.className = 'validation-badge valid';
+                    extensionUserManagementSummary.textContent = 'User list refreshed.';
+                }
+            })
+            .catch((error) => {
+                if (extensionUserManagementSummary) {
+                    extensionUserManagementSummary.className = 'validation-badge invalid';
+                    extensionUserManagementSummary.textContent = String(error?.message || 'Could not refresh users.').trim().slice(0, 260);
+                }
+            });
+    });
+
+    saveManagedUserBtn?.addEventListener('click', async () => {
+        try {
+            const email = normalizeManagedUserEmail(managedUserEmailInput?.value);
+            const role = String(managedUserRoleInput?.value || 'user').trim().toLowerCase();
+            const features = getManagedUserSelectedFeatures();
+
+            if (!email) {
+                throw new Error('Enter a BetterLetter user email.');
+            }
+
+            saveManagedUserBtn.disabled = true;
+            if (extensionUserManagementSummary) {
+                extensionUserManagementSummary.className = 'validation-badge neutral';
+                extensionUserManagementSummary.textContent = managedUserEditingEmail
+                    ? `Updating ${managedUserEditingEmail}…`
+                    : `Saving ${email}…`;
+            }
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'saveExtensionManagedUser',
+                payload: { email, role, features }
+            });
+            if (!response?.success) {
+                throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not save user.');
+            }
+            extensionUserManagementState = response.management || extensionUserManagementState;
+            renderManagedUsersList();
+            populateManagedUserForm({ email, role, features });
+            if (extensionUserManagementSummary) {
+                extensionUserManagementSummary.className = 'validation-badge valid';
+                extensionUserManagementSummary.textContent = `Saved ${email}.`;
+            }
+            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
+            renderExtensionAccessState(refreshedAccess);
+            applyExtensionFeatureAccessToUi();
+        } catch (error) {
+            if (extensionUserManagementSummary) {
+                extensionUserManagementSummary.className = 'validation-badge invalid';
+                extensionUserManagementSummary.textContent = String(error?.message || 'Could not save user.').trim().slice(0, 260);
+            }
+        } finally {
+            saveManagedUserBtn.disabled = false;
+        }
+    });
+
+    if (!extensionAccessState?.email && identityDetectionStatus) {
+        identityDetectionStatus.className = 'validation-badge neutral';
+        identityDetectionStatus.textContent = 'Open a signed-in BetterLetter page, then refresh the panel. Manual email override is disabled.';
+    }
+
+    if (extensionAccessState?.isOwner) {
+        try {
+            await refreshExtensionUserManagementUi({ forceRefresh: true });
+        } catch (error) {
+            if (extensionUserManagementSummary) {
+                extensionUserManagementSummary.className = 'validation-badge invalid';
+                extensionUserManagementSummary.textContent = String(error?.message || 'Could not load user management.').trim().slice(0, 260);
+            }
+        }
+    } else {
+        renderManagedUserFeatureCheckboxes([]);
+        renderManagedUsersList();
+    }
 
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
@@ -322,22 +947,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     
     // E. Global URL Opening Helper
-    const openUrl = (suffix) => {
+    const getSelectedPracticeScope = () => {
+        const selectedPracticeCode = String(state.currentSelectedOdsCode || '').trim().toUpperCase();
+        return {
+            selectedPracticeCode,
+            hasPracticeFilter: /^[A-Z]\d{5}$/.test(selectedPracticeCode),
+            isAllPractices: selectedPracticeCode === 'ALL'
+        };
+    };
+
+    const openUrl = (suffix, { allowAllPractices = false } = {}) => {
         try {
-            const ods = Navigator.requireSelectedOdsCode();
+            const { selectedPracticeCode, hasPracticeFilter, isAllPractices } = getSelectedPracticeScope();
+            if (!hasPracticeFilter && !(allowAllPractices && isAllPractices)) {
+                throw new Error('Select a practice or choose All practices first.');
+            }
+
             let url = `https://app.betterletter.ai/`;
-            if (suffix === 'dashboard') url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=docman_import+emis_prepare&practice_ids=${ods}&status=paused`;
-            else if (suffix === 'preparing') url = `https://app.betterletter.ai/mailroom/preparing?only_action_items=true&practice=${ods}&service=self&sort=upload_date&sort_dir=asc&urgent=false`;
-            else if (suffix === 'rejected') url = `https://app.betterletter.ai/mailroom/rejected?practice=${ods}&service=full&show_processed=false&sort=inserted_at&sort_dir=asc`;
-            else if (suffix === 'users') url = `https://app.betterletter.ai/mailroom/practices/${ods}/users`;
-            chrome.tabs.create({ url });
+            if (suffix === 'dashboard') {
+                url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=docman_import+emis_prepare&status=paused`;
+                if (hasPracticeFilter) url += `&practice_ids=${encodeURIComponent(selectedPracticeCode)}`;
+            } else if (suffix === 'preparing') {
+                url = `https://app.betterletter.ai/mailroom/preparing?only_action_items=true&service=self&sort=upload_date&sort_dir=asc&urgent=false`;
+                if (hasPracticeFilter) url += `&practice=${encodeURIComponent(selectedPracticeCode)}`;
+            } else if (suffix === 'rejected') {
+                url = `https://app.betterletter.ai/mailroom/rejected?service=full&show_processed=false&sort=inserted_at&sort_dir=asc`;
+                if (hasPracticeFilter) url += `&practice=${encodeURIComponent(selectedPracticeCode)}`;
+            } else if (suffix === 'users') {
+                const ods = Navigator.requireSelectedOdsCode();
+                url = `https://app.betterletter.ai/mailroom/practices/${ods}/users`;
+            }
+            openTabWithTimeout(url);
         } catch (e) { showToast(e.message); }
     };
 
-    document.getElementById('collectionBtn')?.addEventListener('click', () => openUrl('dashboard'));
+    document.getElementById('collectionBtn')?.addEventListener('click', () => openUrl('dashboard', { allowAllPractices: true }));
     document.getElementById('usersBtn')?.addEventListener('click', () => openUrl('users'));
-    document.getElementById('preparingBtn')?.addEventListener('click', () => openUrl('preparing'));
-    document.getElementById('rejectedBtn')?.addEventListener('click', () => openUrl('rejected'));
+    document.getElementById('preparingBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
+    document.getElementById('rejectedBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
 
     // F. EHR & Task Settings
     document.getElementById('taskRecipientsBtn')?.addEventListener('click', async () => {
@@ -355,14 +1002,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Job Dashboard Filters (checkbox multi-select)
-    const docmanJobChecklistNav = document.getElementById('docmanJobChecklistNav');
-    const emisJobChecklistNav = document.getElementById('emisJobChecklistNav');
-    const openDocmanJobsNavBtn = document.getElementById('openDocmanJobsNavBtn');
-    const openEmisJobsNavBtn = document.getElementById('openEmisJobsNavBtn');
+    const botJobsChecklistNav = document.getElementById('botJobsChecklistNav');
+    const clearBotJobsNavBtn = document.getElementById('clearBotJobsNavBtn');
+    const openBotJobsNavBtn = document.getElementById('openBotJobsNavBtn');
 
     const getSelectedJobTypes = (checklistEl) => {
         if (!checklistEl) return [];
-        return Array.from(checklistEl.querySelectorAll('input[type="checkbox"]:checked'))
+        return Array.from(checklistEl.querySelectorAll('input[type="checkbox"]:checked:not([data-select-all])'))
             .map(input => String(input?.value || '').trim())
             .filter(Boolean);
     };
@@ -373,8 +1019,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         return `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=${encodedTypes}${encodedOds}&status=paused`;
     };
 
-    const openMultiJobDashboard = (checklistEl, groupLabel) => {
-        const selectedJobTypes = getSelectedJobTypes(checklistEl);
+    const openJobTypesDashboard = (jobTypes, groupLabel) => {
+        const selectedJobTypes = Array.isArray(jobTypes) ? jobTypes.filter(Boolean) : [];
         if (selectedJobTypes.length === 0) {
             showToast(`Select at least one ${groupLabel} job.`);
             return;
@@ -393,14 +1039,157 @@ document.addEventListener('DOMContentLoaded', async () => {
         openTabWithTimeout(url);
     };
 
-    openDocmanJobsNavBtn?.addEventListener('click', () => openMultiJobDashboard(docmanJobChecklistNav, 'Docman'));
-    openEmisJobsNavBtn?.addEventListener('click', () => openMultiJobDashboard(emisJobChecklistNav, 'EMIS'));
+    const openMultiJobDashboard = (checklistEl, groupLabel) => {
+        openJobTypesDashboard(getSelectedJobTypes(checklistEl), groupLabel);
+    };
 
-    // I. EMAIL FORMATTER LOGIC
-    document.getElementById("convertEmailBtn")?.addEventListener("click", Email.convertEmails);
-    document.getElementById("nameOnlyBtn")?.addEventListener("click", Email.convertEmailsToNamesOnly);
-    document.getElementById("copyEmailBtn")?.addEventListener("click", Email.copyEmails);
+    const syncChecklistSelectionUi = (checklistEl, actionButton, groupLabel, selectionBadge = null, clearButton = null) => {
+        if (!checklistEl) return;
+        const selectAllInput = checklistEl.querySelector('input[data-select-all="true"]');
+        const jobInputs = Array.from(checklistEl.querySelectorAll('input[type="checkbox"]:not([data-select-all])'));
+        if (!jobInputs.length) return;
 
+        const getAllJobTypes = () => jobInputs
+            .map((input) => String(input?.value || '').trim())
+            .filter(Boolean);
+
+        const refresh = () => {
+            const checkedCount = jobInputs.filter((input) => input.checked).length;
+            if (selectAllInput) {
+                selectAllInput.checked = checkedCount === jobInputs.length;
+                selectAllInput.indeterminate = checkedCount > 0 && checkedCount < jobInputs.length;
+            }
+
+            checklistEl.querySelectorAll('.job-check-item').forEach((item) => {
+                const input = item.querySelector('input[type="checkbox"]');
+                const isSelectAllItem = input === selectAllInput;
+                const isSelected = isSelectAllItem
+                    ? Boolean(selectAllInput?.checked)
+                    : Boolean(input?.checked);
+                item.classList.toggle('is-selected', isSelected);
+            });
+
+            if (actionButton) {
+                let buttonLabel = 'Open';
+                let buttonTitle = `Open selected ${groupLabel} jobs`;
+                const isSingleJobChecklist = jobInputs.length === 1;
+
+                if (isSingleJobChecklist && checkedCount === 1) {
+                    buttonLabel = 'Open';
+                    buttonTitle = `Open ${groupLabel} job`;
+                } else if (checkedCount === jobInputs.length) {
+                    buttonLabel = 'Open all';
+                    buttonTitle = `Open all ${groupLabel} jobs`;
+                } else if (checkedCount > 0) {
+                    buttonLabel = `Open ${checkedCount}`;
+                    buttonTitle = `Open ${checkedCount} selected ${groupLabel} job${checkedCount === 1 ? '' : 's'}`;
+                }
+
+                actionButton.textContent = buttonLabel;
+                actionButton.title = buttonTitle;
+                actionButton.setAttribute('aria-label', buttonTitle);
+            }
+
+            if (clearButton) {
+                const hasSelection = checkedCount > 0;
+                clearButton.disabled = !hasSelection;
+                clearButton.title = hasSelection ? `Clear ${checkedCount} selected ${groupLabel} job${checkedCount === 1 ? '' : 's'}` : `Clear selected ${groupLabel} jobs`;
+                clearButton.setAttribute('aria-label', clearButton.title);
+            }
+
+            if (selectionBadge) {
+                if (checkedCount > 0) {
+                    selectionBadge.hidden = false;
+                    selectionBadge.textContent = String(checkedCount);
+                    selectionBadge.classList.add('has-selection');
+                    selectionBadge.setAttribute('aria-label', `${checkedCount} ${groupLabel} jobs selected`);
+                } else {
+                    selectionBadge.hidden = true;
+                    selectionBadge.textContent = '';
+                    selectionBadge.classList.remove('has-selection');
+                    selectionBadge.removeAttribute('aria-label');
+                }
+            }
+        };
+
+        const clearSelections = () => {
+            jobInputs.forEach((input) => {
+                input.checked = false;
+            });
+            if (selectAllInput) {
+                selectAllInput.checked = false;
+                selectAllInput.indeterminate = false;
+            }
+            refresh();
+        };
+
+        selectAllInput?.addEventListener('change', () => {
+            jobInputs.forEach((input) => {
+                input.checked = Boolean(selectAllInput.checked);
+            });
+            refresh();
+        });
+
+        jobInputs.forEach((input) => {
+            input.addEventListener('change', refresh);
+        });
+
+        checklistEl.querySelectorAll('.job-check-item').forEach((item) => {
+            const input = item.querySelector('input[type="checkbox"]');
+            if (!input) return;
+
+            let clickTimer = null;
+
+            item.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (event.detail > 1) return;
+
+                clickTimer = window.setTimeout(() => {
+                    if (input === selectAllInput) {
+                        const shouldCheckAll = !Boolean(selectAllInput?.checked);
+                        jobInputs.forEach((jobInput) => {
+                            jobInput.checked = shouldCheckAll;
+                        });
+                        if (selectAllInput) {
+                            selectAllInput.checked = shouldCheckAll;
+                            selectAllInput.indeterminate = false;
+                        }
+                    } else {
+                        input.checked = !input.checked;
+                    }
+                    refresh();
+                    clickTimer = null;
+                }, 180);
+            });
+
+            item.addEventListener('dblclick', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (clickTimer) {
+                    window.clearTimeout(clickTimer);
+                    clickTimer = null;
+                }
+
+                const jobTypes = input === selectAllInput
+                    ? getAllJobTypes()
+                    : [String(input?.value || '').trim()].filter(Boolean);
+
+                openJobTypesDashboard(jobTypes, groupLabel);
+            });
+        });
+
+        clearButton?.addEventListener('click', () => {
+            clearSelections();
+        });
+
+        refresh();
+    };
+
+    openBotJobsNavBtn?.addEventListener('click', () => openMultiJobDashboard(botJobsChecklistNav, 'Bot'));
+    syncChecklistSelectionUi(botJobsChecklistNav, openBotJobsNavBtn, 'Bot', null, clearBotJobsNavBtn);
 
     // K. JOB PANEL QUICK ACTIONS
     const manualDocIdInput = document.getElementById('manualDocId');
@@ -440,20 +1229,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
     const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
+    const runEmailFormatterToolBtn = document.getElementById('runEmailFormatterToolBtn');
+    const runWorkflowGroupsToolBtn = document.getElementById('runWorkflowGroupsToolBtn');
     const bookmarkletToolModal = document.getElementById('bookmarkletToolModal');
     const bookmarkletToolModalTitle = document.getElementById('bookmarkletToolModalTitle');
     const bookmarkletToolModalActions = document.getElementById('bookmarkletToolModalActions');
     const bookmarkletToolModalBody = document.getElementById('bookmarkletToolModalBody');
     const bookmarkletToolModalCloseBtn = document.getElementById('bookmarkletToolModalCloseBtn');
-
-    const workflowNamesInput = document.getElementById('workflowNamesInput');
-    const workflowSkipDuplicates = document.getElementById('workflowSkipDuplicates');
-    const workflowTitleCase = document.getElementById('workflowTitleCase');
-    const workflowStatus = document.getElementById('workflowStatus');
-    const workflowProgressTrack = document.getElementById('workflowProgressTrack');
-    const workflowProgressBar = document.getElementById('workflowProgressBar');
-    const runWorkflowBulkBtn = document.getElementById('runWorkflowBulkBtn');
-    const testWorkflowParseBtn = document.getElementById('testWorkflowParseBtn');
 
     const linearIssueSourceInput = document.getElementById('linearIssueSourceInput');
     const generateLinearIssueDraftBtn = document.getElementById('generateLinearIssueDraftBtn');
@@ -1463,6 +2245,108 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    const formatEmailEntries = (rawValue, outputMode = 'formatted') => {
+        const rawEntries = String(rawValue || '')
+            .split(/[\n;,]+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean);
+
+        const values = rawEntries.map((entry) => {
+            const match = entry.match(/<?([\w.-]+@[\w.-]+\.\w+)>?/);
+            if (!match?.[1]) return entry;
+            const email = match[1].trim();
+            const name = extractNameFromEmail(email);
+            return outputMode === 'name_only' ? name : `${name} <${email}>`;
+        });
+
+        return {
+            values,
+            output: outputMode === 'name_only' ? values.join(', ') : values.join(',\n')
+        };
+    };
+
+    const openEmailFormatterModal = () => {
+        if (!openBookmarkletToolModal('Email Formatter')) return;
+
+        const convertBtn = document.createElement('button');
+        convertBtn.type = 'button';
+        convertBtn.className = 'bookmarklet-tool-btn active';
+        convertBtn.textContent = 'Convert';
+
+        const nameOnlyBtn = document.createElement('button');
+        nameOnlyBtn.type = 'button';
+        nameOnlyBtn.className = 'bookmarklet-tool-btn';
+        nameOnlyBtn.textContent = 'Name Only';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'bookmarklet-tool-btn';
+        copyBtn.textContent = 'Copy Output';
+
+        const countChip = document.createElement('div');
+        countChip.className = 'bookmarklet-tool-chip';
+        countChip.textContent = '0 entries';
+
+        bookmarkletToolModalActions?.append(convertBtn, nameOnlyBtn, copyBtn, countChip);
+
+        const layout = document.createElement('div');
+        layout.className = 'bookmarklet-tool-stack';
+
+        const inputLabel = document.createElement('label');
+        inputLabel.className = 'bookmarklet-tool-label';
+        inputLabel.textContent = 'Input';
+
+        const inputTextarea = document.createElement('textarea');
+        inputTextarea.className = 'bookmarklet-tool-textarea';
+        inputTextarea.placeholder = 'Paste email addresses here...';
+
+        const outputLabel = document.createElement('label');
+        outputLabel.className = 'bookmarklet-tool-label';
+        outputLabel.textContent = 'Output';
+
+        const outputTextarea = document.createElement('textarea');
+        outputTextarea.className = 'bookmarklet-tool-textarea';
+        outputTextarea.placeholder = 'Converted output will appear here...';
+        outputTextarea.readOnly = true;
+
+        layout.append(inputLabel, inputTextarea, outputLabel, outputTextarea);
+        bookmarkletToolModalBody?.appendChild(layout);
+
+        let outputMode = 'formatted';
+
+        const renderOutput = () => {
+            const formatted = formatEmailEntries(inputTextarea.value, outputMode);
+            outputTextarea.value = formatted.output;
+            countChip.textContent = `${formatted.values.length} ${formatted.values.length === 1 ? 'entry' : 'entries'}`;
+        };
+
+        const setMode = (nextMode) => {
+            outputMode = nextMode;
+            convertBtn.classList.toggle('active', nextMode === 'formatted');
+            nameOnlyBtn.classList.toggle('active', nextMode === 'name_only');
+            renderOutput();
+        };
+
+        convertBtn.addEventListener('click', () => setMode('formatted'));
+        nameOnlyBtn.addEventListener('click', () => setMode('name_only'));
+        copyBtn.addEventListener('click', async () => {
+            if (!outputTextarea.value.trim()) {
+                showToast('No output to copy.');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(outputTextarea.value);
+                showToast('Email list copied.');
+            } catch (error) {
+                showToast('Copy failed.');
+            }
+        });
+        inputTextarea.addEventListener('input', renderOutput);
+
+        renderOutput();
+        inputTextarea.focus();
+    };
+
     const parseWorkflowNames = (rawValue) => String(rawValue || '')
         .split(/\r?\n/)
         .map((line) => line.trim())
@@ -2227,47 +3111,61 @@ document.addEventListener('DOMContentLoaded', async () => {
         return `${mins}m ${remaining}s`;
     };
 
+    const createWorkflowUiContext = (elements = {}) => ({
+        namesInput: elements.namesInput || null,
+        skipDuplicatesInput: elements.skipDuplicatesInput || null,
+        titleCaseInput: elements.titleCaseInput || null,
+        statusEl: elements.statusEl || null,
+        progressTrackEl: elements.progressTrackEl || null,
+        progressBarEl: elements.progressBarEl || null,
+        runButtonEl: elements.runButtonEl || null
+    });
+
     let workflowRunState = {
         running: false,
         startedAt: 0,
-        total: 0
+        total: 0,
+        uiContext: null
     };
 
-    const updateWorkflowStatus = (message, tone = null) => {
-        if (!workflowStatus) return;
-        workflowStatus.classList.remove('neutral', 'valid', 'invalid');
-        if (tone === 'valid') workflowStatus.classList.add('valid');
-        else if (tone === 'invalid') workflowStatus.classList.add('invalid');
-        else workflowStatus.classList.add('neutral');
-        workflowStatus.textContent = message;
+    const updateWorkflowStatus = (uiContext, message, tone = null) => {
+        const statusEl = uiContext?.statusEl;
+        if (!statusEl) return;
+        statusEl.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') statusEl.classList.add('valid');
+        else if (tone === 'invalid') statusEl.classList.add('invalid');
+        else statusEl.classList.add('neutral');
+        statusEl.textContent = message;
     };
 
-    const updateWorkflowProgress = (current, total) => {
-        if (!workflowProgressTrack || !workflowProgressBar) return;
-        workflowProgressTrack.style.display = 'block';
+    const updateWorkflowProgress = (uiContext, current, total) => {
+        const progressTrackEl = uiContext?.progressTrackEl;
+        const progressBarEl = uiContext?.progressBarEl;
+        if (!progressTrackEl || !progressBarEl) return;
+        progressTrackEl.style.display = 'block';
         const boundedTotal = Math.max(total || 0, 1);
         const ratio = Math.min(Math.max(current, 0), boundedTotal) / boundedTotal;
-        workflowProgressBar.style.width = `${Math.round(ratio * 100)}%`;
+        progressBarEl.style.width = `${Math.round(ratio * 100)}%`;
 
         if (!workflowRunState.running) return;
 
         const elapsed = Date.now() - workflowRunState.startedAt;
         const avgPerItem = elapsed / Math.max(current, 1);
         const remaining = Math.round(avgPerItem * (workflowRunState.total - current));
-        updateWorkflowStatus(`Creating ${current} / ${workflowRunState.total}… · ETA ${formatEta(remaining)}`);
+        updateWorkflowStatus(uiContext, `Creating ${current} / ${workflowRunState.total}… · ETA ${formatEta(remaining)}`);
     };
 
     chrome.runtime.onMessage.addListener((message) => {
         if (!workflowRunState.running) return;
         if (message?.type === 'BL_WORKFLOW_PROGRESS') {
-            updateWorkflowProgress(message.current, message.total);
+            updateWorkflowProgress(workflowRunState.uiContext, message.current, message.total);
         }
     });
 
-    const runBulkWorkflowCreation = async () => {
-        const names = parseWorkflowNames(workflowNamesInput?.value);
+    const runBulkWorkflowCreation = async (uiContext) => {
+        const names = parseWorkflowNames(uiContext?.namesInput?.value);
         if (!names.length) {
-            updateWorkflowStatus('Paste at least one workflow group name first.', 'invalid');
+            updateWorkflowStatus(uiContext, 'Paste at least one workflow group name first.', 'invalid');
             return;
         }
 
@@ -2277,22 +3175,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         try {
-            if (runWorkflowBulkBtn) {
-                runWorkflowBulkBtn.disabled = true;
-                runWorkflowBulkBtn.textContent = 'Running…';
+            if (uiContext?.runButtonEl) {
+                uiContext.runButtonEl.disabled = true;
+                uiContext.runButtonEl.textContent = 'Running…';
             }
-            workflowRunState = { running: true, startedAt: Date.now(), total: names.length };
-            updateWorkflowStatus(`Starting… (0 / ${names.length})`);
-            updateWorkflowProgress(0, names.length);
+            workflowRunState = { running: true, startedAt: Date.now(), total: names.length, uiContext };
+            updateWorkflowStatus(uiContext, `Starting… (0 / ${names.length})`);
+            updateWorkflowProgress(uiContext, 0, names.length);
 
             chrome.storage.sync.set({
-                workflowSkipDuplicates: workflowSkipDuplicates?.checked ?? true,
-                workflowTitleCase: workflowTitleCase?.checked ?? false
+                workflowSkipDuplicates: uiContext?.skipDuplicatesInput?.checked ?? true,
+                workflowTitleCase: uiContext?.titleCaseInput?.checked ?? false
             });
 
             const tab = await getBestBetterLetterTab();
             if (!tab?.id) {
-                updateWorkflowStatus('Open a BetterLetter tab first.', 'invalid');
+                updateWorkflowStatus(uiContext, 'Open a BetterLetter tab first.', 'invalid');
                 return;
             }
 
@@ -2312,39 +3210,137 @@ document.addEventListener('DOMContentLoaded', async () => {
                 args: [{
                     names,
                     options: {
-                        skipDuplicates: workflowSkipDuplicates?.checked ?? true,
-                        titleCase: workflowTitleCase?.checked ?? false
+                        skipDuplicates: uiContext?.skipDuplicatesInput?.checked ?? true,
+                        titleCase: uiContext?.titleCaseInput?.checked ?? false
                     }
                 }]
             });
 
             const res = result?.[0]?.result;
             if (res?.ok) {
-                updateWorkflowStatus(`Done ✅
+                updateWorkflowStatus(uiContext, `Done ✅
 Created: ${res.created}
 Skipped: ${res.skipped}
 Errors: ${res.errors.length}`, res.errors.length ? 'neutral' : 'valid');
-                updateWorkflowProgress(names.length, names.length);
+                updateWorkflowProgress(uiContext, names.length, names.length);
                 if (res.errors.length) {
                     console.warn('[Workflow bulk] Errors:', res.errors);
-                } else if (workflowNamesInput) {
-                    workflowNamesInput.value = '';
+                } else if (uiContext?.namesInput) {
+                    uiContext.namesInput.value = '';
                 }
             } else {
-                updateWorkflowStatus(`Failed ❌
+                updateWorkflowStatus(uiContext, `Failed ❌
 ${res?.error || 'Unknown error'}`, 'invalid');
             }
         } catch (error) {
             console.error('Bulk workflow creation failed:', error);
-            updateWorkflowStatus(`Error ❌
+            updateWorkflowStatus(uiContext, `Error ❌
 ${error?.message || String(error)}`, 'invalid');
         } finally {
             workflowRunState.running = false;
-            if (runWorkflowBulkBtn) {
-                runWorkflowBulkBtn.disabled = false;
-                runWorkflowBulkBtn.textContent = 'Run Bulk Create';
+            workflowRunState.uiContext = null;
+            if (uiContext?.runButtonEl) {
+                uiContext.runButtonEl.disabled = false;
+                uiContext.runButtonEl.textContent = 'Run Bulk Create';
             }
         }
+    };
+
+    const openWorkflowGroupsModal = async () => {
+        if (!openBookmarkletToolModal('Custom Workflow Groups')) return;
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'bookmarklet-tool-btn active';
+        runBtn.textContent = 'Run Bulk Create';
+
+        const testParseBtn = document.createElement('button');
+        testParseBtn.type = 'button';
+        testParseBtn.className = 'bookmarklet-tool-btn';
+        testParseBtn.textContent = 'Test Parse';
+
+        bookmarkletToolModalActions?.append(runBtn, testParseBtn);
+
+        const layout = document.createElement('div');
+        layout.className = 'bookmarklet-tool-stack';
+
+        const namesLabel = document.createElement('label');
+        namesLabel.className = 'bookmarklet-tool-label';
+        namesLabel.textContent = 'Paste workflow names (one per line, or paste Airtable rows)';
+
+        const namesInput = document.createElement('textarea');
+        namesInput.className = 'bookmarklet-tool-textarea';
+        namesInput.placeholder = 'e.g.\nJohn Smith\nMike Drinkwater';
+
+        const optionsWrap = document.createElement('div');
+        optionsWrap.className = 'bookmarklet-tool-checklist';
+
+        const skipLabel = document.createElement('label');
+        const skipInput = document.createElement('input');
+        skipInput.type = 'checkbox';
+        skipInput.checked = true;
+        skipLabel.append(skipInput, document.createTextNode(' Skip existing workflow names'));
+
+        const titleCaseLabel = document.createElement('label');
+        const titleCaseInput = document.createElement('input');
+        titleCaseInput.type = 'checkbox';
+        titleCaseInput.checked = false;
+        titleCaseLabel.append(titleCaseInput, document.createTextNode(' Convert names to Title Case'));
+
+        optionsWrap.append(skipLabel, titleCaseLabel);
+
+        const statusEl = document.createElement('div');
+        statusEl.className = 'validation-badge neutral bookmarklet-tool-status';
+        statusEl.textContent = 'Ready.';
+
+        const progressTrackEl = document.createElement('div');
+        progressTrackEl.className = 'bookmarklet-tool-progress';
+        const progressBarEl = document.createElement('div');
+        progressBarEl.className = 'bookmarklet-tool-progress-bar';
+        progressTrackEl.appendChild(progressBarEl);
+
+        layout.append(namesLabel, namesInput, optionsWrap, statusEl, progressTrackEl);
+        bookmarkletToolModalBody?.appendChild(layout);
+
+        const uiContext = createWorkflowUiContext({
+            namesInput,
+            skipDuplicatesInput: skipInput,
+            titleCaseInput: titleCaseInput,
+            statusEl,
+            progressTrackEl,
+            progressBarEl,
+            runButtonEl: runBtn
+        });
+
+        try {
+            const saved = await chrome.storage.sync.get({ workflowSkipDuplicates: true, workflowTitleCase: false });
+            skipInput.checked = Boolean(saved.workflowSkipDuplicates);
+            titleCaseInput.checked = Boolean(saved.workflowTitleCase);
+        } catch (error) {
+            console.warn('Failed to load workflow settings:', error);
+        }
+
+        namesInput.addEventListener('input', () => {
+            const parsed = parseWorkflowNames(namesInput.value);
+            updateWorkflowStatus(uiContext, parsed.length ? `${parsed.length} workflow names parsed.` : 'Ready.');
+        });
+
+        testParseBtn.addEventListener('click', () => {
+            const parsed = parseWorkflowNames(namesInput.value);
+            if (!parsed.length) {
+                updateWorkflowStatus(uiContext, 'No workflow names parsed.', 'invalid');
+                return;
+            }
+            updateWorkflowStatus(uiContext, `Parsed ${parsed.length} names\n- ${parsed.slice(0, 12).join('\n- ')}${parsed.length > 12 ? '\n...' : ''}`);
+        });
+
+        runBtn.addEventListener('click', () => {
+            runBulkWorkflowCreation(uiContext).catch((error) => {
+                console.error('Workflow modal run failed:', error);
+            });
+        });
+
+        namesInput.focus();
     };
 
     const loadRecentIds = async () => {
@@ -2366,28 +3362,8 @@ ${error?.message || String(error)}`, 'invalid');
         renderRecentIdChips();
     };
 
-    chrome.storage.sync.get({ workflowSkipDuplicates: true, workflowTitleCase: false }, (saved) => {
-        if (workflowSkipDuplicates) workflowSkipDuplicates.checked = Boolean(saved.workflowSkipDuplicates);
-        if (workflowTitleCase) workflowTitleCase.checked = Boolean(saved.workflowTitleCase);
-    });
     await loadSlackTargetCache();
     await loadLinearSlackPrefs();
-
-    workflowNamesInput?.addEventListener('input', () => {
-        const parsed = parseWorkflowNames(workflowNamesInput.value);
-        updateWorkflowStatus(parsed.length ? `${parsed.length} workflow names parsed.` : 'Ready.');
-    });
-
-    testWorkflowParseBtn?.addEventListener('click', () => {
-        const parsed = parseWorkflowNames(workflowNamesInput?.value);
-        if (!parsed.length) {
-            updateWorkflowStatus('No workflow names parsed.', 'invalid');
-            return;
-        }
-        updateWorkflowStatus(`Parsed ${parsed.length} names\n- ${parsed.slice(0, 12).join('\n- ')}${parsed.length > 12 ? '\n...' : ''}`);
-    });
-
-    runWorkflowBulkBtn?.addEventListener('click', runBulkWorkflowCreation);
 
     generateLinearIssueDraftBtn?.addEventListener('click', () => {
         if (linearIssueSourceInput && !trimMultilineField(linearIssueSourceInput.value, 6000)) {
@@ -2455,9 +3431,11 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Could not trigger Linear reconcile run.');
         });
     });
-    const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
-    if (isLinearRunActiveOnLoad) {
-        startLinearTriggerStatusPolling();
+    if (hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
+        const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
+        if (isLinearRunActiveOnLoad) {
+            startLinearTriggerStatusPolling();
+        }
     }
 
     const refreshDocSuggestions = async ({ force = false } = {}) => {
@@ -2572,12 +3550,21 @@ ${error?.message || String(error)}`, 'invalid');
 
     runUuidPickerToolBtn?.addEventListener('click', openUuidPickerModal);
     runListDocmanGroupsToolBtn?.addEventListener('click', openDocmanGroupsModal);
+    runEmailFormatterToolBtn?.addEventListener('click', openEmailFormatterModal);
+    runWorkflowGroupsToolBtn?.addEventListener('click', () => {
+        openWorkflowGroupsModal().catch((error) => {
+            console.error('Failed to open workflow groups modal:', error);
+            showToast('Workflow Groups failed to open.');
+        });
+    });
 
     updateDocValidation();
     updateJobValidation();
     updateBulkValidation();
-    await loadRecentIds();
-    await syncDashboardSuggestionRows({ silent: true });
+    if (hasAnyExtensionFeature(['job_panel', 'linear_create_issue'])) {
+        await loadRecentIds();
+        await syncDashboardSuggestionRows({ silent: true });
+    }
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
@@ -2598,29 +3585,33 @@ ${error?.message || String(error)}`, 'invalid');
         }
     });
 
-    await tryAutoSelectPracticeFromActiveTab();
+    if (hasExtensionFeature('practice_navigator')) {
+        await tryAutoSelectPracticeFromActiveTab();
+    }
 
-    showView('practiceNavigatorView');
+    showView(getInitialAccessibleViewId());
 
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
-    try {
-        const cache = await syncPracticeCache();
-        const cacheSize = Object.keys(cache || {}).length;
+    if (hasExtensionFeature('practice_navigator')) {
+        try {
+            const cache = await syncPracticeCache();
+            const cacheSize = Object.keys(cache || {}).length;
 
-        if (cacheSize === 0) {
-            // Compatibility fallback when background returns cache without scrape refresh
-            const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-            if (response && response.practiceCache) {
-                setCachedPractices(response.practiceCache);
-                Navigator.buildCdbIndex();
-                console.log('Cache loaded:', Object.keys(response.practiceCache).length);
-                return;
+            if (cacheSize === 0) {
+                // Compatibility fallback when background returns cache without scrape refresh
+                const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+                if (response && response.practiceCache) {
+                    setCachedPractices(response.practiceCache);
+                    Navigator.buildCdbIndex();
+                    console.log('Cache loaded:', Object.keys(response.practiceCache).length);
+                    return;
+                }
             }
-        }
 
-        console.log('Cache loaded:', cacheSize);
-        await tryAutoSelectPracticeFromActiveTab();
-    } catch (e) { console.error("Cache load error:", e); }
+            console.log('Cache loaded:', cacheSize);
+            await tryAutoSelectPracticeFromActiveTab();
+        } catch (e) { console.error("Cache load error:", e); }
+    }
 });
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
