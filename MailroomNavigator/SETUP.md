@@ -125,6 +125,34 @@ Required local setup:
 
 If not configured, the endpoint returns a clear error in extension status/logs.
 
+## 5.1 User Management
+
+MailroomNavigator access is now owner-controlled and centrally synced through the local trigger service + Linear.
+
+1. Open the panel while signed in to BetterLetter.
+2. The BetterLetter account `nur.siddique@dyad.net` is the fixed owner.
+3. Open `Others` -> `Access Control`.
+4. Add other BetterLetter user emails and choose:
+   - `Admin`
+   - `User`
+5. Enable only the features they should use.
+
+Notes:
+
+- access is matched against the signed-in BetterLetter user email
+- only `nur.siddique@dyad.net` can manage access
+- owner access is always full
+- `Admin` and `User` are centrally synced; neither can self-elevate through the UI
+- regular users only see the views and buttons that are enabled for them
+- current BetterLetter user is detected from the active BetterLetter session/tab
+- if identity is not detected, open a signed-in BetterLetter tab and reload the extension
+- after updating the trigger server code, restart the local trigger service:
+
+```bash
+cd MailroomNavigator/automation
+./install-linear-trigger-launchagent.sh
+```
+
 ## 6. Upgrade / Reinstall
 
 After pulling updates:
