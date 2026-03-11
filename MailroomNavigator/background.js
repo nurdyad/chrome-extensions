@@ -9,10 +9,17 @@
  * - Cross-window tab reuse/open helpers
  */
 
+try {
+    importScripts('deployment_defaults.js');
+} catch (error) {
+    // Deployment defaults are optional. Local development can run without them.
+}
+
 // --- 1. Global State ---
 let practiceCache = {}; 
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; 
 let isScrapingActive = false; 
+let practiceCacheRefreshPromise = null;
 const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
 const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
 const LIVE_COUNTS_CACHE_TTL_MS = 45 * 1000;
@@ -21,11 +28,17 @@ const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
 const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
+const EXTENSION_ACCESS_RESOLVE_TIMEOUT_MS = 1800;
 const EXTENSION_ACCESS_CACHE_TTL_MS = 2 * 60 * 1000;
 const EXTENSION_USER_MANAGEMENT_STORAGE_KEY = 'extensionUserManagementV1';
 const EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY = 'extensionUserIdentityOverrideV1';
 const BETTERLETTER_IDENTITY_SNAPSHOT_STORAGE_KEY = 'betterletterIdentitySnapshotV1';
+const EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY = 'extensionAccessStateSnapshotV1';
+const ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY = 'accessControlServiceConfigV1';
 const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
+const ACCESS_CONTROL_REMOTE_TIMEOUT_MS = 6000;
+const ACCESS_CONTROL_SHARED_KEY_HEADER = 'X-MailroomNavigator-Access-Key';
+const DEPLOYMENT_DEFAULTS = globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS || {};
 const liveCountsCacheByOds = new Map();
 const liveCountsTempFetchInFlightByOds = new Map();
 const liveCountsLastTempFetchAtByOds = new Map();
@@ -37,6 +50,7 @@ const MORNING_DASHBOARD_ALERT_MIN_INTERVAL_MS = 10 * 60 * 1000;
 const MORNING_DASHBOARD_ALERT_FETCH_TIMEOUT_MS = 14000;
 const MORNING_DASHBOARD_ALERT_WINDOW_START_HOUR = 7;
 const MORNING_DASHBOARD_ALERT_WINDOW_END_HOUR = 17;
+const MORNING_DASHBOARD_BROWSER_ALERT_ENABLED = false;
 const HOTKEY_SHOW_LIVE_SUMMARY_COMMAND = 'show_live_dashboard_summary';
 const HOTKEY_TOOLTIP_AUTO_HIDE_MS = 8500;
 const MORNING_DASHBOARD_ALERT_REQUESTS = [
@@ -62,7 +76,6 @@ const MORNING_DASHBOARD_ALERT_REQUESTS = [
     }
 ];
 const CACHE_REQUIRED_ACTIONS = new Set([
-    'getPracticeCache',
     'requestActiveScrape',
     'getPracticeStatus',
     'hydratePracticeCdb'
@@ -108,6 +121,7 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
 
 let extensionAccessStateCache = null;
+const extensionAccessResolveInFlightByKey = new Map();
 
 async function clearLegacyMailroomApiStorage() {
     try {
@@ -253,6 +267,62 @@ function clampLinearPriority(value) {
 
 function normalizeSlackTargetType(value) {
     return String(value || '').trim().toLowerCase() === 'user' ? 'user' : 'channel';
+}
+
+function sanitizeServiceBaseUrl(value) {
+    try {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        const url = new URL(raw);
+        if (!/^https?:$/i.test(url.protocol)) return '';
+        url.hash = '';
+        return url.toString().replace(/\/+$/, '');
+    } catch {
+        return '';
+    }
+}
+
+function getDeploymentDefaultAccessServiceBaseUrl() {
+    return sanitizeServiceBaseUrl(DEPLOYMENT_DEFAULTS?.sharedAccessServiceBaseUrl);
+}
+
+function sanitizeAccessControlServiceConfig(rawConfig = null) {
+    const baseUrl = sanitizeServiceBaseUrl(rawConfig?.baseUrl);
+    const sharedKey = sanitizeSingleLine(rawConfig?.sharedKey, 240);
+    const useLocalOverride = Boolean(rawConfig?.useLocalOverride);
+    const defaultBaseUrl = getDeploymentDefaultAccessServiceBaseUrl();
+    const effectiveBaseUrl = useLocalOverride ? '' : (baseUrl || defaultBaseUrl);
+    return {
+        enabled: Boolean(effectiveBaseUrl),
+        baseUrl: effectiveBaseUrl,
+        sharedKey: useLocalOverride ? '' : sharedKey,
+        useLocalOverride,
+        isDefault: Boolean(!useLocalOverride && !baseUrl && defaultBaseUrl),
+        defaultBaseUrl
+    };
+}
+
+async function getStoredAccessControlServiceConfig() {
+    try {
+        const result = await chrome.storage.local.get([ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY]);
+        return sanitizeAccessControlServiceConfig(result?.[ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY]);
+    } catch {
+        return sanitizeAccessControlServiceConfig(null);
+    }
+}
+
+async function saveStoredAccessControlServiceConfig(rawConfig = null) {
+    const useLocalOverride = Boolean(rawConfig?.useLocalOverride);
+    const config = sanitizeAccessControlServiceConfig(rawConfig);
+    await chrome.storage.local.set({
+        [ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY]: {
+            baseUrl: useLocalOverride ? '' : sanitizeServiceBaseUrl(rawConfig?.baseUrl),
+            sharedKey: useLocalOverride ? '' : sanitizeSingleLine(rawConfig?.sharedKey, 240),
+            useLocalOverride
+        }
+    });
+    clearExtensionAccessCache();
+    return config;
 }
 
 function sanitizeLinearSlackPayload(rawSlack = null) {
@@ -406,9 +476,11 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
     }
 }
 
-async function handleSyncLinearSlackWorkspaceTargets() {
+async function handleSyncLinearSlackWorkspaceTargets(rawOptions = null) {
     try {
-        const { response, payload } = await callLinearTriggerServer('/slack/targets', { method: 'GET' });
+        const force = Boolean(rawOptions && typeof rawOptions === 'object' && rawOptions.force);
+        const path = force ? '/slack/targets?force=1' : '/slack/targets';
+        const { response, payload } = await callLinearTriggerServer(path, { method: 'GET' });
         if (!response.ok || !payload?.ok) {
             return {
                 success: false,
@@ -430,7 +502,8 @@ async function handleSyncLinearSlackWorkspaceTargets() {
 
 function sanitizeLinearTriggerRunPayload(rawPayload = {}) {
     return {
-        dryRun: Boolean(rawPayload?.dryRun)
+        dryRun: Boolean(rawPayload?.dryRun),
+        slack: sanitizeLinearSlackPayload(rawPayload?.slack)
     };
 }
 
@@ -471,7 +544,8 @@ function sanitizeLinearTriggerRun(rawRun = null) {
         skippedDuplicatesTotal: Number.isFinite(Number(rawRun.skippedDuplicatesTotal)) ? Number(rawRun.skippedDuplicatesTotal) : 0,
         actionableFoundTotal: Number.isFinite(Number(rawRun.actionableFoundTotal)) ? Number(rawRun.actionableFoundTotal) : 0,
         issueCandidatesTotal: Number.isFinite(Number(rawRun.issueCandidatesTotal)) ? Number(rawRun.issueCandidatesTotal) : 0,
-        floodMode: Boolean(rawRun.floodMode)
+        floodMode: Boolean(rawRun.floodMode),
+        slackNotification: sanitizeLinearSlackResult(rawRun.slackNotification)
     };
 }
 
@@ -488,6 +562,10 @@ function sanitizeExtensionAccessState(rawAccess = null) {
             matchedRule: '',
             reason: '',
             detectionSource: '',
+            requestStatus: '',
+            requestRequestedAt: '',
+            requestUpdatedAt: '',
+            requestRequestedFeatures: [],
             features: Object.fromEntries(EXTENSION_FEATURE_KEYS.map((key) => [key, false])),
             featureCatalog: EXTENSION_FEATURE_CATALOG.map((feature) => ({ ...feature }))
         };
@@ -509,8 +587,46 @@ function sanitizeExtensionAccessState(rawAccess = null) {
         matchedRule: sanitizeSingleLine(rawAccess.matchedRule, 120),
         reason: sanitizeSingleLine(rawAccess.reason, 260),
         detectionSource: sanitizeSingleLine(rawAccess.detectionSource, 120),
+        requestStatus: sanitizeSingleLine(rawAccess.requestStatus, 40),
+        requestRequestedAt: sanitizeSingleLine(rawAccess.requestRequestedAt, 80),
+        requestUpdatedAt: sanitizeSingleLine(rawAccess.requestUpdatedAt, 80),
+        requestRequestedFeatures: Array.isArray(rawAccess?.requestRequestedFeatures)
+            ? rawAccess.requestRequestedFeatures
+                .map((featureKey) => sanitizeSingleLine(featureKey, 64))
+                .filter((featureKey) => EXTENSION_FEATURE_KEYS.includes(featureKey))
+            : [],
         features,
         featureCatalog: EXTENSION_FEATURE_CATALOG.map((feature) => ({ ...feature }))
+    };
+}
+
+function buildUnavailableExtensionAccessState(identity = null, reason = '') {
+    return sanitizeExtensionAccessState({
+        initialized: Boolean(normalizeEmail(identity?.email)),
+        allowed: false,
+        isOwner: false,
+        canManageUsers: false,
+        role: '',
+        email: normalizeEmail(identity?.email),
+        reason,
+        detectionSource: sanitizeSingleLine(identity?.source, 120),
+        features: buildExtensionFeatureAccessMap([], false)
+    });
+}
+
+function sanitizeStoredExtensionAccessSnapshot(rawSnapshot = null) {
+    if (!rawSnapshot || typeof rawSnapshot !== 'object') {
+        return {
+            email: '',
+            checkedAt: 0,
+            access: sanitizeExtensionAccessState(null)
+        };
+    }
+
+    return {
+        email: normalizeEmail(rawSnapshot.email),
+        checkedAt: Number.isFinite(Number(rawSnapshot.checkedAt)) ? Number(rawSnapshot.checkedAt) : 0,
+        access: sanitizeExtensionAccessState(rawSnapshot.access)
     };
 }
 
@@ -572,6 +688,43 @@ async function getStoredBetterLetterIdentitySnapshot() {
     } catch (error) {
         return sanitizeBetterLetterIdentitySnapshot(null);
     }
+}
+
+async function getStoredExtensionAccessSnapshot() {
+    if (extensionAccessStateCache?.storedAccessSnapshot?.email) {
+        return sanitizeStoredExtensionAccessSnapshot(extensionAccessStateCache.storedAccessSnapshot);
+    }
+    try {
+        const result = await chrome.storage.local.get([EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY]);
+        const snapshot = sanitizeStoredExtensionAccessSnapshot(result?.[EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY]);
+        extensionAccessStateCache = {
+            ...(extensionAccessStateCache || {}),
+            storedAccessSnapshot: snapshot
+        };
+        return snapshot;
+    } catch (error) {
+        return sanitizeStoredExtensionAccessSnapshot(null);
+    }
+}
+
+async function saveStoredExtensionAccessSnapshot(access, checkedAt = Date.now()) {
+    const sanitizedAccess = sanitizeExtensionAccessState(access);
+    const snapshot = sanitizeStoredExtensionAccessSnapshot({
+        email: sanitizedAccess.email,
+        checkedAt,
+        access: sanitizedAccess
+    });
+    if (!snapshot.email) return snapshot;
+    try {
+        await chrome.storage.local.set({ [EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY]: snapshot });
+    } catch (error) {
+        // Ignore persistence failures; runtime cache still helps for this session.
+    }
+    extensionAccessStateCache = {
+        ...(extensionAccessStateCache || {}),
+        storedAccessSnapshot: snapshot
+    };
+    return snapshot;
 }
 
 function normalizeManagedUserRole(rawRole) {
@@ -803,15 +956,21 @@ function serializeManagedUserForUi(userRecord = null) {
     };
 }
 
-async function callLinearTriggerServer(path, { method = 'GET', body = null } = {}) {
+async function callJsonService(baseUrl, path, {
+    method = 'GET',
+    body = null,
+    timeoutMs = LINEAR_TRIGGER_SERVER_TIMEOUT_MS,
+    extraHeaders = {}
+} = {}) {
     const normalizedPath = String(path || '').trim().startsWith('/') ? String(path).trim() : `/${String(path || '').trim()}`;
-    const targetUrl = `${LINEAR_TRIGGER_SERVER_BASE_URL}${normalizedPath}`;
+    const targetUrl = `${String(baseUrl || '').replace(/\/+$/, '')}${normalizedPath}`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), LINEAR_TRIGGER_SERVER_TIMEOUT_MS);
+    const resolvedTimeoutMs = Math.max(250, Number(timeoutMs) || LINEAR_TRIGGER_SERVER_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
-        const headers = { 'Accept': 'application/json' };
+        const headers = { 'Accept': 'application/json', ...extraHeaders };
         const init = { method, headers, signal: controller.signal };
         if (body !== null) {
             headers['Content-Type'] = 'application/json';
@@ -832,6 +991,32 @@ async function callLinearTriggerServer(path, { method = 'GET', body = null } = {
     }
 }
 
+async function callLinearTriggerServer(path, options = {}) {
+    return callJsonService(LINEAR_TRIGGER_SERVER_BASE_URL, path, options);
+}
+
+async function callAccessControlService(path, options = {}) {
+    const config = await getStoredAccessControlServiceConfig();
+    const usingRemoteConfig = Boolean(config.enabled && config.baseUrl);
+    const baseUrl = usingRemoteConfig ? config.baseUrl : LINEAR_TRIGGER_SERVER_BASE_URL;
+    const extraHeaders = { ...(options.extraHeaders || {}) };
+    if (usingRemoteConfig && config.sharedKey) {
+        extraHeaders[ACCESS_CONTROL_SHARED_KEY_HEADER] = config.sharedKey;
+    }
+    const request = await callJsonService(baseUrl, path, {
+        ...options,
+        timeoutMs: usingRemoteConfig
+            ? Math.max(250, Number(options.timeoutMs) || ACCESS_CONTROL_REMOTE_TIMEOUT_MS)
+            : options.timeoutMs,
+        extraHeaders
+    });
+    return {
+        ...request,
+        usingRemoteConfig,
+        baseUrl
+    };
+}
+
 function normalizeLinearTriggerError(error) {
     const errorName = sanitizeSingleLine(error?.name, 80).toLowerCase();
     if (errorName === 'aborterror') {
@@ -845,6 +1030,30 @@ function normalizeLinearTriggerError(error) {
 
     if (message.toLowerCase().includes('failed to fetch')) {
         return 'Local trigger service is unavailable. Run install-linear-trigger-launchagent.sh.';
+    }
+
+    return message;
+}
+
+function normalizeAccessControlServiceError(error, { usingRemoteConfig = false } = {}) {
+    const errorName = sanitizeSingleLine(error?.name, 80).toLowerCase();
+    if (errorName === 'aborterror') {
+        return usingRemoteConfig
+            ? 'Shared access service timed out.'
+            : 'Local trigger service timed out.';
+    }
+
+    const message = sanitizeSingleLine(error?.message, 220);
+    if (!message) {
+        return usingRemoteConfig
+            ? 'Shared access service is unavailable.'
+            : 'Local trigger service is unavailable.';
+    }
+
+    if (message.toLowerCase().includes('failed to fetch')) {
+        return usingRemoteConfig
+            ? 'Shared access service is unavailable.'
+            : 'Local trigger service is unavailable. Run install-linear-trigger-launchagent.sh.';
     }
 
     return message;
@@ -1334,25 +1543,11 @@ async function fetchMorningDashboardSummaryFromSession() {
 }
 
 async function showMorningDashboardAlertInTab(tabId, summary) {
-    if (typeof tabId !== 'number') return false;
-    const message = buildMorningDashboardSummaryMessage(summary);
-    if (!message.trim()) return false;
-
-    try {
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            func: (text) => {
-                window.alert(String(text || 'BetterLetter morning summary is ready.'));
-            },
-            args: [message]
-        });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    return false;
 }
 
 async function maybeTriggerMorningDashboardAlert(tabId, tabUrl, reason = '') {
+    if (!MORNING_DASHBOARD_BROWSER_ALERT_ENABLED) return;
     if (morningDashboardAlertInFlight) return;
     if (typeof tabId !== 'number') return;
     if (!isBetterLetterUrl(tabUrl)) return;
@@ -1990,6 +2185,7 @@ async function handleGetExtensionAccessState(rawPayload = {}, sender = null) {
             ? rawPayload.preferredTabId
             : (typeof sender?.tab?.id === 'number' ? sender.tab.id : null);
         const forceRefresh = Boolean(rawPayload?.forceRefresh);
+        const allowStale = Boolean(rawPayload?.allowStale);
         const identity = await resolveCurrentBetterLetterUserIdentity({ preferredTabId, forceRefresh });
         const cacheKey = `${identity.email || 'unknown'}|${preferredTabId || 'any'}`;
         const now = Date.now();
@@ -2004,34 +2200,106 @@ async function handleGetExtensionAccessState(rawPayload = {}, sender = null) {
                 access: extensionAccessStateCache.access
             };
         }
+        const storedAccessSnapshot = await getStoredExtensionAccessSnapshot();
+        const matchingStoredAccess = storedAccessSnapshot?.email && storedAccessSnapshot.email === identity.email
+            ? sanitizeExtensionAccessState({
+                ...storedAccessSnapshot.access,
+                email: identity.email || storedAccessSnapshot.access?.email || '',
+                detectionSource: identity.source || storedAccessSnapshot.access?.detectionSource || ''
+            })
+            : null;
+        const storedAccessAgeMs = Math.max(0, now - Number(storedAccessSnapshot?.checkedAt || 0));
+        const canUseStoredAccess = Boolean(matchingStoredAccess) && (allowStale || storedAccessAgeMs < EXTENSION_ACCESS_CACHE_TTL_MS);
 
-        const { response, payload } = await callLinearTriggerServer('/access/resolve', {
-            method: 'POST',
-            body: { email: identity.email }
-        });
-        if (!response.ok || !payload?.ok) {
+        if (!forceRefresh && canUseStoredAccess) {
+            extensionAccessStateCache = {
+                ...(extensionAccessStateCache || {}),
+                cacheKey,
+                access: matchingStoredAccess,
+                checkedAt: storedAccessSnapshot.checkedAt || now
+            };
             return {
-                success: false,
-                error: sanitizeSingleLine(payload?.error, 240) || `Access check failed with status ${response.status}.`
+                success: true,
+                access: matchingStoredAccess,
+                stale: true
             };
         }
 
-        const access = sanitizeExtensionAccessState({
-            ...(payload?.access || {}),
-            email: identity.email || payload?.access?.email || '',
-            detectionSource: identity.source || ''
-        });
-        extensionAccessStateCache = {
-            ...(extensionAccessStateCache || {}),
-            cacheKey,
-            access,
-            checkedAt: now
-        };
-        return { success: true, access };
+        if (extensionAccessResolveInFlightByKey.has(cacheKey)) {
+            return await extensionAccessResolveInFlightByKey.get(cacheKey);
+        }
+
+        const resolvePromise = (async () => {
+            let usingRemoteConfig = false;
+            try {
+                const serviceResponse = await callAccessControlService('/access/resolve', {
+                    method: 'POST',
+                    body: { email: identity.email },
+                    timeoutMs: allowStale ? EXTENSION_ACCESS_RESOLVE_TIMEOUT_MS : LINEAR_TRIGGER_SERVER_TIMEOUT_MS
+                });
+                const { response, payload } = serviceResponse;
+                usingRemoteConfig = Boolean(serviceResponse?.usingRemoteConfig);
+                if (!response.ok || !payload?.ok) {
+                    if (matchingStoredAccess) {
+                        return {
+                            success: true,
+                            access: matchingStoredAccess,
+                            stale: true
+                        };
+                    }
+                    return {
+                        success: true,
+                        access: buildUnavailableExtensionAccessState(
+                            identity,
+                            sanitizeSingleLine(payload?.error, 240)
+                                || `Access check failed with status ${response.status}.`
+                        ),
+                        stale: false
+                    };
+                }
+
+                const access = sanitizeExtensionAccessState({
+                    ...(payload?.access || {}),
+                    email: identity.email || payload?.access?.email || '',
+                    detectionSource: identity.source || ''
+                });
+                extensionAccessStateCache = {
+                    ...(extensionAccessStateCache || {}),
+                    cacheKey,
+                    access,
+                    checkedAt: Date.now()
+                };
+                await saveStoredExtensionAccessSnapshot(access, Date.now());
+                return { success: true, access, stale: false };
+            } catch (error) {
+                if (matchingStoredAccess) {
+                    return {
+                        success: true,
+                        access: matchingStoredAccess,
+                        stale: true
+                    };
+                }
+                return {
+                    success: true,
+                    access: buildUnavailableExtensionAccessState(
+                        identity,
+                        normalizeAccessControlServiceError(error, { usingRemoteConfig })
+                    ),
+                    stale: false
+                };
+            }
+        })();
+
+        extensionAccessResolveInFlightByKey.set(cacheKey, resolvePromise);
+        try {
+            return await resolvePromise;
+        } finally {
+            extensionAccessResolveInFlightByKey.delete(cacheKey);
+        }
     } catch (error) {
         return {
-            success: false,
-            error: normalizeLinearTriggerError(error)
+            success: true,
+            access: buildUnavailableExtensionAccessState(null, normalizeAccessControlServiceError(error))
         };
     }
 }
@@ -2068,7 +2336,7 @@ async function handleGetExtensionUserManagement(rawPayload = {}, sender = null) 
         if (!accessResult?.success || !accessResult?.access) {
             return accessResult;
         }
-        const { response, payload } = await callLinearTriggerServer('/access/management', {
+        const { response, payload } = await callAccessControlService('/access/management', {
             method: 'POST',
             body: { actorEmail: accessResult.access.email }
         });
@@ -2087,7 +2355,7 @@ async function handleGetExtensionUserManagement(rawPayload = {}, sender = null) 
     } catch (error) {
         return {
             success: false,
-            error: sanitizeSingleLine(error?.message, 240) || 'Could not load user management.'
+            error: normalizeAccessControlServiceError(error)
         };
     }
 }
@@ -2098,7 +2366,7 @@ async function handleSaveExtensionManagedUser(rawPayload = {}, sender = null) {
         if (!accessResult?.success || !accessResult?.access) {
             return accessResult;
         }
-        const { response, payload } = await callLinearTriggerServer('/access/save-user', {
+        const { response, payload } = await callAccessControlService('/access/save-user', {
             method: 'POST',
             body: {
                 actorEmail: accessResult.access.email,
@@ -2115,12 +2383,13 @@ async function handleSaveExtensionManagedUser(rawPayload = {}, sender = null) {
         }
         return {
             success: true,
-            management: payload.management
+            management: payload.management,
+            alert: payload.management?.alert || payload.alert || null
         };
     } catch (error) {
         return {
             success: false,
-            error: sanitizeSingleLine(error?.message, 240) || 'Could not save MailroomNavigator user.'
+            error: normalizeAccessControlServiceError(error)
         };
     }
 }
@@ -2131,7 +2400,7 @@ async function handleDeleteExtensionManagedUser(rawPayload = {}, sender = null) 
         if (!accessResult?.success || !accessResult?.access) {
             return accessResult;
         }
-        const { response, payload } = await callLinearTriggerServer('/access/delete-user', {
+        const { response, payload } = await callAccessControlService('/access/delete-user', {
             method: 'POST',
             body: {
                 actorEmail: accessResult.access.email,
@@ -2146,12 +2415,95 @@ async function handleDeleteExtensionManagedUser(rawPayload = {}, sender = null) 
         }
         return {
             success: true,
+            management: payload.management,
+            alert: payload.management?.alert || payload.alert || null
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeAccessControlServiceError(error)
+        };
+    }
+}
+
+async function handleSubmitExtensionAccessRequest(rawPayload = {}, sender = null) {
+    try {
+        const accessResult = await handleGetExtensionAccessState({
+            preferredTabId: rawPayload?.preferredTabId,
+            allowStale: true
+        }, sender);
+        const requesterEmail = normalizeEmail(accessResult?.access?.email);
+        if (!requesterEmail) {
+            return {
+                success: false,
+                error: 'Open a signed-in BetterLetter page first so MailroomNavigator can detect your email.'
+            };
+        }
+
+        const { response, payload } = await callAccessControlService('/access/request', {
+            method: 'POST',
+            body: {
+                email: requesterEmail,
+                note: sanitizeMultiline(rawPayload?.note, 1200),
+                requestedFeatures: Array.isArray(rawPayload?.requestedFeatures) ? rawPayload.requestedFeatures : []
+            }
+        });
+        if (!response.ok || !payload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Could not submit access request (status ${response.status}).`
+            };
+        }
+
+        const access = sanitizeExtensionAccessState({
+            ...(payload?.access || {}),
+            email: requesterEmail || payload?.access?.email || accessResult?.access?.email || '',
+            detectionSource: accessResult?.access?.detectionSource || ''
+        });
+        await saveStoredExtensionAccessSnapshot(access, Date.now());
+        return {
+            success: true,
+            access,
+            request: payload?.request || null,
+            alert: payload?.alert || null
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeAccessControlServiceError(error)
+        };
+    }
+}
+
+async function handleReviewExtensionAccessRequest(rawPayload = {}, sender = null) {
+    try {
+        const accessResult = await handleGetExtensionAccessState({}, sender);
+        if (!accessResult?.success || !accessResult?.access) {
+            return accessResult;
+        }
+        const { response, payload } = await callAccessControlService('/access/review-request', {
+            method: 'POST',
+            body: {
+                actorEmail: accessResult.access.email,
+                email: normalizeEmail(rawPayload?.email),
+                action: sanitizeSingleLine(rawPayload?.action, 40),
+                reviewNote: sanitizeMultiline(rawPayload?.reviewNote, 600)
+            }
+        });
+        if (!response.ok || !payload?.ok || !payload?.management) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Could not review request (status ${response.status}).`
+            };
+        }
+        return {
+            success: true,
             management: payload.management
         };
     } catch (error) {
         return {
             success: false,
-            error: sanitizeSingleLine(error?.message, 240) || 'Could not delete MailroomNavigator user.'
+            error: normalizeAccessControlServiceError(error)
         };
     }
 }
@@ -2373,6 +2725,73 @@ async function handleGetExtensionIdentityDiagnostics(rawPayload = {}, sender = n
         return {
             success: false,
             error: sanitizeSingleLine(error?.message, 240) || 'Could not inspect BetterLetter identity diagnostics.'
+        };
+    }
+}
+
+async function handleGetAccessControlServiceConfig() {
+    try {
+        return {
+            success: true,
+            config: await getStoredAccessControlServiceConfig()
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: sanitizeSingleLine(error?.message, 240) || 'Could not load access service config.'
+        };
+    }
+}
+
+async function handleSaveAccessControlServiceConfig(rawPayload = null) {
+    try {
+        const config = await saveStoredAccessControlServiceConfig(rawPayload);
+        return {
+            success: true,
+            config
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: sanitizeSingleLine(error?.message, 240) || 'Could not save access service config.'
+        };
+    }
+}
+
+async function handleGetAccessControlServiceHealth() {
+    let usingRemoteConfig = false;
+    try {
+        const serviceResponse = await callAccessControlService('/health', {
+            method: 'GET',
+            timeoutMs: ACCESS_CONTROL_REMOTE_TIMEOUT_MS
+        });
+        const { response, payload, baseUrl } = serviceResponse;
+        usingRemoteConfig = Boolean(serviceResponse?.usingRemoteConfig);
+        if (!response.ok || !payload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Access service health failed with status ${response.status}.`
+            };
+        }
+        return {
+            success: true,
+            health: {
+                usingRemoteConfig,
+                baseUrl: sanitizeServiceBaseUrl(baseUrl),
+                access: payload?.access && typeof payload.access === 'object'
+                    ? {
+                        enabled: Boolean(payload.access.enabled),
+                        ownerEmail: normalizeEmail(payload.access.ownerEmail),
+                        storage: sanitizeSingleLine(payload.access.storage, 32),
+                        storePath: sanitizeSingleLine(payload.access.storePath, 240)
+                    }
+                    : null
+            }
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeAccessControlServiceError(error, { usingRemoteConfig })
         };
     }
 }
@@ -3408,66 +3827,81 @@ async function loadCacheFromStorage() {
 }
 
 async function fetchAndCachePracticeList(purpose = 'background refresh') {
-    if (isScrapingActive) return [];
-    isScrapingActive = true;
-    try {
-        let practicesArray = await scrapePracticeListViaSessionTab();
-
-        if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
-            try {
-                await setupOffscreen();
-                const offscreenResult = await chrome.runtime.sendMessage({
-                    target: 'offscreen',
-                    action: 'scrapePracticeList',
-                    data: { url: `${BETTERLETTER_ORIGIN}/admin_panel/practices` }
-                });
-                if (Array.isArray(offscreenResult)) {
-                    practicesArray = offscreenResult;
-                }
-            } catch (e) {
-                // Offscreen context can fail in some Chromium builds; continue fallback chain.
-            }
-        }
-
-        if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
-            await loadCacheFromStorage();
+    if (practiceCacheRefreshPromise) {
+        try {
+            return await practiceCacheRefreshPromise;
+        } catch (error) {
             return Object.values(practiceCache || {});
         }
-        
-        const previousCache = practiceCache;
-        const previousByOds = new Map(
-            Object.values(previousCache || {})
-                .filter(practice => practice && practice.ods)
-                .map(practice => [practice.ods, practice])
-        );
+    }
 
-        practiceCache = {};
-        practicesArray.forEach(p => {
-            const previous = previousByOds.get(p.id) || {};
-            const mergedPractice = {
-                ods: p.id,
-                timestamp: Date.now(),
-                ...previous,
-                ...p,
-                cdb: p.cdb || previous.cdb || '',
-                collectionQuota: p.collectionQuota || previous.collectionQuota || '',
-                collectedToday: p.collectedToday || previous.collectedToday || '',
-                serviceLevel: p.serviceLevel || previous.serviceLevel || '',
-                ehrType: p.ehrType || previous.ehrType || ''
-            };
-            practiceCache[`${mergedPractice.name} (${mergedPractice.ods})`] = mergedPractice;
-        });
-        await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
+    practiceCacheRefreshPromise = (async () => {
+        isScrapingActive = true;
+        try {
+            let practicesArray = await scrapePracticeListViaSessionTab();
 
-        // Hydrate missing CDB values in the background without blocking UI responsiveness
-        hydrateMissingCdbs(15).catch(() => undefined);
+            if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
+                try {
+                    await setupOffscreen();
+                    const offscreenResult = await chrome.runtime.sendMessage({
+                        target: 'offscreen',
+                        action: 'scrapePracticeList',
+                        data: { url: `${BETTERLETTER_ORIGIN}/admin_panel/practices` }
+                    });
+                    if (Array.isArray(offscreenResult)) {
+                        practicesArray = offscreenResult;
+                    }
+                } catch (e) {
+                    // Offscreen context can fail in some Chromium builds; continue fallback chain.
+                }
+            }
 
-        return practicesArray;
-    } catch (e) {
-        await loadCacheFromStorage();
-        return Object.values(practiceCache || {});
+            if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
+                await loadCacheFromStorage();
+                return Object.values(practiceCache || {});
+            }
+            
+            const previousCache = practiceCache;
+            const previousByOds = new Map(
+                Object.values(previousCache || {})
+                    .filter(practice => practice && practice.ods)
+                    .map(practice => [practice.ods, practice])
+            );
+
+            practiceCache = {};
+            practicesArray.forEach(p => {
+                const previous = previousByOds.get(p.id) || {};
+                const mergedPractice = {
+                    ods: p.id,
+                    timestamp: Date.now(),
+                    ...previous,
+                    ...p,
+                    cdb: p.cdb || previous.cdb || '',
+                    collectionQuota: p.collectionQuota || previous.collectionQuota || '',
+                    collectedToday: p.collectedToday || previous.collectedToday || '',
+                    serviceLevel: p.serviceLevel || previous.serviceLevel || '',
+                    ehrType: p.ehrType || previous.ehrType || ''
+                };
+                practiceCache[`${mergedPractice.name} (${mergedPractice.ods})`] = mergedPractice;
+            });
+            await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
+
+            // Hydrate missing CDB values in the background without blocking UI responsiveness
+            hydrateMissingCdbs(15).catch(() => undefined);
+
+            return practicesArray;
+        } catch (e) {
+            await loadCacheFromStorage();
+            return Object.values(practiceCache || {});
+        } finally {
+            isScrapingActive = false;
+        }
+    })();
+
+    try {
+        return await practiceCacheRefreshPromise;
     } finally {
-        isScrapingActive = false;
+        practiceCacheRefreshPromise = null;
     }
 }
 
@@ -3730,11 +4164,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'getExtensionIdentityDiagnostics') {
             return await handleGetExtensionIdentityDiagnostics(message.payload, sender);
         }
+        if (message.action === 'getAccessControlServiceConfig') {
+            return await handleGetAccessControlServiceConfig();
+        }
+        if (message.action === 'saveAccessControlServiceConfig') {
+            return await handleSaveAccessControlServiceConfig(message.payload);
+        }
+        if (message.action === 'getAccessControlServiceHealth') {
+            return await handleGetAccessControlServiceHealth();
+        }
         if (message.action === 'saveExtensionManagedUser') {
             return await handleSaveExtensionManagedUser(message.payload, sender);
         }
         if (message.action === 'deleteExtensionManagedUser') {
             return await handleDeleteExtensionManagedUser(message.payload, sender);
+        }
+        if (message.action === 'submitExtensionAccessRequest') {
+            return await handleSubmitExtensionAccessRequest(message.payload, sender);
+        }
+        if (message.action === 'reviewExtensionAccessRequest') {
+            return await handleReviewExtensionAccessRequest(message.payload, sender);
         }
 
         if (PROTECTED_EXTENSION_ACTIONS.has(message?.action)) {
@@ -3752,7 +4201,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await ensureCacheLoaded();
         }
 
-        if (message.action === 'getPracticeCache') return { practiceCache };
+        if (message.action === 'getPracticeCache') {
+            if (Object.keys(practiceCache).length === 0) {
+                await loadCacheFromStorage();
+            }
+            return { practiceCache };
+        }
         if (message.action === 'openUrlInNewTab') {
             const targetUrl = String(message.url || '').trim();
             if (!isBetterLetterUrl(targetUrl)) {
@@ -3770,7 +4224,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return await handleCreateLinearIssueFromEnv(message.payload, sender);
         }
         if (message.action === 'syncLinearSlackWorkspaceTargets') {
-            return await handleSyncLinearSlackWorkspaceTargets();
+            return await handleSyncLinearSlackWorkspaceTargets(message);
         }
         if (message.action === 'triggerLinearBotJobsRun') {
             return await handleTriggerLinearBotJobsRun(message.payload);
