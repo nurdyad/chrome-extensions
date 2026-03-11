@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "auth:save": "node save-auth-local.mjs"
+    "auth:save": "node save-auth-local.mjs",
+    "trigger:start": "node linear-trigger-server.mjs"
   },
   "dependencies": {
     "dotenv": "^17.3.1",
