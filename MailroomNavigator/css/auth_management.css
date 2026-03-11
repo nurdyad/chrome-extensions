@@ -1,0 +1,256 @@
+/*
+ * auth_management.css
+ * Additional styles for the advanced Auth & User Management panel.
+ * Append (or @import) this file alongside the existing css/ files.
+ * These styles are scoped to #authMgmtRoot and .auth-* classes so they
+ * do not interfere with any existing styling.
+ */
+
+/* ─── Root container ─────────────────────────────────────────────────────── */
+
+#authMgmtRoot {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #111827;
+  line-height: 1.4;
+}
+
+/* ─── Tab bar ────────────────────────────────────────────────────────────── */
+
+.auth-tab-bar button {
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.auth-tab-bar button.active-tab {
+  background: #fff !important;
+  color: #1f2937 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .1) !important;
+}
+
+/* ─── Feature matrix ─────────────────────────────────────────────────────── */
+
+#authMgmt_featContainer label:hover {
+  background: #f0f9ff !important;
+  border-color: #93c5fd !important;
+}
+
+#authMgmt_featContainer input[type="checkbox"] {
+  accent-color: #2563eb;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* ─── User cards ─────────────────────────────────────────────────────────── */
+
+#authMgmt_userList .auth-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+  transition: box-shadow .15s;
+}
+
+#authMgmt_userList .auth-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .1);
+}
+
+/* ─── Summary stat cards ─────────────────────────────────────────────────── */
+
+.auth-stat-card {
+  text-align: center;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.auth-stat-card .stat-value {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.auth-stat-card .stat-label {
+  font-size: 10px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+/* ─── Audit log ──────────────────────────────────────────────────────────── */
+
+#authMgmt_tabContent .audit-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+#authMgmt_tabContent .audit-row:last-child {
+  border-bottom: none;
+}
+
+/* ─── Invite tokens ──────────────────────────────────────────────────────── */
+
+.invite-token-code {
+  font-family: 'SF Mono', 'Fira Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background .1s;
+}
+
+.invite-token-code:hover {
+  background: #e0e7ef;
+}
+
+/* ─── Bootstrap flow ─────────────────────────────────────────────────────── */
+
+.auth-bootstrap-box {
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  border: 1px solid #c4b5fd;
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+}
+
+/* ─── Role badges ────────────────────────────────────────────────────────── */
+
+.role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #fff;
+}
+
+.role-badge--owner       { background: #7c3aed; }
+.role-badge--super_admin { background: #7c3aed; }
+.role-badge--admin       { background: #2563eb; }
+.role-badge--user        { background: #374151; }
+
+/* ─── Search bar ─────────────────────────────────────────────────────────── */
+
+#authMgmtRoot input[type="search"]:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, .15);
+  outline: none;
+}
+
+/* ─── Scrollable log container ───────────────────────────────────────────── */
+
+#authMgmt_tabContent .log-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+#authMgmt_tabContent .log-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+#authMgmt_tabContent .log-scroll::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+/* ─── Form sections ──────────────────────────────────────────────────────── */
+
+#authMgmt_formContainer input,
+#authMgmt_formContainer select,
+#authMgmtRoot input[type="text"],
+#authMgmtRoot input[type="email"],
+#authMgmtRoot select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #111827;
+  background: #fff;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+#authMgmt_formContainer input:focus,
+#authMgmt_formContainer select:focus,
+#authMgmtRoot input[type="text"]:focus,
+#authMgmtRoot input[type="email"]:focus,
+#authMgmtRoot select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, .15);
+}
+
+/* ─── Smooth tab transitions ─────────────────────────────────────────────── */
+
+#authMgmt_tabContent {
+  animation: authFadeIn .18s ease;
+}
+
+@keyframes authFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* ─── Owner pill ─────────────────────────────────────────────────────────── */
+
+.auth-owner-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.auth-owner-pill .avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #7c3aed;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ─── Divider labels ─────────────────────────────────────────────────────── */
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.auth-divider hr {
+  flex: 1;
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 0;
+}
+
+.auth-divider span {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
