@@ -221,6 +221,34 @@ async function fetchExtensionUserManagement({ forceRefresh = false } = {}) {
     return response.management;
 }
 
+async function exportExtensionAccessPolicy() {
+    const response = await chrome.runtime.sendMessage({
+        action: 'exportExtensionAccessPolicy',
+        payload: {
+            preferredTabId: PANEL_HOST_TAB_ID
+        }
+    });
+    if (!response?.success || !response?.exported) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not export MailroomNavigator access policy.');
+    }
+    return response.exported;
+}
+
+async function importExtensionAccessPolicy({ policy, mode = 'merge' } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'importExtensionAccessPolicy',
+        payload: {
+            preferredTabId: PANEL_HOST_TAB_ID,
+            policy,
+            mode
+        }
+    });
+    if (!response?.success || !response?.management) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not import MailroomNavigator access policy.');
+    }
+    return response;
+}
+
 async function fetchExtensionIdentityDiagnostics({ forceRefresh = false } = {}) {
     const response = await chrome.runtime.sendMessage({
         action: 'getExtensionIdentityDiagnostics',
@@ -804,7 +832,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const sharedCallbacks = {
             fetchManagement: fetchExtensionUserManagement,
             getAccessServiceHealth: fetchAccessControlServiceHealth,
-            getIdentityDiagnostics: fetchExtensionIdentityDiagnostics
+            getIdentityDiagnostics: fetchExtensionIdentityDiagnostics,
+            exportAccessPolicy: exportExtensionAccessPolicy,
+            importAccessPolicy: importExtensionAccessPolicy
         };
 
         if (!enhancedAuthManagementReady) {

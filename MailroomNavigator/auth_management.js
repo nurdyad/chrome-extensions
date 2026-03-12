@@ -107,6 +107,9 @@ function normalizeManagement(rawManagement = {}) {
     featureCatalog: Array.isArray(rawManagement?.featureCatalog)
       ? rawManagement.featureCatalog
       : [],
+    counts: rawManagement?.counts && typeof rawManagement.counts === 'object'
+      ? rawManagement.counts
+      : {},
   };
 }
 
@@ -307,6 +310,8 @@ const AuthManagement = (() => {
     auditEntries: [],
     serviceHealth: null,
     identityDiagnostics: null,
+    migrationStatusMessage: '',
+    migrationStatusTone: 'neutral',
     callbacks: {},
   };
 
@@ -878,6 +883,15 @@ const AuthManagement = (() => {
     );
     container.appendChild(summary);
 
+    const isSharedService = Boolean(state.serviceHealth?.usingRemoteConfig && state.serviceHealth?.baseUrl);
+    if (!isSharedService && users.length === 0) {
+      const localWarning = document.createElement('div');
+      localWarning.className = 'validation-badge neutral';
+      localWarning.style.marginBottom = '12px';
+      localWarning.textContent = 'This machine is using its own local access store. Users granted on another machine will not appear here unless this extension points to the same shared access service, or you import the existing policy in the Service tab.';
+      container.appendChild(localWarning);
+    }
+
     const formContainer = document.createElement('div');
     formContainer.id = 'authMgmt_formContainer';
     renderUserForm(formContainer);
@@ -1156,6 +1170,10 @@ const AuthManagement = (() => {
       { label: 'Access role', value: state.accessState?.role || 'none' },
       { label: 'Detection source', value: state.accessState?.detectionSource || 'none' },
       { label: 'Store path', value: state.serviceHealth?.access?.storePath || 'hidden/unavailable' },
+      { label: 'Managed users', value: String(state.serviceHealth?.access?.managedUsers ?? '0') },
+      { label: 'Pending requests', value: String(state.serviceHealth?.access?.pendingRequests ?? '0') },
+      { label: 'Policy updated', value: state.serviceHealth?.access?.policyUpdatedAt ? formatDate(state.serviceHealth.access.policyUpdatedAt) : 'Unknown' },
+      { label: 'Management source', value: state.serviceHealth?.usingRemoteConfig && state.serviceHealth?.baseUrl ? state.serviceHealth.baseUrl : 'This machine (local service)' },
     ].forEach((item) => {
       const cell = document.createElement('div');
       cell.style.border = '1px solid #e5e7eb';
@@ -1190,6 +1208,126 @@ const AuthManagement = (() => {
     infoCard.appendChild(actions);
 
     container.appendChild(infoCard);
+
+    const serviceNotice = document.createElement('div');
+    serviceNotice.className = 'validation-badge neutral';
+    serviceNotice.style.marginTop = '12px';
+    serviceNotice.textContent = state.serviceHealth?.usingRemoteConfig && state.serviceHealth?.baseUrl
+      ? 'This browser is using a shared access service. User changes here should be visible to any other machine pointed at the same service.'
+      : 'This browser is using a machine-local access service. User changes here are stored only on this machine unless other machines are configured to use this machine as their shared access service.';
+    container.appendChild(serviceNotice);
+
+    const migrationCard = document.createElement('div');
+    migrationCard.className = 'auth-card';
+    migrationCard.style.marginTop = '12px';
+
+    const migrationTitle = document.createElement('div');
+    migrationTitle.style.fontSize = '12px';
+    migrationTitle.style.fontWeight = '700';
+    migrationTitle.textContent = 'Policy Migration';
+    migrationCard.appendChild(migrationTitle);
+
+    const migrationHelp = document.createElement('div');
+    migrationHelp.style.fontSize = '11px';
+    migrationHelp.style.color = '#6b7280';
+    migrationHelp.style.marginTop = '6px';
+    migrationHelp.textContent = 'Use export/import to move the access policy from an older machine to the current source-of-truth service. Merge keeps existing local entries and overlays imported users/requests. Replace overwrites the current policy with the imported one.';
+    migrationCard.appendChild(migrationHelp);
+
+    const migrationStatus = document.createElement('div');
+    migrationStatus.className = 'validation-badge neutral';
+    migrationStatus.style.marginTop = '10px';
+    setStatus(
+      migrationStatus,
+      state.migrationStatusMessage || 'No import/export action run yet.',
+      state.migrationStatusTone || 'neutral',
+    );
+    migrationCard.appendChild(migrationStatus);
+
+    const migrationTextarea = document.createElement('textarea');
+    migrationTextarea.rows = 8;
+    migrationTextarea.placeholder = 'Paste exported access policy JSON here to import.';
+    migrationTextarea.style.marginTop = '10px';
+    migrationTextarea.style.width = '100%';
+    migrationTextarea.style.resize = 'vertical';
+    migrationCard.appendChild(migrationTextarea);
+
+    const migrationActions = document.createElement('div');
+    migrationActions.style.display = 'flex';
+    migrationActions.style.flexWrap = 'wrap';
+    migrationActions.style.gap = '8px';
+    migrationActions.style.marginTop = '10px';
+
+    const copyExportButton = createButton('Copy Policy JSON', 'btn-ghost', async () => {
+      copyExportButton.disabled = true;
+      try {
+        const exported = await state.callbacks.exportAccessPolicy();
+        const text = JSON.stringify(exported?.policy || {}, null, 2);
+        await navigator.clipboard.writeText(text);
+        migrationTextarea.value = text;
+        state.migrationStatusMessage = `Policy JSON copied. Source: ${exported?.storePath || 'unknown'} | users=${String(exported?.counts?.users ?? 0)} | requests=${String(exported?.counts?.requests ?? 0)}`;
+        state.migrationStatusTone = 'valid';
+        setStatus(
+          migrationStatus,
+          state.migrationStatusMessage,
+          state.migrationStatusTone,
+        );
+      } catch (error) {
+        state.migrationStatusMessage = String(error?.message || 'Could not export policy.').trim();
+        state.migrationStatusTone = 'invalid';
+        setStatus(migrationStatus, state.migrationStatusMessage, state.migrationStatusTone);
+      } finally {
+        copyExportButton.disabled = false;
+      }
+    });
+
+    const mergeImportButton = createButton('Import Merge', '', async () => {
+      mergeImportButton.disabled = true;
+      replaceImportButton.disabled = true;
+      try {
+        const parsed = JSON.parse(String(migrationTextarea.value || '').trim() || '{}');
+        const response = await state.callbacks.importAccessPolicy({ policy: parsed, mode: 'merge' });
+        state.management = normalizeManagement(response.management);
+        await loadServiceDiagnostics({ forceRefresh: true });
+        state.migrationStatusMessage = `Policy merged successfully at ${formatDate(response.importedAt)}.`;
+        state.migrationStatusTone = 'valid';
+        setStatus(migrationStatus, state.migrationStatusMessage, state.migrationStatusTone);
+        await render();
+      } catch (error) {
+        state.migrationStatusMessage = String(error?.message || 'Could not merge imported policy.').trim();
+        state.migrationStatusTone = 'invalid';
+        setStatus(migrationStatus, state.migrationStatusMessage, state.migrationStatusTone);
+      } finally {
+        mergeImportButton.disabled = false;
+        replaceImportButton.disabled = false;
+      }
+    });
+
+    const replaceImportButton = createButton('Import Replace', 'btn-ghost', async () => {
+      replaceImportButton.disabled = true;
+      mergeImportButton.disabled = true;
+      try {
+        const parsed = JSON.parse(String(migrationTextarea.value || '').trim() || '{}');
+        const response = await state.callbacks.importAccessPolicy({ policy: parsed, mode: 'replace' });
+        state.management = normalizeManagement(response.management);
+        await loadServiceDiagnostics({ forceRefresh: true });
+        state.migrationStatusMessage = `Policy replaced successfully at ${formatDate(response.importedAt)}.`;
+        state.migrationStatusTone = 'valid';
+        setStatus(migrationStatus, state.migrationStatusMessage, state.migrationStatusTone);
+        await render();
+      } catch (error) {
+        state.migrationStatusMessage = String(error?.message || 'Could not replace policy.').trim();
+        state.migrationStatusTone = 'invalid';
+        setStatus(migrationStatus, state.migrationStatusMessage, state.migrationStatusTone);
+      } finally {
+        replaceImportButton.disabled = false;
+        mergeImportButton.disabled = false;
+      }
+    });
+
+    migrationActions.append(copyExportButton, mergeImportButton, replaceImportButton);
+    migrationCard.appendChild(migrationActions);
+    container.appendChild(migrationCard);
 
     const diagTitle = document.createElement('div');
     diagTitle.style.fontSize = '12px';
