@@ -7,5 +7,5 @@
  */
 
 globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS = Object.freeze({
-  sharedAccessServiceBaseUrl: '',
+  sharedAccessServiceBaseUrl: 'http://172.16.10.140:4817',
 });
