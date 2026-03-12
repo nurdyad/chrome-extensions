@@ -2360,6 +2360,70 @@ async function handleGetExtensionUserManagement(rawPayload = {}, sender = null) 
     }
 }
 
+async function handleExportExtensionAccessPolicy(rawPayload = {}, sender = null) {
+    try {
+        const accessResult = await handleGetExtensionAccessState(rawPayload, sender);
+        if (!accessResult?.success || !accessResult?.access) {
+            return accessResult;
+        }
+        const { response, payload } = await callAccessControlService('/access/export-policy', {
+            method: 'POST',
+            body: {
+                actorEmail: accessResult.access.email
+            }
+        });
+        if (!response.ok || !payload?.ok || !payload?.exported) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Access policy export failed with status ${response.status}.`
+            };
+        }
+        return {
+            success: true,
+            exported: payload.exported
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeAccessControlServiceError(error)
+        };
+    }
+}
+
+async function handleImportExtensionAccessPolicy(rawPayload = {}, sender = null) {
+    try {
+        const accessResult = await handleGetExtensionAccessState(rawPayload, sender);
+        if (!accessResult?.success || !accessResult?.access) {
+            return accessResult;
+        }
+        const { response, payload } = await callAccessControlService('/access/import-policy', {
+            method: 'POST',
+            body: {
+                actorEmail: accessResult.access.email,
+                policy: rawPayload?.policy,
+                mode: sanitizeSingleLine(rawPayload?.mode, 20)
+            }
+        });
+        if (!response.ok || !payload?.ok || !payload?.management) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Access policy import failed with status ${response.status}.`
+            };
+        }
+        return {
+            success: true,
+            management: payload.management,
+            importedAt: sanitizeSingleLine(payload?.importedAt, 80),
+            importMode: sanitizeSingleLine(payload?.importMode, 20)
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeAccessControlServiceError(error)
+        };
+    }
+}
+
 async function handleSaveExtensionManagedUser(rawPayload = {}, sender = null) {
     try {
         const accessResult = await handleGetExtensionAccessState({}, sender);
@@ -2783,7 +2847,10 @@ async function handleGetAccessControlServiceHealth() {
                         enabled: Boolean(payload.access.enabled),
                         ownerEmail: normalizeEmail(payload.access.ownerEmail),
                         storage: sanitizeSingleLine(payload.access.storage, 32),
-                        storePath: sanitizeSingleLine(payload.access.storePath, 240)
+                        storePath: sanitizeSingleLine(payload.access.storePath, 240),
+                        managedUsers: Math.max(0, Number.parseInt(String(payload.access.managedUsers ?? '0'), 10) || 0),
+                        pendingRequests: Math.max(0, Number.parseInt(String(payload.access.pendingRequests ?? '0'), 10) || 0),
+                        policyUpdatedAt: sanitizeSingleLine(payload.access.policyUpdatedAt, 80)
                     }
                     : null
             }
@@ -4160,6 +4227,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (message.action === 'getExtensionUserManagement') {
             return await handleGetExtensionUserManagement(message.payload, sender);
+        }
+        if (message.action === 'exportExtensionAccessPolicy') {
+            return await handleExportExtensionAccessPolicy(message.payload, sender);
+        }
+        if (message.action === 'importExtensionAccessPolicy') {
+            return await handleImportExtensionAccessPolicy(message.payload, sender);
         }
         if (message.action === 'getExtensionIdentityDiagnostics') {
             return await handleGetExtensionIdentityDiagnostics(message.payload, sender);
