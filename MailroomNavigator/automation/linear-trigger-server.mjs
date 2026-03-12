@@ -407,13 +407,22 @@ function listAccessRequests(policy) {
 }
 
 function buildAccessControlManagementPayload(policy, alert = null) {
+  const users = listManagedAccessUsers(policy);
+  const requests = listAccessRequests(policy);
   return {
     ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
-    users: listManagedAccessUsers(policy),
-    requests: listAccessRequests(policy),
+    users,
+    requests,
     featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
     storage: "file",
     storePath: ACCESS_CONTROL_STATE_PATH,
+    policyUpdatedAt: sanitizeSingleLine(policy?.updatedAt, 80),
+    counts: {
+      users: users.length,
+      pendingRequests: requests.filter((request) => request.status === "pending").length,
+      rejectedRequests: requests.filter((request) => request.status === "rejected").length,
+      approvedHistory: requests.filter((request) => request.status === "approved").length,
+    },
     alert: sanitizeSlackNotificationResult(alert),
   };
 }
@@ -792,6 +801,74 @@ async function getAccessControlManagement(actorEmail) {
     },
     management: buildAccessControlManagementPayload(store.policy),
     policy: store.policy,
+  };
+}
+
+async function exportAccessControlPolicy(actorEmail) {
+  const actor = normalizeEmail(actorEmail);
+  const { policy } = await getAccessControlManagement(actor);
+  return {
+    exportedAt: nowIso(),
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    storage: "file",
+    storePath: ACCESS_CONTROL_STATE_PATH,
+    policy: sanitizeAccessControlPolicy(policy),
+    counts: {
+      users: Object.keys(policy?.users || {}).length,
+      requests: Object.keys(policy?.requests || {}).length,
+    },
+  };
+}
+
+function normalizePolicyImportMode(value) {
+  return String(value || "").trim().toLowerCase() === "replace" ? "replace" : "merge";
+}
+
+function buildImportedPolicy(existingPolicy, incomingPolicy, mode = "merge") {
+  const existing = sanitizeAccessControlPolicy(existingPolicy);
+  const incoming = sanitizeAccessControlPolicy(incomingPolicy);
+  const now = nowIso();
+
+  if (mode === "replace") {
+    return sanitizeAccessControlPolicy({
+      ...incoming,
+      initializedAt: incoming.initializedAt || existing.initializedAt || now,
+      updatedAt: now,
+    });
+  }
+
+  return sanitizeAccessControlPolicy({
+    ...existing,
+    initializedAt: existing.initializedAt || incoming.initializedAt || now,
+    updatedAt: now,
+    users: {
+      ...(existing.users || {}),
+      ...(incoming.users || {}),
+    },
+    requests: {
+      ...(existing.requests || {}),
+      ...(incoming.requests || {}),
+    },
+  });
+}
+
+async function importAccessControlPolicy({ actorEmail, policy, mode } = {}) {
+  const actor = normalizeEmail(actorEmail);
+  if (!policy || typeof policy !== "object") {
+    throw new Error("Imported policy JSON is required.");
+  }
+
+  const { policy: existingPolicy } = await getAccessControlManagement(actor);
+  const normalizedMode = normalizePolicyImportMode(mode);
+  const nextPolicy = buildImportedPolicy(existingPolicy, policy, normalizedMode);
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  await appendServerLog(
+    `[${nowIso()}] access control imported mode=${normalizedMode} actor=${actor} users=${Object.keys(savedPolicy.users || {}).length} requests=${Object.keys(savedPolicy.requests || {}).length}`,
+  );
+  return {
+    management: buildAccessControlManagementPayload(savedPolicy),
+    importMode: normalizedMode,
+    importedAt: nowIso(),
   };
 }
 
@@ -2078,6 +2155,9 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/health") {
+      const store = await loadAccessControlStore({ forceRefresh: true, ensureExists: true });
+      const managedUsers = listManagedAccessUsers(store.policy);
+      const requests = listAccessRequests(store.policy);
       sendJson(res, 200, origin, {
         ok: true,
         running: Boolean(activeRun),
@@ -2095,6 +2175,9 @@ const server = createServer(async (req, res) => {
           ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
           storage: "file",
           storePath: ACCESS_CONTROL_STATE_PATH,
+          managedUsers: managedUsers.length,
+          pendingRequests: requests.filter((request) => request.status === "pending").length,
+          policyUpdatedAt: sanitizeSingleLine(store.policy?.updatedAt, 80),
           alertsSlackConfigured: Boolean(SLACK_BOT_TOKEN && ACCESS_CONTROL_SLACK_TARGET),
           alertsSlackTargetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
           alertsSlackTarget: ACCESS_CONTROL_SLACK_TARGET,
@@ -2193,6 +2276,46 @@ const server = createServer(async (req, res) => {
         sendJson(res, 403, origin, {
           ok: false,
           error: sanitizeSingleLine(error?.message, 260) || "Could not load MailroomNavigator user management.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/export-policy") {
+      try {
+        const body = await parseJsonBody(req);
+        const exported = await exportAccessControlPolicy(
+          sanitizeSingleLine(body?.actorEmail, 240),
+        );
+        sendJson(res, 200, origin, {
+          ok: true,
+          exported,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not export MailroomNavigator access policy.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/import-policy") {
+      try {
+        const body = await parseJsonBody(req);
+        const imported = await importAccessControlPolicy({
+          actorEmail: sanitizeSingleLine(body?.actorEmail, 240),
+          policy: body?.policy,
+          mode: sanitizeSingleLine(body?.mode, 20),
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          ...imported,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not import MailroomNavigator access policy.",
         });
       }
       return;
