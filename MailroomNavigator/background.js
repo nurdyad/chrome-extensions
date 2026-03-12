@@ -997,24 +997,53 @@ async function callLinearTriggerServer(path, options = {}) {
 
 async function callAccessControlService(path, options = {}) {
     const config = await getStoredAccessControlServiceConfig();
-    const usingRemoteConfig = Boolean(config.enabled && config.baseUrl);
-    const baseUrl = usingRemoteConfig ? config.baseUrl : LINEAR_TRIGGER_SERVER_BASE_URL;
-    const extraHeaders = { ...(options.extraHeaders || {}) };
-    if (usingRemoteConfig && config.sharedKey) {
-        extraHeaders[ACCESS_CONTROL_SHARED_KEY_HEADER] = config.sharedKey;
-    }
-    const request = await callJsonService(baseUrl, path, {
-        ...options,
-        timeoutMs: usingRemoteConfig
-            ? Math.max(250, Number(options.timeoutMs) || ACCESS_CONTROL_REMOTE_TIMEOUT_MS)
-            : options.timeoutMs,
-        extraHeaders
-    });
-    return {
-        ...request,
-        usingRemoteConfig,
-        baseUrl
+    const hasConfiguredRemote = Boolean(config.enabled && config.baseUrl);
+    const canFallbackToDefaultRemote = Boolean(
+        config.useLocalOverride
+        && config.defaultBaseUrl
+        && config.defaultBaseUrl !== LINEAR_TRIGGER_SERVER_BASE_URL
+    );
+
+    const requestService = async (baseUrl, {
+        usingRemoteConfig = false,
+        sharedKey = ''
+    } = {}) => {
+        const extraHeaders = { ...(options.extraHeaders || {}) };
+        if (usingRemoteConfig && sharedKey) {
+            extraHeaders[ACCESS_CONTROL_SHARED_KEY_HEADER] = sharedKey;
+        }
+        const request = await callJsonService(baseUrl, path, {
+            ...options,
+            timeoutMs: usingRemoteConfig
+                ? Math.max(250, Number(options.timeoutMs) || ACCESS_CONTROL_REMOTE_TIMEOUT_MS)
+                : options.timeoutMs,
+            extraHeaders
+        });
+        return {
+            ...request,
+            usingRemoteConfig,
+            baseUrl
+        };
     };
+
+    if (hasConfiguredRemote) {
+        return await requestService(config.baseUrl, {
+            usingRemoteConfig: true,
+            sharedKey: config.sharedKey
+        });
+    }
+
+    try {
+        return await requestService(LINEAR_TRIGGER_SERVER_BASE_URL, {
+            usingRemoteConfig: false
+        });
+    } catch (error) {
+        if (!canFallbackToDefaultRemote) throw error;
+        return await requestService(config.defaultBaseUrl, {
+            usingRemoteConfig: true,
+            sharedKey: config.sharedKey
+        });
+    }
 }
 
 function normalizeLinearTriggerError(error) {
