@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="css/buttons.css">
   <link rel="stylesheet" href="css/inputs.css">
   <link rel="stylesheet" href="css/status.css">
+  <link rel="stylesheet" href="css/auth_management.css">
 </head>
 <body>
   <div class="extension-wrapper"> 
@@ -16,6 +17,30 @@
       <h3>BetterLetter Session Required</h3>
       <div id="identityDetectionStatus" class="validation-badge neutral" style="white-space: pre-wrap;">Open a signed-in BetterLetter tab so MailroomNavigator can identify your account.</div>
       <pre id="identityDetectionDiagnostics" class="validation-badge neutral" style="display: none; margin-top: 8px; white-space: pre-wrap; overflow: auto; max-height: 220px; font-size: 11px;"></pre>
+    </div>
+    <div id="accessRequestSection" class="section-container" style="display: none; margin-bottom: 12px;">
+      <h3>Request Access</h3>
+      <div id="accessRequestStatus" class="validation-badge neutral" style="white-space: pre-wrap;">Request MailroomNavigator access for the detected BetterLetter account.</div>
+      <label for="accessRequestNoteInput" style="margin-top: 8px;">Note for reviewer (optional)</label>
+      <textarea id="accessRequestNoteInput" class="bulk-input" placeholder="Tell the owner what you need this extension for."></textarea>
+      <label style="margin-top: 8px;">Requested Features</label>
+      <div id="accessRequestFeaturesGrid" class="job-checklist" style="max-height: none;"></div>
+      <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <button id="submitAccessRequestBtn" class="btn btn-sm" type="button">Request Access</button>
+        <button id="refreshAccessRequestBtn" class="btn btn-sm btn-ghost" type="button">Refresh Access</button>
+      </div>
+    </div>
+    <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-bottom: 12px;">
+      <h3>Access Service</h3>
+      <label for="accessServiceUrlInput">Shared Access Service URL</label>
+      <input id="accessServiceUrlInput" type="url" placeholder="e.g. http://192.168.1.20:4817" autocomplete="off">
+      <label for="accessServiceKeyInput" style="margin-top: 8px;">Shared Access Key (optional)</label>
+      <input id="accessServiceKeyInput" type="password" placeholder="Required only if remote access key is enabled" autocomplete="off">
+      <div class="btn-row" style="margin-top: 8px;">
+        <button id="saveAccessServiceConfigBtn" class="btn btn-sm" type="button">Save Access Service</button>
+        <button id="clearAccessServiceConfigBtn" class="btn btn-sm btn-ghost" type="button">Use Local</button>
+      </div>
+      <div id="accessServiceConfigStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Using local access service.</div>
     </div>
     <!-- Top-level view switcher: Navigator / Job Panel / Others -->
     <div class="btn-row global-nav-buttons-row">
@@ -319,9 +344,16 @@
     <!-- View 3: Others (Linear issue + access control) -->
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
 
-      <div id="linearIssueSection" class="section-container" style="margin-top: 12px;">
-        <h3>Linear Issue</h3>
+      <div id="linearIssueSection" class="section-container collapsible-section" style="margin-top: 12px;">
+        <button id="linearIssueSectionToggle" class="section-toggle-btn" type="button" aria-expanded="true" aria-controls="linearIssueSectionBody">
+          <span class="section-toggle-copy">
+            <span class="section-toggle-title">Linear Issue</span>
+            <span class="section-toggle-subtitle">Create issues, trigger runs, and Slack updates.</span>
+          </span>
+          <span class="section-toggle-chevron" aria-hidden="true"></span>
+        </button>
 
+        <div id="linearIssueSectionBody" class="section-collapse-body">
         <div id="linearCreateIssueControls">
           <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
           <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
@@ -391,10 +423,18 @@
           Reconcile Linear in Dry Run mode (preview done updates)
         </label>
         <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger idle.</div>
+        </div>
       </div>
 
-      <div id="extensionUserManagementSection" class="section-container" style="margin-top: 12px; display: none;">
-        <h3>Access Control</h3>
+      <div id="extensionUserManagementSection" class="section-container collapsible-section" style="margin-top: 12px; display: none;">
+        <button id="extensionUserManagementSectionToggle" class="section-toggle-btn" type="button" aria-expanded="true" aria-controls="extensionUserManagementSectionBody">
+          <span class="section-toggle-copy">
+            <span class="section-toggle-title">Access Control</span>
+            <span class="section-toggle-subtitle">Manage users, requests, and access-service diagnostics.</span>
+          </span>
+          <span class="section-toggle-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="extensionUserManagementSectionBody" class="section-collapse-body">
         <div id="extensionUserManagementSummary" class="validation-badge neutral" style="white-space: pre-wrap;">Owner only.</div>
 
         <label for="managedUserEmailInput">BetterLetter User Email</label>
@@ -422,6 +462,7 @@
         </div>
 
         <div id="extensionManagedUsersList" class="recent-id-meta-list" style="margin-top: 12px;"></div>
+        </div>
       </div>
     </div>
 

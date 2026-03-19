@@ -55,14 +55,13 @@ if [[ ! -f "$SERVER_SCRIPT" ]]; then
 fi
 
 if [[ ! -d "$BOT_JOBS_DIR" ]]; then
-  echo "Missing bot-jobs-linear directory: $BOT_JOBS_DIR"
-  echo "Set LINEAR_TRIGGER_BOT_JOBS_DIR to your local bot-jobs-linear path."
-  exit 1
-fi
-
-if [[ ! -f "$BOT_JOBS_DIR/$BOT_JOBS_ENTRY" ]]; then
-  echo "Missing bot-jobs entry script: $BOT_JOBS_DIR/$BOT_JOBS_ENTRY"
-  exit 1
+  echo "Warning: bot-jobs-linear directory not found: $BOT_JOBS_DIR"
+  echo "The local access service will still be installed."
+  echo "Trigger Linear will stay unavailable until LINEAR_TRIGGER_BOT_JOBS_DIR points to a valid checkout."
+elif [[ ! -f "$BOT_JOBS_DIR/$BOT_JOBS_ENTRY" ]]; then
+  echo "Warning: bot-jobs entry script not found: $BOT_JOBS_DIR/$BOT_JOBS_ENTRY"
+  echo "The local access service will still be installed."
+  echo "Trigger Linear will stay unavailable until the bot-jobs entry script exists."
 fi
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"

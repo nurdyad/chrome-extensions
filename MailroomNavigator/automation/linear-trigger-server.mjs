@@ -46,6 +46,9 @@ const BOT_JOBS_TIMEOUT_MINUTES = (() => {
   return Math.min(120, Math.max(2, parsed));
 })();
 const BOT_JOBS_TIMEOUT_MS = BOT_JOBS_TIMEOUT_MINUTES * 60 * 1000;
+// Keep this aligned with panel.js LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS so operators
+// see the final run result in the side panel before Slack receives the summary.
+const LINEAR_TRIGGER_SLACK_SUMMARY_DELAY_MS = 2000;
 const LINEAR_GRAPHQL_ENDPOINT = "https://api.linear.app/graphql";
 const LINEAR_API_KEY = String(
   process.env.LINEAR_API_KEY
@@ -71,17 +74,40 @@ const ACCESS_CONTROL_OWNER_EMAIL = normalizeEmail(
   process.env.MAILROOMNAV_OWNER_EMAIL
     || "nur.siddique@dyad.net",
 );
-const ACCESS_CONTROL_ISSUE_TITLE = sanitizeSingleLine(
-  process.env.MAILROOMNAV_ACCESS_CONTROL_ISSUE_TITLE
-    || "[MailroomNavigator] Access Control",
-  180,
+const ACCESS_CONTROL_SLACK_TARGET_TYPE = normalizeSlackTargetType(
+  process.env.MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET_TYPE
+    || process.env.MAILROOMNAV_ACCESS_CONTROL_ALERT_TARGET_TYPE
+    || "channel",
 );
+const ACCESS_CONTROL_SLACK_TARGET = sanitizeSingleLine(
+  process.env.MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET
+    || process.env.MAILROOMNAV_ACCESS_CONTROL_ALERT_TARGET
+    || "",
+  120,
+).replace(/^[@#]/, "");
+const ACCESS_CONTROL_SHARED_KEY = sanitizeSingleLine(
+  process.env.MAILROOMNAV_ACCESS_CONTROL_SHARED_KEY
+    || "",
+  240,
+);
+const ACCESS_CONTROL_ALERT_COOLDOWN_MINUTES = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_ACCESS_CONTROL_ALERT_COOLDOWN_MINUTES || "60"), 10);
+  if (!Number.isFinite(parsed)) return 60;
+  return Math.min(24 * 60, Math.max(1, parsed));
+})();
+const ACCESS_CONTROL_ALERT_COOLDOWN_MS = ACCESS_CONTROL_ALERT_COOLDOWN_MINUTES * 60 * 1000;
 const ACCESS_CONTROL_CACHE_TTL_MS = 30 * 1000;
 const LOG_DIR = String(process.env.LINEAR_TRIGGER_LOG_DIR || join(REPO_ROOT, "logs"));
 const STATE_DIR = String(process.env.LINEAR_TRIGGER_STATE_DIR || join(REPO_ROOT, ".automation-state"));
+const ACCESS_CONTROL_STATE_PATH = String(
+  process.env.MAILROOMNAV_ACCESS_CONTROL_STATE_FILE
+    || join(STATE_DIR, "mailroomnav-access-control.json"),
+);
+const SLACK_TARGETS_CACHE_PATH = join(STATE_DIR, "slack-workspace-targets.json");
 const SERVER_LOG_PATH = join(LOG_DIR, "linear-trigger-server.log");
 const LAST_RUN_STATE_PATH = join(STATE_DIR, "linear-trigger-last-run.json");
 const BOT_JOBS_REPORTS_DIR = join(STATE_DIR, "reports");
+const SLACK_TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const DEFAULT_ALLOWED_ORIGIN_PREFIX = "chrome-extension://";
 const configuredOrigins = String(process.env.LINEAR_TRIGGER_ALLOWED_ORIGINS || "")
@@ -95,14 +121,22 @@ const allowNoOrigin = String(process.env.LINEAR_TRIGGER_ALLOW_NO_ORIGIN || "1")
 let activeRun = null;
 let lastRun = null;
 let resolvedLinearTeam = null;
+const accessControlAlertSentAt = new Map();
 let accessControlCache = {
   loadedAt: 0,
-  issue: null,
   policy: null,
+};
+let slackTargetsCache = {
+  loadedAt: 0,
+  targets: null,
 };
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 function sanitizeSingleLine(value, maxLength = 1024) {
@@ -131,8 +165,6 @@ function normalizeEmail(value) {
   return normalized;
 }
 
-const ACCESS_CONTROL_MARKER_START = "<!-- MAILROOMNAV_ACCESS_CONTROL_START -->";
-const ACCESS_CONTROL_MARKER_END = "<!-- MAILROOMNAV_ACCESS_CONTROL_END -->";
 const ACCESS_CONTROL_FEATURE_CATALOG = [
   { key: "practice_navigator", label: "Navigator", description: "Practice Navigator, practice links, live counts, and related admin pages." },
   { key: "job_panel", label: "Job Panel", description: "Quick document search, job status checks, and bulk job/admin links." },
@@ -147,6 +179,8 @@ const ACCESS_CONTROL_FEATURE_CATALOG = [
 ];
 const ACCESS_CONTROL_FEATURE_KEYS = ACCESS_CONTROL_FEATURE_CATALOG.map((feature) => feature.key);
 const ACCESS_CONTROL_FEATURE_KEY_SET = new Set(ACCESS_CONTROL_FEATURE_KEYS);
+const ACCESS_REQUEST_STATUS_SET = new Set(["pending", "approved", "rejected"]);
+const MAX_ACCESS_REQUEST_IPS = 8;
 
 function normalizeAccessRole(role) {
   const normalized = sanitizeSingleLine(role, 40).toLowerCase();
@@ -190,6 +224,57 @@ function sanitizeAccessUserRecord(rawUser = null, fallbackEmail = "") {
   };
 }
 
+function normalizeAccessRequestStatus(value) {
+  const normalized = sanitizeSingleLine(value, 40).toLowerCase();
+  return ACCESS_REQUEST_STATUS_SET.has(normalized) ? normalized : "pending";
+}
+
+function normalizeClientIp(value) {
+  const raw = sanitizeSingleLine(value, 120);
+  if (!raw) return "";
+  if (raw.startsWith("::ffff:")) return raw.slice(7);
+  if (raw === "::1") return "127.0.0.1";
+  return raw;
+}
+
+function sanitizeAccessRequestRecord(rawRequest = null, fallbackEmail = "") {
+  const email = normalizeEmail(rawRequest?.email || fallbackEmail);
+  if (!email || email === ACCESS_CONTROL_OWNER_EMAIL) return null;
+
+  const ipValues = Array.isArray(rawRequest?.ipAddresses) ? rawRequest.ipAddresses : [];
+  const ipAddresses = [];
+  const seenIps = new Set();
+  ipValues.forEach((value) => {
+    const normalizedIp = normalizeClientIp(value);
+    if (!normalizedIp || seenIps.has(normalizedIp)) return;
+    seenIps.add(normalizedIp);
+    ipAddresses.push(normalizedIp);
+  });
+
+  const requestCount = Math.max(
+    0,
+    Number.parseInt(String(rawRequest?.requestCount ?? "0"), 10) || 0,
+  );
+
+  return {
+    email,
+    status: normalizeAccessRequestStatus(rawRequest?.status),
+    requestedFeatures: normalizeAccessFeatures(rawRequest?.requestedFeatures),
+    note: sanitizeMultiline(rawRequest?.note, 1200),
+    firstSeenAt: sanitizeSingleLine(rawRequest?.firstSeenAt, 80),
+    lastSeenAt: sanitizeSingleLine(rawRequest?.lastSeenAt, 80),
+    requestedAt: sanitizeSingleLine(rawRequest?.requestedAt, 80),
+    updatedAt: sanitizeSingleLine(rawRequest?.updatedAt, 80),
+    reviewedAt: sanitizeSingleLine(rawRequest?.reviewedAt, 80),
+    reviewedBy: normalizeEmail(rawRequest?.reviewedBy),
+    reviewNote: sanitizeMultiline(rawRequest?.reviewNote, 600),
+    requestCount,
+    lastIp: normalizeClientIp(rawRequest?.lastIp),
+    ipAddresses: ipAddresses.slice(0, MAX_ACCESS_REQUEST_IPS),
+    lastUserAgent: sanitizeSingleLine(rawRequest?.lastUserAgent, 240),
+  };
+}
+
 function sanitizeAccessControlPolicy(rawPolicy = null) {
   const users = {};
   const sourceUsers = rawPolicy?.users && typeof rawPolicy.users === "object" ? rawPolicy.users : {};
@@ -198,12 +283,22 @@ function sanitizeAccessControlPolicy(rawPolicy = null) {
     if (!sanitizedUser || sanitizedUser.role === "owner") return;
     users[sanitizedUser.email] = sanitizedUser;
   });
+
+  const requests = {};
+  const sourceRequests = rawPolicy?.requests && typeof rawPolicy.requests === "object" ? rawPolicy.requests : {};
+  Object.entries(sourceRequests).forEach(([emailKey, rawRequest]) => {
+    const sanitizedRequest = sanitizeAccessRequestRecord(rawRequest, emailKey);
+    if (!sanitizedRequest) return;
+    requests[sanitizedRequest.email] = sanitizedRequest;
+  });
+
   return {
     version: 1,
     ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
     initializedAt: sanitizeSingleLine(rawPolicy?.initializedAt, 80),
     updatedAt: sanitizeSingleLine(rawPolicy?.updatedAt, 80),
     users,
+    requests,
   };
 }
 
@@ -221,44 +316,68 @@ function serializeAccessControlPolicy(policy) {
   return JSON.stringify(normalizedPolicy, null, 2);
 }
 
-function parseAccessControlPolicyFromDescription(description = "") {
-  const source = String(description || "");
-  const startIndex = source.indexOf(ACCESS_CONTROL_MARKER_START);
-  const endIndex = source.indexOf(ACCESS_CONTROL_MARKER_END);
-  if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) return null;
-  const jsonBlock = source.slice(startIndex + ACCESS_CONTROL_MARKER_START.length, endIndex).trim();
-  if (!jsonBlock) return null;
+async function readAccessControlPolicyFile() {
   try {
-    return sanitizeAccessControlPolicy(JSON.parse(jsonBlock));
-  } catch {
-    return null;
+    const raw = await readFile(ACCESS_CONTROL_STATE_PATH, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : null;
+    return {
+      exists: true,
+      policy: parsed ? sanitizeAccessControlPolicy(parsed) : buildDefaultAccessPolicy(),
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        exists: false,
+        policy: buildDefaultAccessPolicy(),
+      };
+    }
+    throw new Error(`Could not read Access Control store at ${ACCESS_CONTROL_STATE_PATH}: ${sanitizeSingleLine(error?.message, 220) || "unknown error"}`);
   }
 }
 
-function buildAccessControlIssueDescription(policy) {
-  return [
-    "# MailroomNavigator access control",
-    "",
-    `Owner: ${ACCESS_CONTROL_OWNER_EMAIL}`,
-    "",
-    "This issue stores the centrally synced access-control policy used by the MailroomNavigator extension.",
-    "",
-    ACCESS_CONTROL_MARKER_START,
-    serializeAccessControlPolicy(policy),
-    ACCESS_CONTROL_MARKER_END,
-  ].join("\n");
+async function saveAccessControlPolicyToFile(policy) {
+  const normalizedPolicy = sanitizeAccessControlPolicy(policy);
+  await mkdir(dirname(ACCESS_CONTROL_STATE_PATH), { recursive: true });
+  await writeFile(
+    ACCESS_CONTROL_STATE_PATH,
+    `${serializeAccessControlPolicy(normalizedPolicy)}\n`,
+    "utf8",
+  );
+  accessControlCache = {
+    loadedAt: Date.now(),
+    policy: normalizedPolicy,
+  };
+  return normalizedPolicy;
 }
 
-function sanitizeAccessControlIssue(rawIssue = null) {
-  if (!rawIssue || typeof rawIssue !== "object") return null;
-  const id = sanitizeSingleLine(rawIssue.id, 64);
-  if (!id) return null;
+async function loadAccessControlStore({ forceRefresh = false, ensureExists = true } = {}) {
+  const now = Date.now();
+  if (
+    !forceRefresh
+    && accessControlCache?.policy
+    && now - Number(accessControlCache.loadedAt || 0) < ACCESS_CONTROL_CACHE_TTL_MS
+  ) {
+    return {
+      policy: sanitizeAccessControlPolicy(accessControlCache.policy),
+      exists: true,
+      path: ACCESS_CONTROL_STATE_PATH,
+    };
+  }
+
+  const stored = await readAccessControlPolicyFile();
+  const policy = stored.exists || !ensureExists
+    ? stored.policy
+    : await saveAccessControlPolicyToFile(stored.policy);
+
+  accessControlCache = {
+    loadedAt: Date.now(),
+    policy,
+  };
+
   return {
-    id,
-    identifier: sanitizeSingleLine(rawIssue.identifier, 64),
-    title: sanitizeSingleLine(rawIssue.title, 180),
-    description: sanitizeMultiline(rawIssue.description, 40000),
-    url: sanitizeSingleLine(rawIssue.url, 1000),
+    policy,
+    exists: stored.exists,
+    path: ACCESS_CONTROL_STATE_PATH,
   };
 }
 
@@ -270,6 +389,42 @@ function listManagedAccessUsers(policy) {
       if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
       return a.email.localeCompare(b.email);
     });
+}
+
+function listAccessRequests(policy) {
+  return Object.values(policy?.requests || {})
+    .map((request) => sanitizeAccessRequestRecord(request))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const statusOrder = { pending: 0, rejected: 1, approved: 2 };
+      const aOrder = statusOrder[a.status] ?? 9;
+      const bOrder = statusOrder[b.status] ?? 9;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      const aTime = new Date(a.requestedAt || a.lastSeenAt || a.updatedAt || 0).getTime();
+      const bTime = new Date(b.requestedAt || b.lastSeenAt || b.updatedAt || 0).getTime();
+      return bTime - aTime;
+    });
+}
+
+function buildAccessControlManagementPayload(policy, alert = null) {
+  const users = listManagedAccessUsers(policy);
+  const requests = listAccessRequests(policy);
+  return {
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    users,
+    requests,
+    featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+    storage: "file",
+    storePath: ACCESS_CONTROL_STATE_PATH,
+    policyUpdatedAt: sanitizeSingleLine(policy?.updatedAt, 80),
+    counts: {
+      users: users.length,
+      pendingRequests: requests.filter((request) => request.status === "pending").length,
+      rejectedRequests: requests.filter((request) => request.status === "rejected").length,
+      approvedHistory: requests.filter((request) => request.status === "approved").length,
+    },
+    alert: sanitizeSlackNotificationResult(alert),
+  };
 }
 
 function buildResolvedAccess(email, policy) {
@@ -305,7 +460,14 @@ function buildResolvedAccess(email, policy) {
   }
 
   const managedUser = sanitizeAccessUserRecord(normalizedPolicy.users?.[normalizedEmail], normalizedEmail);
+  const accessRequest = sanitizeAccessRequestRecord(normalizedPolicy.requests?.[normalizedEmail], normalizedEmail);
   if (!managedUser) {
+    let reason = "You do not have MailroomNavigator access. Use Request Access in the panel or ask Nur to add your BetterLetter email.";
+    if (accessRequest?.status === "pending" && accessRequest?.requestedAt) {
+      reason = "Your MailroomNavigator access request is pending review.";
+    } else if (accessRequest?.status === "rejected") {
+      reason = "Your MailroomNavigator access request was rejected. Contact Nur if this should be reviewed again.";
+    }
     return {
       enabled: true,
       initialized: true,
@@ -314,8 +476,12 @@ function buildResolvedAccess(email, policy) {
       canManageUsers: false,
       role: "",
       email: normalizedEmail,
-      reason: "You do not have MailroomNavigator access. Ask Nur to add your BetterLetter email.",
+      reason,
       features: buildAccessFeatureMap([], false),
+      requestStatus: accessRequest?.status || "",
+      requestRequestedAt: accessRequest?.requestedAt || "",
+      requestUpdatedAt: accessRequest?.updatedAt || accessRequest?.lastSeenAt || "",
+      requestRequestedFeatures: accessRequest?.requestedFeatures || [],
     };
   }
 
@@ -349,6 +515,19 @@ function sanitizeLinearSlackPayload(rawSlack = null) {
     enabled: Boolean(rawSlack.enabled),
     targetType: normalizeSlackTargetType(rawSlack.targetType),
     target: sanitizeSingleLine(rawSlack.target, 80).replace(/^[@#]/, ""),
+  };
+}
+
+function sanitizeSlackNotificationResult(rawSlack = null) {
+  if (!rawSlack || typeof rawSlack !== "object") return null;
+  return {
+    attempted: Boolean(rawSlack.attempted),
+    success: Boolean(rawSlack.success),
+    targetType: normalizeSlackTargetType(rawSlack.targetType),
+    target: sanitizeSingleLine(rawSlack.target, 80),
+    channel: sanitizeSingleLine(rawSlack.channel, 80),
+    ts: sanitizeSingleLine(rawSlack.ts, 64),
+    error: sanitizeSingleLine(rawSlack.error, 260),
   };
 }
 
@@ -589,183 +768,22 @@ async function createLinearIssue(payload) {
   };
 }
 
-async function findAccessControlIssue() {
-  const now = Date.now();
-  if (
-    accessControlCache?.issue?.id
-    && accessControlCache?.policy
-    && now - Number(accessControlCache.loadedAt || 0) < ACCESS_CONTROL_CACHE_TTL_MS
-  ) {
-    return {
-      issue: sanitizeAccessControlIssue(accessControlCache.issue),
-      policy: sanitizeAccessControlPolicy(accessControlCache.policy),
-    };
-  }
-
-  const team = await resolveLinearTeam();
-  const query = `
-    query FindAccessControlIssue($teamId: String!, $first: Int!, $after: String) {
-      team(id: $teamId) {
-        issues(first: $first, after: $after) {
-          nodes {
-            id
-            identifier
-            title
-            description
-            url
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  `;
-
-  let after = null;
-  let foundIssue = null;
-
-  for (let page = 0; page < 20; page += 1) {
-    const data = await runLinearGraphqlRequest(query, {
-      teamId: team.id,
-      first: 100,
-      after,
-    });
-    const issuesRoot = data?.team?.issues;
-    const nodes = Array.isArray(issuesRoot?.nodes)
-      ? issuesRoot.nodes
-      : Array.isArray(issuesRoot?.edges)
-        ? issuesRoot.edges.map((edge) => edge?.node).filter(Boolean)
-        : [];
-    foundIssue = nodes
-      .map((issue) => sanitizeAccessControlIssue(issue))
-      .find((issue) => issue?.title === ACCESS_CONTROL_ISSUE_TITLE) || null;
-    if (foundIssue) break;
-    const pageInfo = issuesRoot?.pageInfo || {};
-    if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 260)) break;
-    after = sanitizeSingleLine(pageInfo.endCursor, 260);
-  }
-
-  const policy = foundIssue?.description
-    ? parseAccessControlPolicyFromDescription(foundIssue.description) || buildDefaultAccessPolicy()
-    : buildDefaultAccessPolicy();
-
-  accessControlCache = {
-    loadedAt: now,
-    issue: foundIssue,
-    policy,
-  };
-
-  return {
-    issue: foundIssue,
-    policy,
-  };
-}
-
-async function createAccessControlIssue() {
-  const team = await resolveLinearTeam();
-  const policy = buildDefaultAccessPolicy();
-  const mutation = `
-    mutation CreateAccessControlIssue($input: IssueCreateInput!) {
-      issueCreate(input: $input) {
-        success
-        issue {
-          id
-          identifier
-          title
-          description
-          url
-        }
-      }
-    }
-  `;
-  const input = {
-    teamId: team.id,
-    title: ACCESS_CONTROL_ISSUE_TITLE,
-    description: buildAccessControlIssueDescription(policy),
-  };
-  const data = await runLinearGraphqlRequest(mutation, { input });
-  const issue = sanitizeAccessControlIssue(data?.issueCreate?.issue);
-  if (!data?.issueCreate?.success || !issue?.id) {
-    throw new Error("Could not create the MailroomNavigator access-control issue in Linear.");
-  }
-  accessControlCache = {
-    loadedAt: Date.now(),
-    issue,
-    policy,
-  };
-  return { issue, policy };
-}
-
-async function ensureAccessControlStore() {
-  const existing = await findAccessControlIssue();
-  if (existing?.issue?.id) return existing;
-  return createAccessControlIssue();
-}
-
-async function saveAccessControlPolicy(issueId, policy) {
-  const normalizedPolicy = sanitizeAccessControlPolicy(policy);
-  const mutation = `
-    mutation UpdateAccessControlIssue($id: String!, $input: IssueUpdateInput!) {
-      issueUpdate(id: $id, input: $input) {
-        success
-        issue {
-          id
-          identifier
-          title
-          description
-          url
-        }
-      }
-    }
-  `;
-  const data = await runLinearGraphqlRequest(mutation, {
-    id: sanitizeSingleLine(issueId, 64),
-    input: {
-      description: buildAccessControlIssueDescription(normalizedPolicy),
-    },
-  });
-  const issue = sanitizeAccessControlIssue(data?.issueUpdate?.issue);
-  if (!data?.issueUpdate?.success || !issue?.id) {
-    throw new Error("Could not update the MailroomNavigator access-control issue.");
-  }
-  accessControlCache = {
-    loadedAt: Date.now(),
-    issue,
-    policy: normalizedPolicy,
-  };
-  return { issue, policy: normalizedPolicy };
-}
-
 async function resolveAccessControl(email) {
   if (!ACCESS_CONTROL_OWNER_EMAIL) {
     throw new Error("MAILROOMNAV owner email is not configured.");
   }
   const normalizedEmail = normalizeEmail(email);
-
-  if (normalizedEmail === ACCESS_CONTROL_OWNER_EMAIL) {
-    const store = await ensureAccessControlStore();
-    return {
-      access: {
-        ...buildResolvedAccess(normalizedEmail, store.policy),
-        featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
-        ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
-      },
-      issue: store.issue,
-      policy: store.policy,
-    };
-  }
-
-  const store = await findAccessControlIssue();
+  const store = await loadAccessControlStore({ ensureExists: true });
   return {
     access: {
       ...buildResolvedAccess(normalizedEmail, store.policy),
       featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
       ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+      storage: "file",
+      storePath: ACCESS_CONTROL_STATE_PATH,
     },
-    issue: store.issue,
     policy: store.policy,
+    storePath: ACCESS_CONTROL_STATE_PATH,
   };
 }
 
@@ -774,17 +792,212 @@ async function getAccessControlManagement(actorEmail) {
   if (!resolved?.access?.isOwner) {
     throw new Error(resolved?.access?.reason || "Only the MailroomNavigator owner can manage access.");
   }
-  const ensuredStore = resolved.issue?.id ? resolved : await resolveAccessControl(ACCESS_CONTROL_OWNER_EMAIL);
+  const store = await loadAccessControlStore({ forceRefresh: true, ensureExists: true });
   return {
-    access: ensuredStore.access,
-    management: {
-      ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
-      users: listManagedAccessUsers(ensuredStore.policy),
-      featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
+    access: {
+      ...resolved.access,
+      storage: "file",
+      storePath: ACCESS_CONTROL_STATE_PATH,
     },
-    issue: ensuredStore.issue,
-    policy: ensuredStore.policy,
+    management: buildAccessControlManagementPayload(store.policy),
+    policy: store.policy,
   };
+}
+
+async function exportAccessControlPolicy(actorEmail) {
+  const actor = normalizeEmail(actorEmail);
+  const { policy } = await getAccessControlManagement(actor);
+  return {
+    exportedAt: nowIso(),
+    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+    storage: "file",
+    storePath: ACCESS_CONTROL_STATE_PATH,
+    policy: sanitizeAccessControlPolicy(policy),
+    counts: {
+      users: Object.keys(policy?.users || {}).length,
+      requests: Object.keys(policy?.requests || {}).length,
+    },
+  };
+}
+
+function normalizePolicyImportMode(value) {
+  return String(value || "").trim().toLowerCase() === "replace" ? "replace" : "merge";
+}
+
+function buildImportedPolicy(existingPolicy, incomingPolicy, mode = "merge") {
+  const existing = sanitizeAccessControlPolicy(existingPolicy);
+  const incoming = sanitizeAccessControlPolicy(incomingPolicy);
+  const now = nowIso();
+
+  if (mode === "replace") {
+    return sanitizeAccessControlPolicy({
+      ...incoming,
+      initializedAt: incoming.initializedAt || existing.initializedAt || now,
+      updatedAt: now,
+    });
+  }
+
+  return sanitizeAccessControlPolicy({
+    ...existing,
+    initializedAt: existing.initializedAt || incoming.initializedAt || now,
+    updatedAt: now,
+    users: {
+      ...(existing.users || {}),
+      ...(incoming.users || {}),
+    },
+    requests: {
+      ...(existing.requests || {}),
+      ...(incoming.requests || {}),
+    },
+  });
+}
+
+async function importAccessControlPolicy({ actorEmail, policy, mode } = {}) {
+  const actor = normalizeEmail(actorEmail);
+  if (!policy || typeof policy !== "object") {
+    throw new Error("Imported policy JSON is required.");
+  }
+
+  const { policy: existingPolicy } = await getAccessControlManagement(actor);
+  const normalizedMode = normalizePolicyImportMode(mode);
+  const nextPolicy = buildImportedPolicy(existingPolicy, policy, normalizedMode);
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  await appendServerLog(
+    `[${nowIso()}] access control imported mode=${normalizedMode} actor=${actor} users=${Object.keys(savedPolicy.users || {}).length} requests=${Object.keys(savedPolicy.requests || {}).length}`,
+  );
+  return {
+    management: buildAccessControlManagementPayload(savedPolicy),
+    importMode: normalizedMode,
+    importedAt: nowIso(),
+  };
+}
+
+function extractClientMetadata(req) {
+  const forwardedFor = sanitizeSingleLine(req?.headers?.["x-forwarded-for"], 240);
+  const forwardedIp = forwardedFor.split(",").map((part) => normalizeClientIp(part)).find(Boolean);
+  const remoteIp = normalizeClientIp(req?.socket?.remoteAddress);
+  return {
+    clientIp: forwardedIp || remoteIp || "",
+    userAgent: sanitizeSingleLine(req?.headers?.["user-agent"], 240),
+  };
+}
+
+function mergeRecentIps(existingIps = [], nextIp = "") {
+  const merged = [];
+  const seen = new Set();
+  [nextIp, ...(Array.isArray(existingIps) ? existingIps : [])].forEach((ip) => {
+    const normalizedIp = normalizeClientIp(ip);
+    if (!normalizedIp || seen.has(normalizedIp)) return;
+    seen.add(normalizedIp);
+    merged.push(normalizedIp);
+  });
+  return merged.slice(0, MAX_ACCESS_REQUEST_IPS);
+}
+
+async function upsertAccessControlRequest({
+  email,
+  requestedFeatures = [],
+  note = "",
+  explicitRequest = false,
+  clientIp = "",
+  userAgent = "",
+} = {}) {
+  // This request store is the shared review queue for company-wide installs.
+  // Both explicit "Request Access" submissions and passive denied-access
+  // observations land here so the owner can review the same dataset.
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) {
+    throw new Error("A valid BetterLetter email is required.");
+  }
+  if (targetEmail === ACCESS_CONTROL_OWNER_EMAIL) {
+    throw new Error("The owner account already has full MailroomNavigator access.");
+  }
+
+  const store = await loadAccessControlStore({ forceRefresh: true, ensureExists: true });
+  const existingUser = sanitizeAccessUserRecord(store.policy?.users?.[targetEmail], targetEmail);
+  if (existingUser) {
+    throw new Error("Your BetterLetter email already has MailroomNavigator access.");
+  }
+
+  const now = nowIso();
+  const existingRequest = sanitizeAccessRequestRecord(store.policy?.requests?.[targetEmail], targetEmail);
+  const nextRequest = sanitizeAccessRequestRecord({
+    ...existingRequest,
+    email: targetEmail,
+    status: explicitRequest ? "pending" : (existingRequest?.status || "pending"),
+    requestedFeatures: explicitRequest
+      ? normalizeAccessFeatures(requestedFeatures)
+      : (existingRequest?.requestedFeatures || []),
+    note: explicitRequest
+      ? sanitizeMultiline(note, 1200)
+      : (existingRequest?.note || ""),
+    firstSeenAt: existingRequest?.firstSeenAt || now,
+    lastSeenAt: now,
+    requestedAt: explicitRequest ? now : (existingRequest?.requestedAt || ""),
+    updatedAt: now,
+    reviewedAt: explicitRequest ? "" : (existingRequest?.reviewedAt || ""),
+    reviewedBy: explicitRequest ? "" : (existingRequest?.reviewedBy || ""),
+    reviewNote: explicitRequest ? "" : (existingRequest?.reviewNote || ""),
+    requestCount: Math.max(0, Number(existingRequest?.requestCount || 0)) + 1,
+    lastIp: normalizeClientIp(clientIp),
+    ipAddresses: mergeRecentIps(existingRequest?.ipAddresses || [], clientIp),
+    lastUserAgent: sanitizeSingleLine(userAgent, 240) || existingRequest?.lastUserAgent || "",
+  }, targetEmail);
+
+  const nextPolicy = sanitizeAccessControlPolicy({
+    ...store.policy,
+    initializedAt: store.policy?.initializedAt || now,
+    updatedAt: now,
+    requests: {
+      ...(store.policy?.requests || {}),
+      [targetEmail]: nextRequest,
+    },
+  });
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  return {
+    request: sanitizeAccessRequestRecord(savedPolicy.requests?.[targetEmail], targetEmail),
+    policy: savedPolicy,
+  };
+}
+
+async function reviewAccessControlRequest({ actorEmail, email, action, reviewNote = "" }) {
+  const actor = normalizeEmail(actorEmail);
+  const targetEmail = normalizeEmail(email);
+  const normalizedAction = sanitizeSingleLine(action, 40).toLowerCase();
+  if (!targetEmail) {
+    throw new Error("A valid BetterLetter email is required.");
+  }
+  if (!["reject", "archive"].includes(normalizedAction)) {
+    throw new Error("Unsupported review action.");
+  }
+
+  const { policy } = await getAccessControlManagement(actor);
+  const existingRequest = sanitizeAccessRequestRecord(policy?.requests?.[targetEmail], targetEmail);
+  if (!existingRequest) {
+    throw new Error("That access request does not exist.");
+  }
+
+  const nextRequests = { ...(policy?.requests || {}) };
+  if (normalizedAction === "archive") {
+    delete nextRequests[targetEmail];
+  } else {
+    nextRequests[targetEmail] = sanitizeAccessRequestRecord({
+      ...existingRequest,
+      status: "rejected",
+      updatedAt: nowIso(),
+      reviewedAt: nowIso(),
+      reviewedBy: actor,
+      reviewNote: sanitizeMultiline(reviewNote, 600),
+    }, targetEmail);
+  }
+
+  const nextPolicy = sanitizeAccessControlPolicy({
+    ...policy,
+    updatedAt: nowIso(),
+    requests: nextRequests,
+  });
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  return buildAccessControlManagementPayload(savedPolicy);
 }
 
 async function saveAccessControlUser({ actorEmail, email, role, features }) {
@@ -797,9 +1010,10 @@ async function saveAccessControlUser({ actorEmail, email, role, features }) {
     throw new Error("The owner account is fixed and cannot be edited here.");
   }
 
-  const { issue, policy } = await getAccessControlManagement(actor);
+  const { policy } = await getAccessControlManagement(actor);
   const now = nowIso();
   const existingUser = sanitizeAccessUserRecord(policy.users?.[targetEmail], targetEmail);
+  const existingRequest = sanitizeAccessRequestRecord(policy.requests?.[targetEmail], targetEmail);
   const nextUser = sanitizeAccessUserRecord({
     email: targetEmail,
     role: normalizeAccessRole(role),
@@ -818,13 +1032,33 @@ async function saveAccessControlUser({ actorEmail, email, role, features }) {
       ...policy.users,
       [targetEmail]: nextUser,
     },
+    requests: {
+      ...(policy.requests || {}),
+      ...(existingRequest
+        ? {
+          [targetEmail]: sanitizeAccessRequestRecord({
+            ...existingRequest,
+            status: "approved",
+            updatedAt: now,
+            reviewedAt: now,
+            reviewedBy: actor,
+          }, targetEmail),
+        }
+        : {}),
+    },
   });
-  const saved = await saveAccessControlPolicy(issue.id, nextPolicy);
-  return {
-    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
-    users: listManagedAccessUsers(saved.policy),
-    featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
-  };
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  const alert = await sendAccessControlSlackAlert({
+    eventType: existingUser ? "user_updated" : "user_granted",
+    actorEmail: actor,
+    targetEmail,
+    role: nextUser?.role,
+    features: nextUser?.features || [],
+  });
+  await appendServerLog(
+    `[${nowIso()}] access control ${existingUser ? "updated" : "granted"} user=${targetEmail} actor=${actor} slack=${alert.success ? "sent" : alert.skipped ? "skipped" : alert.error || "disabled"}`,
+  );
+  return buildAccessControlManagementPayload(savedPolicy, alert);
 }
 
 async function deleteAccessControlUser({ actorEmail, email }) {
@@ -837,7 +1071,7 @@ async function deleteAccessControlUser({ actorEmail, email }) {
     throw new Error("The owner account cannot be deleted.");
   }
 
-  const { issue, policy } = await getAccessControlManagement(actor);
+  const { policy } = await getAccessControlManagement(actor);
   const existingUser = sanitizeAccessUserRecord(policy.users?.[targetEmail], targetEmail);
   if (!existingUser) {
     throw new Error("That user does not exist.");
@@ -850,12 +1084,16 @@ async function deleteAccessControlUser({ actorEmail, email }) {
     updatedAt: nowIso(),
     users: nextUsers,
   });
-  const saved = await saveAccessControlPolicy(issue.id, nextPolicy);
-  return {
-    ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
-    users: listManagedAccessUsers(saved.policy),
-    featureCatalog: ACCESS_CONTROL_FEATURE_CATALOG,
-  };
+  const savedPolicy = await saveAccessControlPolicyToFile(nextPolicy);
+  const alert = await sendAccessControlSlackAlert({
+    eventType: "user_deleted",
+    actorEmail: actor,
+    targetEmail,
+  });
+  await appendServerLog(
+    `[${nowIso()}] access control removed user=${targetEmail} actor=${actor} slack=${alert.success ? "sent" : alert.skipped ? "skipped" : alert.error || "disabled"}`,
+  );
+  return buildAccessControlManagementPayload(savedPolicy, alert);
 }
 
 async function runSlackApiRequest(method, body = {}) {
@@ -973,6 +1211,147 @@ async function postSlackMessageWithAutoJoin({ channelId, text, targetType }) {
   }
 }
 
+function formatAccessControlFeatureList(features = []) {
+  const labels = normalizeAccessFeatures(features)
+    .map((featureKey) => ACCESS_CONTROL_FEATURE_CATALOG.find((feature) => feature.key === featureKey)?.label || featureKey)
+    .filter(Boolean);
+  return labels.length > 0 ? labels.join(", ") : "none";
+}
+
+function buildAccessControlSlackMessage({
+  eventType,
+  actorEmail = "",
+  targetEmail = "",
+  role = "",
+  features = [],
+  reason = "",
+  clientIp = "",
+} = {}) {
+  const normalizedEventType = sanitizeSingleLine(eventType, 40).toLowerCase();
+  const actor = normalizeEmail(actorEmail) || "unknown";
+  const target = normalizeEmail(targetEmail) || "unknown";
+  const normalizedRole = normalizeAccessRole(role);
+  const lines = [];
+
+  if (normalizedEventType === "access_denied") {
+    lines.push("MailroomNavigator access denied");
+    lines.push(`User: ${target}`);
+    if (reason) lines.push(`Reason: ${sanitizeSingleLine(reason, 220)}`);
+    return sanitizeMultiline(lines.join("\n"), 3200);
+  }
+
+  if (normalizedEventType === "access_request") {
+    lines.push("MailroomNavigator access requested");
+    lines.push(`User: ${target}`);
+    if (clientIp) lines.push(`IP: ${normalizeClientIp(clientIp)}`);
+    lines.push(`Requested features: ${formatAccessControlFeatureList(features)}`);
+    if (reason) lines.push(`Note: ${sanitizeSingleLine(reason, 220)}`);
+    return sanitizeMultiline(lines.join("\n"), 3200);
+  }
+
+  if (normalizedEventType === "user_deleted") {
+    lines.push("MailroomNavigator access removed");
+    lines.push(`Actor: ${actor}`);
+    lines.push(`User: ${target}`);
+    return sanitizeMultiline(lines.join("\n"), 3200);
+  }
+
+  lines.push(normalizedEventType === "user_updated"
+    ? "MailroomNavigator access updated"
+    : "MailroomNavigator access granted");
+  lines.push(`Actor: ${actor}`);
+  lines.push(`User: ${target}`);
+  lines.push(`Role: ${normalizedRole}`);
+  lines.push(`Features: ${formatAccessControlFeatureList(features)}`);
+  return sanitizeMultiline(lines.join("\n"), 3200);
+}
+
+function pruneAccessControlAlertCache() {
+  const cutoff = Date.now() - ACCESS_CONTROL_ALERT_COOLDOWN_MS;
+  for (const [key, sentAt] of accessControlAlertSentAt.entries()) {
+    if (!Number.isFinite(sentAt) || sentAt < cutoff) {
+      accessControlAlertSentAt.delete(key);
+    }
+  }
+}
+
+async function sendAccessControlSlackAlert({
+  eventType,
+  actorEmail = "",
+  targetEmail = "",
+  role = "",
+  features = [],
+  reason = "",
+  clientIp = "",
+  dedupeKey = "",
+} = {}) {
+  if (!ACCESS_CONTROL_SLACK_TARGET || !SLACK_BOT_TOKEN) {
+    return {
+      attempted: false,
+      success: false,
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+      target: ACCESS_CONTROL_SLACK_TARGET,
+      error: "Access Control Slack alert is not configured.",
+    };
+  }
+
+  const normalizedDedupeKey = sanitizeSingleLine(dedupeKey, 160);
+  pruneAccessControlAlertCache();
+  if (normalizedDedupeKey && accessControlAlertSentAt.has(normalizedDedupeKey)) {
+    return {
+      attempted: false,
+      success: false,
+      skipped: true,
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+      target: ACCESS_CONTROL_SLACK_TARGET,
+      error: "Duplicate access alert skipped during cooldown window.",
+    };
+  }
+
+  try {
+    const channelId = await resolveSlackChannelId({
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+      target: ACCESS_CONTROL_SLACK_TARGET,
+    });
+    const text = buildAccessControlSlackMessage({
+      eventType,
+      actorEmail,
+      targetEmail,
+      role,
+      features,
+      reason,
+      clientIp,
+    });
+    const data = await postSlackMessageWithAutoJoin({
+      channelId,
+      text,
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+    });
+    if (normalizedDedupeKey) {
+      accessControlAlertSentAt.set(normalizedDedupeKey, Date.now());
+    }
+    return {
+      attempted: true,
+      success: true,
+      skipped: false,
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+      target: ACCESS_CONTROL_SLACK_TARGET,
+      channel: sanitizeSingleLine(data?.channel, 80) || channelId,
+      ts: sanitizeSingleLine(data?.ts, 64),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      success: false,
+      skipped: false,
+      targetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+      target: ACCESS_CONTROL_SLACK_TARGET,
+      error: sanitizeSingleLine(error?.message, 260) || "Access Control Slack alert failed.",
+    };
+  }
+}
+
 function buildSlackIssueMessage({ payload, created }) {
   const issueId = sanitizeSingleLine(created?.issue?.identifier, 64) || "Issue";
   const issueTitle = sanitizeSingleLine(created?.issue?.title, 240) || "Linear issue";
@@ -1033,6 +1412,103 @@ async function sendSlackIssueNotification(payload, created) {
   }
 }
 
+function buildBotJobsRunSlackMessage(run) {
+  const runType = normalizeRunType(run?.runType);
+  const runLabel = runType === "reconcile" ? "MailroomNavigator Reconcile Linear" : "MailroomNavigator Trigger Linear";
+  const runId = sanitizeSingleLine(run?.runId, 80) || "unknown";
+  const dryRun = run?.dryRun ? " (dry run)" : "";
+  const endedAt = sanitizeSingleLine(run?.endedAt, 80) || nowIso();
+  const status = sanitizeSingleLine(run?.status, 32).toLowerCase();
+  const headline = status === "success"
+    ? `${runLabel}${dryRun} finished successfully.`
+    : `${runLabel}${dryRun} failed.`;
+
+  const lines = [
+    headline,
+    `Run ID: ${runId}`,
+    `Completed: ${endedAt}`,
+  ];
+
+  if (status !== "success") {
+    const error = sanitizeSingleLine(run?.error, 220) || "Unknown error.";
+    lines.push(`Error: ${error}`);
+  }
+
+  lines.push(`Actionable rows: ${Number(run?.actionableFoundTotal || 0)}`);
+  lines.push(`Issue candidates: ${Number(run?.issueCandidatesTotal || 0)}`);
+
+  if (run?.dryRun) {
+    lines.push(`Preview issues: ${Number(run?.previewIssuesTotal || 0)}`);
+  } else {
+    lines.push(`Created issues: ${Number(run?.createdIssuesTotal || 0)}`);
+  }
+
+  lines.push(`Skipped duplicates: ${Number(run?.skippedDuplicatesTotal || 0)}`);
+
+  if (run?.floodMode) {
+    lines.push("Flood safeguards activated during this run.");
+  }
+
+  const summaryLines = sanitizeStringList(run?.summaryLines, 6, 220);
+  if (summaryLines.length) {
+    lines.push("");
+    summaryLines.forEach((line) => lines.push(line));
+  }
+
+  return sanitizeMultiline(lines.filter(Boolean).join("\n"), 3200);
+}
+
+async function sendSlackBotJobsRunNotification(run, rawSlack = null) {
+  const slack = sanitizeLinearSlackPayload(rawSlack);
+  if (!slack?.enabled) {
+    return { attempted: false, success: false };
+  }
+  if (!SLACK_BOT_TOKEN) {
+    return {
+      attempted: true,
+      success: false,
+      targetType: normalizeSlackTargetType(slack?.targetType),
+      target: sanitizeSingleLine(slack?.target, 80),
+      error: "SLACK_BOT_TOKEN is missing in MailroomNavigator/.env.",
+    };
+  }
+
+  const targetType = normalizeSlackTargetType(slack.targetType);
+  const target = sanitizeSingleLine(slack.target, 80).replace(/^[@#]/, "");
+  if (!target) {
+    return {
+      attempted: true,
+      success: false,
+      targetType,
+      target: "",
+      error: "Slack target is required.",
+    };
+  }
+
+  try {
+    const channelId = await resolveSlackChannelId({ targetType, target });
+    const text = buildBotJobsRunSlackMessage(run);
+    const data = await postSlackMessageWithAutoJoin({ channelId, text, targetType });
+    return {
+      attempted: true,
+      success: true,
+      targetType,
+      target,
+      channel: sanitizeSingleLine(data?.channel, 80) || channelId,
+      ts: sanitizeSingleLine(data?.ts, 64),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      success: false,
+      targetType,
+      target,
+      error: sanitizeSingleLine(error?.message, 260) || "Slack notification failed.",
+    };
+  }
+}
+
 function sortSlackTargets(list = []) {
   return [...list].sort((a, b) => {
     const nameA = sanitizeSingleLine(a?.name || "", 140).toLowerCase();
@@ -1042,6 +1518,94 @@ function sortSlackTargets(list = []) {
     const idB = sanitizeSingleLine(b?.id || "", 80).toLowerCase();
     return idA.localeCompare(idB);
   });
+}
+
+function sanitizeSlackTargetEntry(entry = {}, fallbackType = "channel") {
+  const id = sanitizeSingleLine(entry?.id, 80).replace(/^[@#]/, "");
+  if (!id) return null;
+  const type = normalizeSlackTargetType(entry?.type || fallbackType);
+  const name = sanitizeSingleLine(entry?.name, 140);
+  const label = sanitizeSingleLine(entry?.label, 220)
+    || (type === "user"
+      ? (name ? `${name} (${id})` : id)
+      : (name ? `#${name} (${id})` : id));
+  return { id, name, label, type };
+}
+
+function sanitizeSlackTargetList(list = [], fallbackType = "channel") {
+  const source = Array.isArray(list) ? list : [];
+  const deduped = new Map();
+  source.forEach((entry) => {
+    const normalized = sanitizeSlackTargetEntry(entry, fallbackType);
+    if (!normalized || deduped.has(normalized.id)) return;
+    deduped.set(normalized.id, normalized);
+  });
+  return sortSlackTargets([...deduped.values()]);
+}
+
+function sanitizeSlackWorkspaceTargets(rawTargets = {}) {
+  return {
+    channels: sanitizeSlackTargetList(rawTargets?.channels, "channel"),
+    users: sanitizeSlackTargetList(rawTargets?.users, "user"),
+    syncedAt: sanitizeSingleLine(rawTargets?.syncedAt, 80),
+  };
+}
+
+function isSlackWorkspaceTargetsCacheFresh(targets) {
+  const syncedAtRaw = sanitizeSingleLine(targets?.syncedAt, 80);
+  if (!syncedAtRaw) return false;
+  const syncedAtMs = new Date(syncedAtRaw).getTime();
+  if (!Number.isFinite(syncedAtMs)) return false;
+  return Date.now() - syncedAtMs <= SLACK_TARGETS_CACHE_TTL_MS;
+}
+
+async function readSlackWorkspaceTargetsCacheFile() {
+  try {
+    const raw = await readFile(SLACK_TARGETS_CACHE_PATH, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    return sanitizeSlackWorkspaceTargets(parsed);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return sanitizeSlackWorkspaceTargets({});
+    }
+    throw new Error(
+      `Could not read Slack target cache at ${SLACK_TARGETS_CACHE_PATH}: ${sanitizeSingleLine(error?.message, 220) || "unknown error"}`,
+    );
+  }
+}
+
+async function saveSlackWorkspaceTargetsCacheFile(targets) {
+  const normalizedTargets = sanitizeSlackWorkspaceTargets(targets);
+  await mkdir(dirname(SLACK_TARGETS_CACHE_PATH), { recursive: true });
+  await writeFile(
+    SLACK_TARGETS_CACHE_PATH,
+    `${JSON.stringify(normalizedTargets, null, 2)}\n`,
+    "utf8",
+  );
+  slackTargetsCache = {
+    loadedAt: Date.now(),
+    targets: normalizedTargets,
+  };
+  return normalizedTargets;
+}
+
+async function loadSlackWorkspaceTargetsCache({ forceRefresh = false } = {}) {
+  if (
+    !forceRefresh
+    && slackTargetsCache?.targets
+    && Date.now() - Number(slackTargetsCache.loadedAt || 0) < SLACK_TARGETS_CACHE_TTL_MS
+  ) {
+    return sanitizeSlackWorkspaceTargets(slackTargetsCache.targets);
+  }
+
+  const cachedTargets = await readSlackWorkspaceTargetsCacheFile();
+  if (!forceRefresh && isSlackWorkspaceTargetsCacheFresh(cachedTargets)) {
+    slackTargetsCache = {
+      loadedAt: Date.now(),
+      targets: cachedTargets,
+    };
+  }
+  return cachedTargets;
 }
 
 async function listSlackChannels() {
@@ -1133,24 +1697,56 @@ async function listSlackUsers() {
   return sortSlackTargets([...uniqueById.values()]);
 }
 
-async function fetchSlackWorkspaceTargets() {
+async function fetchSlackWorkspaceTargets({ forceRefresh = false } = {}) {
   if (!SLACK_BOT_TOKEN) {
     throw new Error("SLACK_BOT_TOKEN is missing in MailroomNavigator/.env.");
   }
 
-  const channels = await listSlackChannels();
-  let users = [];
+  const cachedTargets = await loadSlackWorkspaceTargetsCache({ forceRefresh: false });
+  if (!forceRefresh && isSlackWorkspaceTargetsCacheFresh(cachedTargets)) {
+    return cachedTargets;
+  }
+
+  let channels = cachedTargets.channels;
+  let users = cachedTargets.users;
+  let channelsFetchedLive = false;
+  let usersFetchedLive = false;
+  let channelError = null;
+  let userError = null;
+
+  try {
+    channels = await listSlackChannels();
+    channelsFetchedLive = true;
+  } catch (error) {
+    channelError = error;
+    await appendServerLog(`[${nowIso()}] slack channels sync fallback: ${String(error?.message || error)}`);
+  }
+
   try {
     users = await listSlackUsers();
+    usersFetchedLive = true;
   } catch (error) {
+    userError = error;
     await appendServerLog(`[${nowIso()}] slack users sync skipped: ${String(error?.message || error)}`);
   }
 
-  return {
+  const resolvedTargets = sanitizeSlackWorkspaceTargets({
     channels,
     users,
-    syncedAt: nowIso(),
-  };
+    syncedAt: channelsFetchedLive || usersFetchedLive
+      ? nowIso()
+      : cachedTargets.syncedAt,
+  });
+
+  if (channelsFetchedLive || usersFetchedLive) {
+    return saveSlackWorkspaceTargetsCacheFile(resolvedTargets);
+  }
+
+  if (resolvedTargets.channels.length || resolvedTargets.users.length) {
+    return resolvedTargets;
+  }
+
+  throw channelError || userError || new Error("Could not sync Slack workspace targets.");
 }
 
 function toRunPublic(run) {
@@ -1178,6 +1774,7 @@ function toRunPublic(run) {
     actionableFoundTotal: Number.isFinite(Number(run.actionableFoundTotal)) ? Number(run.actionableFoundTotal) : 0,
     issueCandidatesTotal: Number.isFinite(Number(run.issueCandidatesTotal)) ? Number(run.issueCandidatesTotal) : 0,
     floodMode: Boolean(run.floodMode),
+    slackNotification: sanitizeSlackNotificationResult(run.slackNotification),
   };
 }
 
@@ -1242,13 +1839,32 @@ function corsHeaders(origin) {
   const headers = {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type,X-MailroomNavigator-Access-Key",
   };
   if (isOriginAllowed(origin)) {
     headers["Access-Control-Allow-Origin"] = origin || "*";
     headers["Vary"] = "Origin";
   }
   return headers;
+}
+
+function isLoopbackRequest(req) {
+  const remoteAddress = String(req?.socket?.remoteAddress || "").trim();
+  return (
+    remoteAddress === "127.0.0.1"
+    || remoteAddress === "::1"
+    || remoteAddress === "::ffff:127.0.0.1"
+  );
+}
+
+function isAuthorizedAccessControlRequest(req) {
+  if (!ACCESS_CONTROL_SHARED_KEY) return true;
+  if (isLoopbackRequest(req)) return true;
+  const providedKey = sanitizeSingleLine(
+    req?.headers?.["x-mailroomnavigator-access-key"],
+    240,
+  );
+  return Boolean(providedKey) && providedKey === ACCESS_CONTROL_SHARED_KEY;
 }
 
 async function appendServerLog(line) {
@@ -1327,7 +1943,7 @@ function normalizeRunType(value) {
   return String(value || "").toLowerCase().trim() === "reconcile" ? "reconcile" : "trigger";
 }
 
-async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType = "trigger" }) {
+async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType = "trigger", slack = null }) {
   if (activeRun) {
     return { accepted: false, reason: "already_running", run: toRunPublic(activeRun) };
   }
@@ -1366,6 +1982,8 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
     error: "",
     pid: child.pid || null,
     reportPath,
+    slack: sanitizeLinearSlackPayload(slack),
+    slackNotification: null,
   };
   await appendServerLog(
     `[${nowIso()}] [${runId}] started type=${normalizedRunType} script=${entryName} (dryRun=${Boolean(dryRun)})`,
@@ -1392,6 +2010,8 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
           error: "",
           pid: child.pid || null,
           reportPath,
+          slack: sanitizeLinearSlackPayload(slack),
+          slackNotification: null,
         };
     const reportSummary = summarizeBotJobsReport(await readBotJobsReport(baseRun.reportPath || reportPath));
     const finalStatus =
@@ -1411,6 +2031,21 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
     if (logMessage) {
       appendServerLog(`[${nowIso()}] [${runId}] ${logMessage}`).catch(() => undefined);
     }
+    writeLastRunState().catch(() => undefined);
+
+    // The panel reads lastRun immediately after the process exits. Delay Slack so the
+    // user gets the 2-second in-panel confirmation first, then the Slack summary.
+    await delay(LINEAR_TRIGGER_SLACK_SUMMARY_DELAY_MS);
+    const slackResult = await sendSlackBotJobsRunNotification(lastRun, baseRun.slack);
+    if (slackResult.attempted) {
+      appendServerLog(
+        `[${nowIso()}] [${runId}] slack ${slackResult.success ? "sent" : "failed"} targetType=${slackResult.targetType} target=${slackResult.target || "n/a"}${slackResult.error ? ` error=${slackResult.error}` : ""}`,
+      ).catch(() => undefined);
+    }
+    lastRun = {
+      ...lastRun,
+      slackNotification: sanitizeSlackNotificationResult(slackResult),
+    };
     writeLastRunState().catch(() => undefined);
   };
 
@@ -1510,7 +2145,19 @@ const server = createServer(async (req, res) => {
   }
 
   try {
+    const requiresAccessControlAuth = path === "/health" || path.startsWith("/access/");
+    if (requiresAccessControlAuth && !isAuthorizedAccessControlRequest(req)) {
+      sendJson(res, 403, origin, {
+        ok: false,
+        error: "Forbidden access-control request.",
+      });
+      return;
+    }
+
     if (method === "GET" && path === "/health") {
+      const store = await loadAccessControlStore({ forceRefresh: true, ensureExists: true });
+      const managedUsers = listManagedAccessUsers(store.policy);
+      const requests = listAccessRequests(store.policy);
       sendJson(res, 200, origin, {
         ok: true,
         running: Boolean(activeRun),
@@ -1526,6 +2173,14 @@ const server = createServer(async (req, res) => {
         access: {
           enabled: Boolean(ACCESS_CONTROL_OWNER_EMAIL),
           ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
+          storage: "file",
+          storePath: ACCESS_CONTROL_STATE_PATH,
+          managedUsers: managedUsers.length,
+          pendingRequests: requests.filter((request) => request.status === "pending").length,
+          policyUpdatedAt: sanitizeSingleLine(store.policy?.updatedAt, 80),
+          alertsSlackConfigured: Boolean(SLACK_BOT_TOKEN && ACCESS_CONTROL_SLACK_TARGET),
+          alertsSlackTargetType: ACCESS_CONTROL_SLACK_TARGET_TYPE,
+          alertsSlackTarget: ACCESS_CONTROL_SLACK_TARGET,
         },
         serverTime: nowIso(),
       });
@@ -1537,6 +2192,21 @@ const server = createServer(async (req, res) => {
         const body = await parseJsonBody(req);
         const email = sanitizeSingleLine(body?.email, 240);
         const resolved = await resolveAccessControl(email);
+        if (resolved?.access?.email && !resolved?.access?.allowed) {
+          const clientMeta = extractClientMetadata(req);
+          const requestResult = await upsertAccessControlRequest({
+            email: resolved.access.email,
+            explicitRequest: false,
+            clientIp: clientMeta.clientIp,
+            userAgent: clientMeta.userAgent,
+          }).catch(() => null);
+          // Passive denied opens should populate the review queue without creating
+          // Slack noise. Explicit Request Access submissions are the only path that
+          // send Slack alerts for access requests.
+          await appendServerLog(
+            `[${nowIso()}] access denied observed user=${resolved.access.email} ip=${clientMeta.clientIp || "unknown"} status=${requestResult?.request?.status || "pending"} count=${Number(requestResult?.request?.requestCount || 0) || 0}`,
+          );
+        }
         sendJson(res, 200, origin, {
           ok: true,
           access: resolved.access,
@@ -1545,6 +2215,48 @@ const server = createServer(async (req, res) => {
         sendJson(res, 500, origin, {
           ok: false,
           error: sanitizeSingleLine(error?.message, 260) || "Could not resolve MailroomNavigator access.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/request") {
+      try {
+        const body = await parseJsonBody(req);
+        const email = sanitizeSingleLine(body?.email, 240);
+        const note = sanitizeMultiline(body?.note, 1200);
+        const requestedFeatures = Array.isArray(body?.requestedFeatures) ? body.requestedFeatures : [];
+        const clientMeta = extractClientMetadata(req);
+        const requestResult = await upsertAccessControlRequest({
+          email,
+          requestedFeatures,
+          note,
+          explicitRequest: true,
+          clientIp: clientMeta.clientIp,
+          userAgent: clientMeta.userAgent,
+        });
+        const resolved = await resolveAccessControl(email);
+        const alert = await sendAccessControlSlackAlert({
+          eventType: "access_request",
+          targetEmail: normalizeEmail(email),
+          features: requestedFeatures,
+          reason: note,
+          clientIp: clientMeta.clientIp,
+          dedupeKey: `request:${normalizeEmail(email)}`,
+        });
+        await appendServerLog(
+          `[${nowIso()}] access request user=${normalizeEmail(email)} ip=${clientMeta.clientIp || "unknown"} slack=${alert.success ? "sent" : alert.skipped ? "skipped" : alert.error || "disabled"}`,
+        );
+        sendJson(res, 200, origin, {
+          ok: true,
+          access: resolved.access,
+          request: requestResult.request,
+          alert,
+        });
+      } catch (error) {
+        sendJson(res, 400, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not submit MailroomNavigator access request.",
         });
       }
       return;
@@ -1564,6 +2276,68 @@ const server = createServer(async (req, res) => {
         sendJson(res, 403, origin, {
           ok: false,
           error: sanitizeSingleLine(error?.message, 260) || "Could not load MailroomNavigator user management.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/export-policy") {
+      try {
+        const body = await parseJsonBody(req);
+        const exported = await exportAccessControlPolicy(
+          sanitizeSingleLine(body?.actorEmail, 240),
+        );
+        sendJson(res, 200, origin, {
+          ok: true,
+          exported,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not export MailroomNavigator access policy.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/import-policy") {
+      try {
+        const body = await parseJsonBody(req);
+        const imported = await importAccessControlPolicy({
+          actorEmail: sanitizeSingleLine(body?.actorEmail, 240),
+          policy: body?.policy,
+          mode: sanitizeSingleLine(body?.mode, 20),
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          ...imported,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not import MailroomNavigator access policy.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/access/review-request") {
+      try {
+        const body = await parseJsonBody(req);
+        const management = await reviewAccessControlRequest({
+          actorEmail: sanitizeSingleLine(body?.actorEmail, 240),
+          email: sanitizeSingleLine(body?.email, 240),
+          action: sanitizeSingleLine(body?.action, 40),
+          reviewNote: sanitizeMultiline(body?.reviewNote, 600),
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          management,
+        });
+      } catch (error) {
+        sendJson(res, 403, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not review MailroomNavigator access request.",
         });
       }
       return;
@@ -1613,7 +2387,10 @@ const server = createServer(async (req, res) => {
 
     if (method === "GET" && path === "/slack/targets") {
       try {
-        const targets = await fetchSlackWorkspaceTargets();
+        const forceRefresh = ["1", "true", "yes"].includes(
+          sanitizeSingleLine(url.searchParams.get("force"), 12).toLowerCase(),
+        );
+        const targets = await fetchSlackWorkspaceTargets({ forceRefresh });
         sendJson(res, 200, origin, {
           ok: true,
           targets,
@@ -1630,8 +2407,10 @@ const server = createServer(async (req, res) => {
     if (method === "POST" && path === "/trigger-linear") {
       const body = await parseJsonBody(req).catch(() => ({}));
       const dryRun = Boolean(body?.dryRun);
+      const slack = sanitizeLinearSlackPayload(body?.slack);
       const result = await startBotJobsRun({
         dryRun,
+        slack,
         entryScript: BOT_JOBS_ENTRY,
         runType: "trigger",
       });
@@ -1655,8 +2434,10 @@ const server = createServer(async (req, res) => {
     if (method === "POST" && path === "/trigger-linear-reconcile") {
       const body = await parseJsonBody(req).catch(() => ({}));
       const dryRun = Boolean(body?.dryRun);
+      const slack = sanitizeLinearSlackPayload(body?.slack);
       const result = await startBotJobsRun({
         dryRun,
+        slack,
         entryScript: BOT_JOBS_RECONCILE_ENTRY,
         runType: "reconcile",
       });
