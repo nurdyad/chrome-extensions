@@ -7,5 +7,15 @@
  */
 
 globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS = Object.freeze({
-  sharedAccessServiceBaseUrl: '',
+  sharedAccessServiceBaseUrl: 'http://172.16.10.140:4817',
+  localAccessGrants: [
+    {
+      email: 'abby.buckley@dyad.net',
+      features: [
+        'practice_navigator',
+        'job_panel',
+        'dashboard_hover_tools',
+      ],
+    },
+  ],
 });

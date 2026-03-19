@@ -286,6 +286,49 @@ function getDeploymentDefaultAccessServiceBaseUrl() {
     return sanitizeServiceBaseUrl(DEPLOYMENT_DEFAULTS?.sharedAccessServiceBaseUrl);
 }
 
+function getDeploymentLocalAccessGrants() {
+    const rawGrants = Array.isArray(DEPLOYMENT_DEFAULTS?.localAccessGrants)
+        ? DEPLOYMENT_DEFAULTS.localAccessGrants
+        : [];
+    return rawGrants
+        .map((entry) => {
+            const email = normalizeEmail(entry?.email);
+            if (!email) return null;
+            const features = Array.isArray(entry?.features)
+                ? entry.features
+                    .map((featureKey) => sanitizeSingleLine(featureKey, 64))
+                    .filter((featureKey) => EXTENSION_FEATURE_KEY_SET.has(featureKey))
+                : [];
+            return {
+                email,
+                features
+            };
+        })
+        .filter(Boolean);
+}
+
+function findDeploymentLocalAccessGrant(email) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return null;
+    return getDeploymentLocalAccessGrants().find((entry) => entry.email === normalizedEmail) || null;
+}
+
+function buildDeploymentLocalGrantAccessState(identity = null, grant = null) {
+    const email = normalizeEmail(identity?.email || grant?.email);
+    return sanitizeExtensionAccessState({
+        initialized: Boolean(email),
+        allowed: true,
+        isOwner: false,
+        canManageUsers: false,
+        role: 'user',
+        email,
+        matchedRule: 'deployment_local_access_grant',
+        reason: '',
+        detectionSource: sanitizeSingleLine(identity?.source, 120),
+        features: buildExtensionFeatureAccessMap(Array.isArray(grant?.features) ? grant.features : [], false)
+    });
+}
+
 function sanitizeAccessControlServiceConfig(rawConfig = null) {
     const baseUrl = sanitizeServiceBaseUrl(rawConfig?.baseUrl);
     const sharedKey = sanitizeSingleLine(rawConfig?.sharedKey, 240);
@@ -2187,6 +2230,22 @@ async function handleGetExtensionAccessState(rawPayload = {}, sender = null) {
         const forceRefresh = Boolean(rawPayload?.forceRefresh);
         const allowStale = Boolean(rawPayload?.allowStale);
         const identity = await resolveCurrentBetterLetterUserIdentity({ preferredTabId, forceRefresh });
+        const deploymentLocalGrant = findDeploymentLocalAccessGrant(identity?.email);
+        if (deploymentLocalGrant) {
+            const access = buildDeploymentLocalGrantAccessState(identity, deploymentLocalGrant);
+            extensionAccessStateCache = {
+                ...(extensionAccessStateCache || {}),
+                cacheKey: `local-grant|${identity.email || 'unknown'}|${preferredTabId || 'any'}`,
+                access,
+                checkedAt: Date.now()
+            };
+            await saveStoredExtensionAccessSnapshot(access, Date.now());
+            return {
+                success: true,
+                access,
+                stale: false
+            };
+        }
         const cacheKey = `${identity.email || 'unknown'}|${preferredTabId || 'any'}`;
         const now = Date.now();
         if (
