@@ -1,15 +1,17 @@
 // Main panel controller for all three views (Navigator, Job Panel, Others).
 // This file wires DOM events to feature modules and background actions.
 import { state, setCachedPractices } from './state.js';
-import { showToast, showStatus, openTabWithTimeout, extractNameFromEmail } from './utils.js';
+import { showToast, showStatus, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
 import * as Jobs from './jobs.js';
+import { AuthManagement } from './auth_management.js';
 
 let practiceCacheLoadPromise = null;
 let isCdbHydrationTriggered = false;
 let extensionAccessState = null;
 let extensionUserManagementState = { users: [], featureCatalog: [] };
 let accessNoticeHideTimer = null;
+const PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY = 'mailroomNavPanelSectionCollapseV1';
 const PANEL_HOST_TAB_ID = (() => {
     try {
         const rawValue = new URLSearchParams(window.location.search).get('hostTabId');
@@ -73,6 +75,14 @@ function normalizePanelAccessState(rawAccess = null) {
         email: String(rawAccess?.email || '').trim().slice(0, 240),
         reason: String(rawAccess?.reason || '').trim().slice(0, 260),
         detectionSource: String(rawAccess?.detectionSource || '').trim().slice(0, 120),
+        requestStatus: String(rawAccess?.requestStatus || '').trim().slice(0, 40),
+        requestRequestedAt: String(rawAccess?.requestRequestedAt || '').trim().slice(0, 80),
+        requestUpdatedAt: String(rawAccess?.requestUpdatedAt || '').trim().slice(0, 80),
+        requestRequestedFeatures: Array.isArray(rawAccess?.requestRequestedFeatures)
+            ? rawAccess.requestRequestedFeatures
+                .map((featureKey) => String(featureKey || '').trim())
+                .filter((featureKey) => EXTENSION_FEATURE_KEYS.includes(featureKey))
+            : [],
         features,
         featureCatalog
     };
@@ -109,6 +119,7 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
     if (hasCache && !forceRefresh) return state.cachedPractices;
 
     practiceCacheLoadPromise = (async () => {
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         try {
             // Fast path: load currently available cache first (usually from storage/background memory)
             let response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
@@ -122,11 +133,14 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
 
             // Refresh path: explicit refresh or empty cache fallback
             await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
-            response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
-            if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
-                setCachedPractices(response.practiceCache);
-                Navigator.buildCdbIndex();
-                return response.practiceCache;
+            for (let attempt = 0; attempt < 6; attempt += 1) {
+                response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+                if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
+                    setCachedPractices(response.practiceCache);
+                    Navigator.buildCdbIndex();
+                    return response.practiceCache;
+                }
+                if (attempt < 5) await wait(220);
             }
             return state.cachedPractices;
         } catch (e) {
@@ -140,11 +154,11 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
 }
 
 
-async function triggerCdbHydration() {
+async function triggerCdbHydration({ limit = 60 } = {}) {
     if (isCdbHydrationTriggered) return;
     isCdbHydrationTriggered = true;
     try {
-        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: 200 });
+        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: Math.max(10, Number(limit) || 60) });
         await syncPracticeCache({ forceRefresh: true, allowScrape: false });
     } catch (e) {
         console.warn('[Panel] CDB hydration skipped.');
@@ -178,11 +192,12 @@ function showView(viewId) {
     }
 }
 
-async function fetchExtensionAccessState({ forceRefresh = false } = {}) {
+async function fetchExtensionAccessState({ forceRefresh = false, allowStale = false } = {}) {
     const response = await chrome.runtime.sendMessage({
         action: 'getExtensionAccessState',
         payload: {
             forceRefresh,
+            allowStale,
             preferredTabId: PANEL_HOST_TAB_ID
         }
     });
@@ -206,6 +221,34 @@ async function fetchExtensionUserManagement({ forceRefresh = false } = {}) {
     return response.management;
 }
 
+async function exportExtensionAccessPolicy() {
+    const response = await chrome.runtime.sendMessage({
+        action: 'exportExtensionAccessPolicy',
+        payload: {
+            preferredTabId: PANEL_HOST_TAB_ID
+        }
+    });
+    if (!response?.success || !response?.exported) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not export MailroomNavigator access policy.');
+    }
+    return response.exported;
+}
+
+async function importExtensionAccessPolicy({ policy, mode = 'merge' } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'importExtensionAccessPolicy',
+        payload: {
+            preferredTabId: PANEL_HOST_TAB_ID,
+            policy,
+            mode
+        }
+    });
+    if (!response?.success || !response?.management) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not import MailroomNavigator access policy.');
+    }
+    return response;
+}
+
 async function fetchExtensionIdentityDiagnostics({ forceRefresh = false } = {}) {
     const response = await chrome.runtime.sendMessage({
         action: 'getExtensionIdentityDiagnostics',
@@ -218,6 +261,65 @@ async function fetchExtensionIdentityDiagnostics({ forceRefresh = false } = {}) 
         throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load BetterLetter identity diagnostics.');
     }
     return response.diagnostics;
+}
+
+async function submitExtensionAccessRequest({ note = '', requestedFeatures = [] } = {}) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'submitExtensionAccessRequest',
+        payload: {
+            preferredTabId: PANEL_HOST_TAB_ID,
+            note,
+            requestedFeatures
+        }
+    });
+    if (!response?.success) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not submit access request.');
+    }
+    return response;
+}
+
+function sanitizeAccessServiceUrl(value) {
+    try {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        const url = new URL(raw);
+        if (!/^https?:$/i.test(url.protocol)) return '';
+        url.hash = '';
+        return url.toString().replace(/\/+$/, '');
+    } catch {
+        return '';
+    }
+}
+
+async function fetchAccessControlServiceConfig() {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getAccessControlServiceConfig'
+    });
+    if (!response?.success || !response?.config) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load access service config.');
+    }
+    return response.config;
+}
+
+async function saveAccessControlServiceConfig(config) {
+    const response = await chrome.runtime.sendMessage({
+        action: 'saveAccessControlServiceConfig',
+        payload: config
+    });
+    if (!response?.success || !response?.config) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not save access service config.');
+    }
+    return response.config;
+}
+
+async function fetchAccessControlServiceHealth() {
+    const response = await chrome.runtime.sendMessage({
+        action: 'getAccessControlServiceHealth'
+    });
+    if (!response?.success || !response?.health) {
+        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not reach access service.');
+    }
+    return response.health;
 }
 
 function renderExtensionAccessState(access) {
@@ -347,6 +449,34 @@ function setElementVisible(elementOrId, shouldShow, displayValue = '') {
     element.style.display = shouldShow ? displayValue : 'none';
 }
 
+async function loadPanelCollapsibleSectionState() {
+    try {
+        const result = await chrome.storage.local.get([PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY]);
+        return result?.[PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY] && typeof result[PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY] === 'object'
+            ? result[PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY]
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+async function savePanelCollapsibleSectionState(state) {
+    try {
+        await chrome.storage.local.set({
+            [PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY]: state && typeof state === 'object' ? state : {}
+        });
+    } catch {
+        // Collapse state is only UI polish; ignore persistence failures.
+    }
+}
+
+function applyCollapsibleSectionUi(section, body, toggleButton, collapsed) {
+    if (!section || !body || !toggleButton) return;
+    section.classList.toggle('is-collapsed', Boolean(collapsed));
+    toggleButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    body.style.display = collapsed ? 'none' : '';
+}
+
 function applyExtensionFeatureAccessToUi() {
     const navRow = document.querySelector('.global-nav-buttons-row');
     const accessAllowed = Boolean(extensionAccessState?.allowed);
@@ -382,7 +512,11 @@ function applyExtensionFeatureAccessToUi() {
     setElementVisible('triggerLinearDryRunLabel', hasExtensionFeature('linear_trigger'), 'flex');
     setElementVisible('reconcileLinearControls', hasExtensionFeature('linear_reconcile'));
     setElementVisible('reconcileLinearDryRunLabel', hasExtensionFeature('linear_reconcile'), 'flex');
-    setElementVisible('linearTriggerStatus', hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync']));
+    setElementVisible(
+        'linearTriggerStatus',
+        hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
+            && Boolean(String(document.getElementById('linearTriggerStatus')?.textContent || '').trim())
+    );
     setElementVisible('extensionUserManagementSection', Boolean(extensionAccessState?.isOwner));
 
     const actionRow = document.getElementById('linearActionButtonsRow');
@@ -541,7 +675,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     resizeToFitContent();
 
+    const linearIssueSection = document.getElementById('linearIssueSection');
+    const linearIssueSectionBody = document.getElementById('linearIssueSectionBody');
+    const linearIssueSectionToggle = document.getElementById('linearIssueSectionToggle');
+    const extensionUserManagementSection = document.getElementById('extensionUserManagementSection');
+    const extensionUserManagementSectionBody = document.getElementById('extensionUserManagementSectionBody');
+    const extensionUserManagementSectionToggle = document.getElementById('extensionUserManagementSectionToggle');
+
     const identityDetectionStatus = document.getElementById('identityDetectionStatus');
+    const accessRequestSection = document.getElementById('accessRequestSection');
+    const accessRequestStatus = document.getElementById('accessRequestStatus');
+    const accessRequestNoteInput = document.getElementById('accessRequestNoteInput');
+    const accessRequestFeaturesGrid = document.getElementById('accessRequestFeaturesGrid');
+    const submitAccessRequestBtn = document.getElementById('submitAccessRequestBtn');
+    const refreshAccessRequestBtn = document.getElementById('refreshAccessRequestBtn');
+    const accessServiceConfigSection = document.getElementById('accessServiceConfigSection');
+    const accessServiceUrlInput = document.getElementById('accessServiceUrlInput');
+    const accessServiceKeyInput = document.getElementById('accessServiceKeyInput');
+    const saveAccessServiceConfigBtn = document.getElementById('saveAccessServiceConfigBtn');
+    const clearAccessServiceConfigBtn = document.getElementById('clearAccessServiceConfigBtn');
+    const accessServiceConfigStatus = document.getElementById('accessServiceConfigStatus');
     const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
     const managedUserEmailInput = document.getElementById('managedUserEmailInput');
     const managedUserRoleInput = document.getElementById('managedUserRoleInput');
@@ -551,10 +704,203 @@ document.addEventListener('DOMContentLoaded', async () => {
     const refreshManagedUsersBtn = document.getElementById('refreshManagedUsersBtn');
     const extensionManagedUsersList = document.getElementById('extensionManagedUsersList');
     let managedUserEditingEmail = '';
+    let accessServiceConfig = { enabled: false, baseUrl: '', sharedKey: '', isDefault: false, defaultBaseUrl: '', useLocalOverride: false };
+    let enhancedAuthManagementReady = false;
+    let collapsibleSectionState = await loadPanelCollapsibleSectionState();
+
+    const setCollapsibleSectionCollapsed = (sectionKey, collapsed, { persist = true } = {}) => {
+        collapsibleSectionState = {
+            ...collapsibleSectionState,
+            [sectionKey]: Boolean(collapsed)
+        };
+        if (sectionKey === 'linearIssueSection') {
+            applyCollapsibleSectionUi(linearIssueSection, linearIssueSectionBody, linearIssueSectionToggle, collapsed);
+        }
+        if (sectionKey === 'extensionUserManagementSection') {
+            applyCollapsibleSectionUi(extensionUserManagementSection, extensionUserManagementSectionBody, extensionUserManagementSectionToggle, collapsed);
+        }
+        if (persist) savePanelCollapsibleSectionState(collapsibleSectionState).catch(() => undefined);
+    };
+
+    linearIssueSectionToggle?.addEventListener('click', () => {
+        setCollapsibleSectionCollapsed(
+            'linearIssueSection',
+            !Boolean(collapsibleSectionState?.linearIssueSection)
+        );
+    });
+    extensionUserManagementSectionToggle?.addEventListener('click', () => {
+        setCollapsibleSectionCollapsed(
+            'extensionUserManagementSection',
+            !Boolean(collapsibleSectionState?.extensionUserManagementSection)
+        );
+    });
+
+    setCollapsibleSectionCollapsed('linearIssueSection', Boolean(collapsibleSectionState?.linearIssueSection), { persist: false });
+    setCollapsibleSectionCollapsed('extensionUserManagementSection', Boolean(collapsibleSectionState?.extensionUserManagementSection), { persist: false });
 
     const getFeatureCatalogForUi = () => Array.isArray(extensionAccessState?.featureCatalog) && extensionAccessState.featureCatalog.length > 0
         ? extensionAccessState.featureCatalog
         : EXTENSION_FEATURE_CATALOG;
+
+    const setAccessRequestStatus = (message, tone = null) => {
+        if (!accessRequestStatus) return;
+        accessRequestStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') accessRequestStatus.classList.add('valid');
+        else if (tone === 'invalid') accessRequestStatus.classList.add('invalid');
+        else accessRequestStatus.classList.add('neutral');
+        accessRequestStatus.textContent = String(message || '').trim();
+    };
+
+    const renderAccessRequestFeatureCheckboxes = (selectedFeatures = []) => {
+        if (!accessRequestFeaturesGrid) return;
+        const selectedFeatureSet = new Set(Array.isArray(selectedFeatures) ? selectedFeatures : []);
+        accessRequestFeaturesGrid.innerHTML = '';
+        getFeatureCatalogForUi().forEach((feature) => {
+            const row = document.createElement('label');
+            row.className = 'job-check-item';
+            row.style.display = 'flex';
+            row.style.gap = '8px';
+            row.style.alignItems = 'flex-start';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = feature.key;
+            checkbox.checked = selectedFeatureSet.has(feature.key);
+
+            const copy = document.createElement('span');
+            const title = document.createElement('strong');
+            title.textContent = feature.label;
+            const description = document.createElement('div');
+            description.textContent = feature.description;
+            description.style.fontSize = '11px';
+            description.style.color = '#6b7280';
+            copy.append(title, description);
+
+            row.append(checkbox, copy);
+            accessRequestFeaturesGrid.appendChild(row);
+        });
+    };
+
+    const getRequestedAccessFeatures = () => {
+        if (!accessRequestFeaturesGrid) return [];
+        return [...accessRequestFeaturesGrid.querySelectorAll('input[type="checkbox"]:checked')]
+            .map((input) => String(input.value || '').trim())
+            .filter(Boolean);
+    };
+
+    const renderAccessRequestSection = () => {
+        // This panel only submits a review request. The shared access service still
+        // decides whether the current BetterLetter email is granted any features.
+        const canRequestAccess = Boolean(extensionAccessState?.email)
+            && !extensionAccessState?.allowed
+            && !extensionAccessState?.isOwner;
+        setElementVisible(accessRequestSection, canRequestAccess, '');
+        if (!canRequestAccess) return;
+
+        const selectedFeatures = (getRequestedAccessFeatures().length > 0)
+            ? getRequestedAccessFeatures()
+            : extensionAccessState?.requestRequestedFeatures || [];
+        renderAccessRequestFeatureCheckboxes(selectedFeatures);
+
+        if (submitAccessRequestBtn) {
+            submitAccessRequestBtn.textContent = extensionAccessState?.requestRequestedAt ? 'Update Request' : 'Request Access';
+        }
+
+        if (extensionAccessState?.requestStatus === 'pending' && extensionAccessState?.requestRequestedAt) {
+            setAccessRequestStatus(
+                `Request pending review since ${extensionAccessState.requestRequestedAt}. You can update the note or requested features and submit again.`,
+                'valid'
+            );
+        } else if (extensionAccessState?.requestStatus === 'rejected') {
+            setAccessRequestStatus(
+                'A previous access request was rejected. Update the note if needed and submit again to reopen it.',
+                'invalid'
+            );
+        } else {
+            setAccessRequestStatus(
+                `Detected BetterLetter user: ${extensionAccessState.email}. Submit a request so the owner can review this email and machine.`,
+                'neutral'
+            );
+        }
+    };
+
+    // The advanced auth module is owner-only UI. The existing background/service
+    // actions remain the single source of truth for access policy enforcement.
+    const syncEnhancedAuthManagement = async (management = null) => {
+        if (!extensionAccessState?.isOwner) return;
+        const effectiveManagement = management || extensionUserManagementState;
+        const sharedCallbacks = {
+            fetchManagement: fetchExtensionUserManagement,
+            getAccessServiceHealth: fetchAccessControlServiceHealth,
+            getIdentityDiagnostics: fetchExtensionIdentityDiagnostics,
+            exportAccessPolicy: exportExtensionAccessPolicy,
+            importAccessPolicy: importExtensionAccessPolicy
+        };
+
+        if (!enhancedAuthManagementReady) {
+            await AuthManagement.init({
+                accessState: extensionAccessState,
+                management: effectiveManagement,
+                featureCatalog: getFeatureCatalogForUi(),
+                callbacks: sharedCallbacks
+            });
+            enhancedAuthManagementReady = true;
+            return;
+        }
+
+        await AuthManagement.updateContext({
+            accessState: extensionAccessState,
+            management: effectiveManagement,
+            featureCatalog: getFeatureCatalogForUi(),
+            callbacks: sharedCallbacks
+        });
+    };
+
+    const setAccessServiceConfigStatus = (message, tone = null) => {
+        if (!accessServiceConfigStatus) return;
+        accessServiceConfigStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') accessServiceConfigStatus.classList.add('valid');
+        else if (tone === 'invalid') accessServiceConfigStatus.classList.add('invalid');
+        else accessServiceConfigStatus.classList.add('neutral');
+        accessServiceConfigStatus.textContent = String(message || '').trim();
+    };
+
+    const renderAccessServiceConfig = () => {
+        if (accessServiceUrlInput) accessServiceUrlInput.value = accessServiceConfig.baseUrl || '';
+        if (accessServiceKeyInput) accessServiceKeyInput.value = accessServiceConfig.sharedKey || '';
+        setElementVisible(
+            accessServiceConfigSection,
+            !extensionAccessState?.allowed || Boolean(accessServiceConfig?.enabled),
+            ''
+        );
+        if (accessServiceConfig?.enabled && accessServiceConfig.baseUrl) {
+            const prefix = accessServiceConfig?.isDefault ? 'Using default shared access service' : 'Using shared access service';
+            setAccessServiceConfigStatus(`${prefix}: ${accessServiceConfig.baseUrl}`, 'valid');
+        } else {
+            setAccessServiceConfigStatus('Using local access service.', 'neutral');
+        }
+    };
+
+    const refreshAccessServiceHealth = async () => {
+        try {
+            const health = await fetchAccessControlServiceHealth();
+            const serviceLabel = health?.usingRemoteConfig && health?.baseUrl
+                ? `shared access service ${health.baseUrl}`
+                : 'local access service';
+            const ownerLabel = health?.access?.ownerEmail
+                ? ` Owner: ${health.access.ownerEmail}.`
+                : '';
+            setAccessServiceConfigStatus(`Connected to ${serviceLabel}.${ownerLabel}`.trim(), 'valid');
+        } catch (error) {
+            const fallbackMessage = accessServiceConfig?.enabled
+                ? `Shared access service unavailable. ${String(error?.message || '').trim()}`
+                : String(error?.message || '').trim();
+            setAccessServiceConfigStatus(
+                fallbackMessage || 'Could not reach the configured access service.',
+                'invalid'
+            );
+        }
+    };
 
     const normalizeManagedUserEmail = (value) => String(value || '').trim().toLowerCase().slice(0, 240);
 
@@ -566,6 +912,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const renderManagedUserFeatureCheckboxes = (selectedFeatures = []) => {
+        if (enhancedAuthManagementReady) return;
         if (!managedUserFeaturesGrid) return;
         const role = String(managedUserRoleInput?.value || 'user').trim().toLowerCase();
         const selectedFeatureSet = new Set(Array.isArray(selectedFeatures) ? selectedFeatures : []);
@@ -599,6 +946,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const resetManagedUserForm = () => {
+        if (enhancedAuthManagementReady) return;
         managedUserEditingEmail = '';
         if (managedUserEmailInput) managedUserEmailInput.value = '';
         if (managedUserRoleInput) managedUserRoleInput.value = 'user';
@@ -607,6 +955,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const populateManagedUserForm = (user) => {
+        if (enhancedAuthManagementReady) return;
         managedUserEditingEmail = normalizeManagedUserEmail(user?.email);
         if (managedUserEmailInput) managedUserEmailInput.value = managedUserEditingEmail;
         if (managedUserRoleInput) managedUserRoleInput.value = String(user?.role || 'user');
@@ -615,6 +964,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const renderManagedUsersList = () => {
+        if (enhancedAuthManagementReady) return;
         if (!extensionManagedUsersList) return;
         extensionManagedUsersList.innerHTML = '';
 
@@ -674,10 +1024,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     resetManagedUserForm();
                     if (extensionUserManagementSummary) {
                         extensionUserManagementSummary.className = 'validation-badge valid';
-                        extensionUserManagementSummary.textContent = `Removed ${user.email}.`;
+                        const alert = response?.alert;
+                        const alertSuffix = alert?.attempted
+                            ? (alert.success ? ' Slack alert sent.' : ` Slack alert failed: ${String(alert.error || 'unknown error').trim().slice(0, 120)}`)
+                            : '';
+                        extensionUserManagementSummary.textContent = `Removed ${user.email}.${alertSuffix}`;
                     }
                     const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
                     renderExtensionAccessState(refreshedAccess);
+                    renderAccessServiceConfig();
                     applyExtensionFeatureAccessToUi();
                     const nextViewId = getInitialAccessibleViewId();
                     showView(nextViewId);
@@ -710,21 +1065,35 @@ document.addEventListener('DOMContentLoaded', async () => {
             extensionUserManagementState = { users: [], featureCatalog: getFeatureCatalogForUi() };
             renderManagedUserFeatureCheckboxes([]);
             renderManagedUsersList();
-            return;
+            return extensionUserManagementState;
         }
         const management = await fetchExtensionUserManagement({ forceRefresh });
         extensionUserManagementState = management;
-        renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
-        renderManagedUsersList();
-        if (extensionUserManagementSummary) {
+        if (!enhancedAuthManagementReady) {
+            renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
+            renderManagedUsersList();
+        }
+        if (!enhancedAuthManagementReady && extensionUserManagementSummary) {
             extensionUserManagementSummary.className = 'validation-badge neutral';
             extensionUserManagementSummary.textContent = `Owner: ${extensionAccessState.email}\nSynced users: ${Array.isArray(management?.users) ? management.users.length : 0}`;
         }
+        await syncEnhancedAuthManagement(management);
+        return management;
     };
 
     try {
-        const access = await fetchExtensionAccessState({ forceRefresh: true });
+        accessServiceConfig = await fetchAccessControlServiceConfig();
+    } catch (error) {
+        setAccessServiceConfigStatus(String(error?.message || 'Could not load access service config.').trim(), 'invalid');
+    }
+    renderAccessServiceConfig();
+    refreshAccessServiceHealth().catch(() => undefined);
+
+    try {
+        const access = await fetchExtensionAccessState({ allowStale: true });
         renderExtensionAccessState(access);
+        renderAccessRequestSection();
+        renderAccessServiceConfig();
         applyExtensionFeatureAccessToUi();
         if (!access?.email) {
             try {
@@ -741,6 +1110,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             renderIdentityDiagnostics(null);
         }
+
+        fetchExtensionAccessState({ forceRefresh: true, allowStale: true })
+            .then((freshAccess) => {
+                renderExtensionAccessState(freshAccess);
+                renderAccessRequestSection();
+                renderAccessServiceConfig();
+                applyExtensionFeatureAccessToUi();
+                if (!freshAccess?.email) return;
+                renderIdentityDiagnostics(null);
+            })
+            .catch(() => undefined);
     } catch (error) {
         renderExtensionAccessState({
             initialized: false,
@@ -749,6 +1129,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             reason: String(error?.message || 'Could not resolve MailroomNavigator access.').trim().slice(0, 260),
             detectionSource: ''
         });
+        renderAccessRequestSection();
+        renderAccessServiceConfig();
         applyExtensionFeatureAccessToUi();
         try {
             const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
@@ -762,6 +1144,88 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
     }
+
+    saveAccessServiceConfigBtn?.addEventListener('click', async () => {
+        try {
+            const baseUrl = sanitizeAccessServiceUrl(accessServiceUrlInput?.value);
+            const sharedKey = String(accessServiceKeyInput?.value || '').trim();
+            if (!baseUrl) {
+                throw new Error('Enter a valid shared access service URL.');
+            }
+
+            saveAccessServiceConfigBtn.disabled = true;
+            accessServiceConfig = await saveAccessControlServiceConfig({ baseUrl, sharedKey, useLocalOverride: false });
+            renderAccessServiceConfig();
+            await refreshAccessServiceHealth();
+
+            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
+            renderExtensionAccessState(refreshedAccess);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+            if (extensionAccessState?.isOwner) {
+                await syncEnhancedAuthManagement(extensionUserManagementState);
+            }
+            if (refreshedAccess?.email) renderIdentityDiagnostics(null);
+            showView(getInitialAccessibleViewId());
+        } catch (error) {
+            setAccessServiceConfigStatus(String(error?.message || 'Could not save access service config.').trim(), 'invalid');
+        } finally {
+            saveAccessServiceConfigBtn.disabled = false;
+        }
+    });
+
+    clearAccessServiceConfigBtn?.addEventListener('click', async () => {
+        try {
+            clearAccessServiceConfigBtn.disabled = true;
+            accessServiceConfig = await saveAccessControlServiceConfig({ baseUrl: '', sharedKey: '', useLocalOverride: true });
+            renderAccessServiceConfig();
+            refreshAccessServiceHealth().catch(() => undefined);
+            if (extensionAccessState?.isOwner) {
+                await syncEnhancedAuthManagement(extensionUserManagementState);
+            }
+        } catch (error) {
+            setAccessServiceConfigStatus(String(error?.message || 'Could not reset access service config.').trim(), 'invalid');
+        } finally {
+            clearAccessServiceConfigBtn.disabled = false;
+        }
+    });
+
+    submitAccessRequestBtn?.addEventListener('click', async () => {
+        try {
+            submitAccessRequestBtn.disabled = true;
+            const response = await submitExtensionAccessRequest({
+                note: String(accessRequestNoteInput?.value || '').trim(),
+                requestedFeatures: getRequestedAccessFeatures()
+            });
+            if (response?.access) {
+                renderExtensionAccessState(response.access);
+                renderAccessRequestSection();
+                renderAccessServiceConfig();
+                applyExtensionFeatureAccessToUi();
+            }
+            setAccessRequestStatus('Access request submitted. The owner can now review your email, requested features, and recent machine IP.', 'valid');
+        } catch (error) {
+            setAccessRequestStatus(String(error?.message || 'Could not submit access request.').trim(), 'invalid');
+        } finally {
+            submitAccessRequestBtn.disabled = false;
+        }
+    });
+
+    refreshAccessRequestBtn?.addEventListener('click', async () => {
+        try {
+            refreshAccessRequestBtn.disabled = true;
+            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
+            renderExtensionAccessState(refreshedAccess);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+        } catch (error) {
+            setAccessRequestStatus(String(error?.message || 'Could not refresh access state.').trim(), 'invalid');
+        } finally {
+            refreshAccessRequestBtn.disabled = false;
+        }
+    });
     
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
@@ -826,10 +1290,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             populateManagedUserForm({ email, role, features });
             if (extensionUserManagementSummary) {
                 extensionUserManagementSummary.className = 'validation-badge valid';
-                extensionUserManagementSummary.textContent = `Saved ${email}.`;
+                const alert = response?.alert;
+                const alertSuffix = alert?.attempted
+                    ? (alert.success ? ' Slack alert sent.' : ` Slack alert failed: ${String(alert.error || 'unknown error').trim().slice(0, 120)}`)
+                    : '';
+                extensionUserManagementSummary.textContent = `Saved ${email}.${alertSuffix}`;
             }
             const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
             renderExtensionAccessState(refreshedAccess);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
             applyExtensionFeatureAccessToUi();
         } catch (error) {
             if (extensionUserManagementSummary) {
@@ -847,18 +1317,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (extensionAccessState?.isOwner) {
-        try {
-            await refreshExtensionUserManagementUi({ forceRefresh: true });
-        } catch (error) {
-            if (extensionUserManagementSummary) {
-                extensionUserManagementSummary.className = 'validation-badge invalid';
-                extensionUserManagementSummary.textContent = String(error?.message || 'Could not load user management.').trim().slice(0, 260);
-            }
-        }
+        refreshExtensionUserManagementUi({ forceRefresh: true })
+            .catch((error) => {
+                if (extensionUserManagementSummary) {
+                    extensionUserManagementSummary.className = 'validation-badge invalid';
+                    extensionUserManagementSummary.textContent = String(error?.message || 'Could not load user management.').trim().slice(0, 260);
+                }
+            });
     } else {
         renderManagedUserFeatureCheckboxes([]);
         renderManagedUsersList();
     }
+
+    document.addEventListener('authMgmt:userSaved', async () => {
+        try {
+            const freshAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
+            renderExtensionAccessState(freshAccess);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+            await refreshExtensionUserManagementUi({ forceRefresh: true });
+            showView(getInitialAccessibleViewId());
+        } catch {
+            // The advanced UI already surfaced the save error locally.
+        }
+    });
+
+    document.addEventListener('authMgmt:userDeleted', async () => {
+        try {
+            const freshAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
+            renderExtensionAccessState(freshAccess);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+            await refreshExtensionUserManagementUi({ forceRefresh: true });
+            showView(getInitialAccessibleViewId());
+        } catch {
+            // The advanced UI already surfaced the delete error locally.
+        }
+    });
 
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
@@ -906,12 +1403,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const cdbInput = document.getElementById('cdbSearchInput');
+    let isCdbHydrationQueued = false;
     const refreshCdbSuggestions = () => {
         Navigator.handleCdbInput();
-        syncPracticeCache()
-            .then(async () => {
-                await triggerCdbHydration();
+        const hasPracticeCache = Object.keys(state.cachedPractices || {}).length > 0;
+        syncPracticeCache({ forceRefresh: false, allowScrape: !hasPracticeCache })
+            .then(() => {
                 Navigator.handleCdbInput();
+                if (document.activeElement !== cdbInput || isCdbHydrationQueued || !hasPracticeCache) return;
+                isCdbHydrationQueued = true;
+                triggerCdbHydration({ limit: 80 })
+                    .then(() => {
+                        Navigator.handleCdbInput();
+                    })
+                    .catch(() => undefined)
+                    .finally(() => { isCdbHydrationQueued = false; });
             })
             .catch(() => undefined);
     };
@@ -920,6 +1426,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         cdbInput.addEventListener('input', refreshCdbSuggestions);
         cdbInput.addEventListener('focus', refreshCdbSuggestions);
     }
+
+    warmPracticeCache(false);
     
     // --- Create New Practice Button---
     document.getElementById('createPracticeAdminBtn')?.addEventListener('click', () => {
@@ -1269,12 +1777,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const DASHBOARD_SUGGESTION_STALE_MS = 45000;
     const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
     const LINEAR_SLACK_TARGET_CACHE_STORAGE_KEY = 'linearSlackTargetsCacheV1';
-    const LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS = 3500;
+    // Keep Slack target suggestions warm without blocking panel startup.
+    const LINEAR_SLACK_TARGET_CACHE_STALE_MS = 30 * 60 * 1000;
+    // Poll faster so the terminal state appears quickly enough for the 2-second
+    // confirmation window before the trigger server posts the Slack summary.
+    const LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS = 1000;
     const LINEAR_TRIGGER_STATUS_POLL_WINDOW_MS = 4 * 60 * 1000;
+    // Keep this aligned with the trigger-server Slack delay so the operator sees the
+    // terminal run state in-panel before the summary is pushed to Slack.
+    const LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS = 2000;
     let linearTriggerStatusPollTimer = null;
     let linearTriggerStatusPollDeadlineMs = 0;
+    let linearTriggerStatusClearTimer = null;
+    let dismissedLinearTriggerRunId = '';
     let linearIssueContext = null;
     let linearSlackTargetsCache = { channels: [], users: [], syncedAt: '' };
+    let linearSlackTargetSyncPromise = null;
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -2335,8 +2853,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
             try {
-                await navigator.clipboard.writeText(outputTextarea.value);
-                showToast('Email list copied.');
+                const copied = await copyTextToClipboard(outputTextarea.value);
+                showToast(copied ? 'Email list copied.' : 'Copy failed.');
             } catch (error) {
                 showToast('Copy failed.');
             }
@@ -2445,6 +2963,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             ? linearSlackTargetsCache.users
             : linearSlackTargetsCache.channels
     );
+
+    const hasSlackTargetSuggestionsForType = (targetType) => (
+        getSlackTargetSuggestionsForType(targetType).length > 0
+    );
+
+    const isSlackTargetCacheFresh = () => {
+        const syncedAtRaw = trimField(linearSlackTargetsCache.syncedAt, 80);
+        if (!syncedAtRaw) return false;
+        const syncedAtMs = new Date(syncedAtRaw).getTime();
+        if (!Number.isFinite(syncedAtMs)) return false;
+        return (Date.now() - syncedAtMs) <= LINEAR_SLACK_TARGET_CACHE_STALE_MS;
+    };
 
     const resolveSlackTargetIdFromInput = (value, targetType) => {
         const directId = extractSlackEntityId(value);
@@ -2577,41 +3107,63 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
     };
 
-    const syncSlackWorkspaceTargets = async () => {
-        if (syncLinearSlackWorkspaceBtn) {
-            syncLinearSlackWorkspaceBtn.disabled = true;
-            syncLinearSlackWorkspaceBtn.textContent = 'Syncing…';
-        }
+    const syncSlackWorkspaceTargets = async ({ silent = false, force = false } = {}) => {
+        if (linearSlackTargetSyncPromise) return linearSlackTargetSyncPromise;
+
+        linearSlackTargetSyncPromise = (async () => {
+            if (syncLinearSlackWorkspaceBtn) {
+                syncLinearSlackWorkspaceBtn.disabled = true;
+                syncLinearSlackWorkspaceBtn.textContent = 'Syncing…';
+            }
+
+            try {
+                setLinearSlackTargetHint('Syncing Slack workspace targets…', 'neutral');
+                const response = await chrome.runtime.sendMessage({
+                    action: 'syncLinearSlackWorkspaceTargets',
+                    force
+                });
+
+                if (!response?.success || !response?.targets) {
+                    throw new Error(trimField(response?.error, 260) || 'Could not sync Slack workspace.');
+                }
+
+                linearSlackTargetsCache = normalizeSlackTargetCache(response.targets);
+                await saveSlackTargetCache();
+                const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
+                const resolvedTargetId = resolveSlackTargetIdFromInput(linearSlackTargetInput?.value, targetType);
+                if (resolvedTargetId && linearSlackTargetInput) {
+                    linearSlackTargetInput.value = formatSlackTargetDisplayValue(resolvedTargetId, targetType) || resolvedTargetId;
+                }
+                updateLinearSlackTargetUi();
+                if (!silent) showToast('Slack workspace synced.');
+            } catch (error) {
+                const reason = trimField(error?.message, 260) || 'Could not sync Slack workspace.';
+                setLinearSlackTargetHint(reason, 'invalid');
+                if (!silent) showToast(reason);
+            } finally {
+                if (syncLinearSlackWorkspaceBtn) {
+                    syncLinearSlackWorkspaceBtn.disabled = false;
+                    syncLinearSlackWorkspaceBtn.textContent = 'Sync Slack';
+                }
+            }
+        })();
 
         try {
-            setLinearSlackTargetHint('Syncing Slack workspace targets…', 'neutral');
-            const response = await chrome.runtime.sendMessage({
-                action: 'syncLinearSlackWorkspaceTargets'
-            });
-
-            if (!response?.success || !response?.targets) {
-                throw new Error(trimField(response?.error, 260) || 'Could not sync Slack workspace.');
-            }
-
-            linearSlackTargetsCache = normalizeSlackTargetCache(response.targets);
-            await saveSlackTargetCache();
-            const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
-            const resolvedTargetId = resolveSlackTargetIdFromInput(linearSlackTargetInput?.value, targetType);
-            if (resolvedTargetId && linearSlackTargetInput) {
-                linearSlackTargetInput.value = formatSlackTargetDisplayValue(resolvedTargetId, targetType) || resolvedTargetId;
-            }
-            updateLinearSlackTargetUi();
-            showToast('Slack workspace synced.');
-        } catch (error) {
-            const reason = trimField(error?.message, 260) || 'Could not sync Slack workspace.';
-            setLinearSlackTargetHint(reason, 'invalid');
-            showToast(reason);
+            return await linearSlackTargetSyncPromise;
         } finally {
-            if (syncLinearSlackWorkspaceBtn) {
-                syncLinearSlackWorkspaceBtn.disabled = false;
-                syncLinearSlackWorkspaceBtn.textContent = 'Sync Slack';
-            }
+            linearSlackTargetSyncPromise = null;
         }
+    };
+
+    const maybeWarmSlackTargetSuggestions = async ({ force = false } = {}) => {
+        if (!force && isSlackTargetCacheFresh()) {
+            return;
+        }
+
+        // Suggestions come from the trigger server via the background bridge.
+        // Keep automatic refresh silent so opening the field does not generate
+        // extra toasts, while the explicit Sync Slack button still does.
+        await syncSlackWorkspaceTargets({ silent: true, force });
     };
 
     const saveLinearSlackPrefs = async () => {
@@ -2660,11 +3212,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const setLinearTriggerStatus = (message, tone = null) => {
         if (!linearTriggerStatus) return;
+        const normalizedMessage = String(message || '').trim();
         linearTriggerStatus.classList.remove('neutral', 'valid', 'invalid');
-        if (tone === 'valid') linearTriggerStatus.classList.add('valid');
-        else if (tone === 'invalid') linearTriggerStatus.classList.add('invalid');
-        else linearTriggerStatus.classList.add('neutral');
-        linearTriggerStatus.textContent = message;
+        if (normalizedMessage) {
+            if (tone === 'valid') linearTriggerStatus.classList.add('valid');
+            else if (tone === 'invalid') linearTriggerStatus.classList.add('invalid');
+            else linearTriggerStatus.classList.add('neutral');
+        }
+        linearTriggerStatus.textContent = normalizedMessage;
+        setElementVisible(
+            linearTriggerStatus,
+            Boolean(normalizedMessage) && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
+        );
+    };
+
+    const clearLinearTriggerStatusAutoClearTimer = () => {
+        if (!linearTriggerStatusClearTimer) return;
+        clearTimeout(linearTriggerStatusClearTimer);
+        linearTriggerStatusClearTimer = null;
+    };
+
+    const scheduleLinearTriggerStatusAutoClear = (run = null) => {
+        const runId = trimField(run?.runId, 80);
+        if (!runId) return;
+        clearLinearTriggerStatusAutoClearTimer();
+        linearTriggerStatusClearTimer = window.setTimeout(() => {
+            // The background health endpoint keeps the last completed run around, so we
+            // remember the dismissed run ID here to avoid immediately repainting it.
+            dismissedLinearTriggerRunId = runId;
+            setLinearTriggerStatus('', null);
+            linearTriggerStatusClearTimer = null;
+        }, LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS);
     };
 
     const setLinearTriggerButtonState = (state, runType = 'trigger') => {
@@ -2731,6 +3309,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             const reason = trimField(run.error, 180) || `exit code ${String(run.exitCode ?? 'unknown')}`;
             headline = `${runLabel} run ${runId} failed${dryRun}${ended ? ` at ${ended}` : ''}: ${reason}`;
         }
+        const slack = run?.slackNotification && typeof run.slackNotification === 'object'
+            ? run.slackNotification
+            : null;
+        if (slack?.attempted && slack?.success) {
+            const targetType = trimField(slack.targetType, 16) === 'user' ? 'DM' : 'channel';
+            summaryLines.push(`Slack sent to ${targetType} ${trimField(slack.target, 80) || trimField(slack.channel, 80) || 'target'}.`);
+        } else if (slack?.attempted && !slack?.success) {
+            summaryLines.push(`Slack failed: ${trimField(slack.error, 180) || 'notification failed.'}`);
+        }
         return summaryLines.length ? [headline, ...summaryLines].join('\n') : headline;
     };
 
@@ -2753,6 +3340,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const lastRun = health.lastRun && typeof health.lastRun === 'object' ? health.lastRun : null;
 
         if (isRunning && activeRun) {
+            clearLinearTriggerStatusAutoClearTimer();
             setLinearTriggerButtonState('running', activeRun.runType);
             setLinearTriggerStatus(formatLinearTriggerRunSummary(activeRun, true), 'neutral');
             return true;
@@ -2760,11 +3348,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         setLinearTriggerButtonState('idle');
         if (lastRun) {
+            const lastRunId = trimField(lastRun.runId, 80);
+            if (lastRunId && dismissedLinearTriggerRunId === lastRunId) {
+                setLinearTriggerStatus('', null);
+                return false;
+            }
             const tone = String(lastRun.status || '').toLowerCase() === 'success' ? 'valid' : 'invalid';
             setLinearTriggerStatus(formatLinearTriggerRunSummary(lastRun, false), tone);
+            scheduleLinearTriggerStatusAutoClear(lastRun);
             return false;
         }
 
+        clearLinearTriggerStatusAutoClearTimer();
         setLinearTriggerStatus('Local trigger idle.', 'neutral');
         return false;
     };
@@ -2817,6 +3412,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const triggerLinearBotJobsRun = async () => {
         try {
             const isDryRun = Boolean(triggerLinearDryRunInput?.checked);
+            const slack = getLinearSlackPrefsFromForm();
+            const slackValidationError = validateLinearSlackPrefs(slack);
+            if (slackValidationError) {
+                setLinearSlackStatus(slackValidationError, 'invalid');
+                throw new Error(slackValidationError);
+            }
+            dismissedLinearTriggerRunId = '';
+            clearLinearTriggerStatusAutoClearTimer();
+            await saveLinearSlackPrefs().catch(() => undefined);
             setLinearTriggerButtonState('pending', 'trigger');
             setLinearTriggerStatus(
                 isDryRun ? 'Triggering bot-jobs-linear dry run…' : 'Triggering bot-jobs-linear run…',
@@ -2825,7 +3429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const response = await chrome.runtime.sendMessage({
                 action: 'triggerLinearBotJobsRun',
-                payload: { dryRun: isDryRun }
+                payload: { dryRun: isDryRun, slack }
             });
 
             if (response?.success && response?.run) {
@@ -2858,6 +3462,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const triggerLinearReconcileRun = async () => {
         try {
             const isDryRun = Boolean(reconcileLinearDryRunInput?.checked);
+            const slack = getLinearSlackPrefsFromForm();
+            const slackValidationError = validateLinearSlackPrefs(slack);
+            if (slackValidationError) {
+                setLinearSlackStatus(slackValidationError, 'invalid');
+                throw new Error(slackValidationError);
+            }
+            dismissedLinearTriggerRunId = '';
+            clearLinearTriggerStatusAutoClearTimer();
+            await saveLinearSlackPrefs().catch(() => undefined);
             setLinearTriggerButtonState('pending', 'reconcile');
             setLinearTriggerStatus(
                 isDryRun ? 'Triggering Linear reconcile dry run…' : 'Triggering Linear reconcile run…',
@@ -2866,7 +3479,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const response = await chrome.runtime.sendMessage({
                 action: 'triggerLinearReconcileRun',
-                payload: { dryRun: isDryRun }
+                payload: { dryRun: isDryRun, slack }
             });
 
             if (response?.success && response?.run) {
@@ -3017,21 +3630,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     };
 
-    const validateLinearIssuePayload = (payload) => {
-        if (!payload.documentId) return 'Generate details first so Document ID is included.';
-        if (!payload.title) return 'Issue title is required.';
-        if (!payload.description) return 'Issue description is required.';
-        if (payload?.slack?.enabled && !payload?.slack?.target) {
-            return payload?.slack?.targetType === 'user'
+    const validateLinearSlackPrefs = (slackPrefs) => {
+        if (!slackPrefs?.enabled) return '';
+        if (!slackPrefs?.target) {
+            return slackPrefs?.targetType === 'user'
                 ? 'Slack user ID is required when Slack sync is enabled.'
                 : 'Slack channel ID is required when Slack sync is enabled.';
         }
-        if (payload?.slack?.enabled && payload?.slack?.targetType === 'user') {
-            const userId = extractSlackEntityId(payload?.slack?.target);
+        if (slackPrefs?.targetType === 'user') {
+            const userId = extractSlackEntityId(slackPrefs?.target);
             if (!/^U[A-Z0-9]{8,}$/i.test(userId)) {
                 return 'Select a synced user suggestion or paste a valid Slack user ID (U...).';
             }
         }
+        return '';
+    };
+
+    const validateLinearIssuePayload = (payload) => {
+        if (!payload.documentId) return 'Generate details first so Document ID is included.';
+        if (!payload.title) return 'Issue title is required.';
+        if (!payload.description) return 'Issue description is required.';
+        const slackValidationError = validateLinearSlackPrefs(payload?.slack);
+        if (slackValidationError) return slackValidationError;
         return '';
     };
 
@@ -3364,6 +3984,9 @@ ${error?.message || String(error)}`, 'invalid');
 
     await loadSlackTargetCache();
     await loadLinearSlackPrefs();
+    if (linearSlackNotifyEnabledInput?.checked) {
+        maybeWarmSlackTargetSuggestions().catch(() => undefined);
+    }
 
     generateLinearIssueDraftBtn?.addEventListener('click', () => {
         if (linearIssueSourceInput && !trimMultilineField(linearIssueSourceInput.value, 6000)) {
@@ -3381,11 +4004,14 @@ ${error?.message || String(error)}`, 'invalid');
     });
 
     syncLinearSlackWorkspaceBtn?.addEventListener('click', () => {
-        syncSlackWorkspaceTargets().catch(() => undefined);
+        syncSlackWorkspaceTargets({ force: true }).catch(() => undefined);
     });
     linearSlackNotifyEnabledInput?.addEventListener('change', () => {
         updateLinearSlackTargetUi();
         saveLinearSlackPrefs().catch(() => undefined);
+        if (linearSlackNotifyEnabledInput.checked) {
+            maybeWarmSlackTargetSuggestions().catch(() => undefined);
+        }
     });
     linearSlackTargetTypeInput?.addEventListener('change', () => {
         const targetType = normalizeSlackTargetType(linearSlackTargetTypeInput?.value);
@@ -3395,6 +4021,10 @@ ${error?.message || String(error)}`, 'invalid');
         }
         updateLinearSlackTargetUi();
         saveLinearSlackPrefs().catch(() => undefined);
+        maybeWarmSlackTargetSuggestions().catch(() => undefined);
+    });
+    linearSlackTargetInput?.addEventListener('focus', () => {
+        maybeWarmSlackTargetSuggestions().catch(() => undefined);
     });
     linearSlackTargetInput?.addEventListener('input', () => {
         updateLinearSlackTargetUi();
