@@ -112,6 +112,12 @@ function getInitialAccessibleViewId() {
     return getAvailableViewIds()[0] || '';
 }
 
+function getProtectedActionPayload(extraPayload = {}) {
+    return typeof PANEL_HOST_TAB_ID === 'number'
+        ? { ...extraPayload, preferredTabId: PANEL_HOST_TAB_ID }
+        : { ...extraPayload };
+}
+
 async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = {}) {
     if (practiceCacheLoadPromise) return practiceCacheLoadPromise;
 
@@ -122,7 +128,10 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         try {
             // Fast path: load currently available cache first (usually from storage/background memory)
-            let response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+            let response = await chrome.runtime.sendMessage({
+                action: 'getPracticeCache',
+                ...getProtectedActionPayload()
+            });
             if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                 setCachedPractices(response.practiceCache);
                 Navigator.buildCdbIndex();
@@ -132,9 +141,15 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
             if (!allowScrape) return state.cachedPractices;
 
             // Refresh path: explicit refresh or empty cache fallback
-            await chrome.runtime.sendMessage({ action: 'requestActiveScrape' });
+            await chrome.runtime.sendMessage({
+                action: 'requestActiveScrape',
+                ...getProtectedActionPayload()
+            });
             for (let attempt = 0; attempt < 6; attempt += 1) {
-                response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+                response = await chrome.runtime.sendMessage({
+                    action: 'getPracticeCache',
+                    ...getProtectedActionPayload()
+                });
                 if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                     setCachedPractices(response.practiceCache);
                     Navigator.buildCdbIndex();
@@ -158,7 +173,11 @@ async function triggerCdbHydration({ limit = 60 } = {}) {
     if (isCdbHydrationTriggered) return;
     isCdbHydrationTriggered = true;
     try {
-        await chrome.runtime.sendMessage({ action: 'hydratePracticeCdb', limit: Math.max(10, Number(limit) || 60) });
+        await chrome.runtime.sendMessage({
+            action: 'hydratePracticeCdb',
+            limit: Math.max(10, Number(limit) || 60),
+            ...getProtectedActionPayload()
+        });
         await syncPracticeCache({ forceRefresh: true, allowScrape: false });
     } catch (e) {
         console.warn('[Panel] CDB hydration skipped.');
@@ -166,9 +185,11 @@ async function triggerCdbHydration({ limit = 60 } = {}) {
 }
 
 // --- 1. Global View Switcher ---
-function showView(viewId) {
+function showView(viewId, { force = false } = {}) {
     const fallbackViewId = getInitialAccessibleViewId();
-    const resolvedViewId = canAccessView(viewId) ? viewId : fallbackViewId;
+    const resolvedViewId = force
+        ? (VIEW_FEATURE_REQUIREMENTS[viewId] ? viewId : fallbackViewId)
+        : (canAccessView(viewId) ? viewId : fallbackViewId);
     ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = (resolvedViewId && id === resolvedViewId) ? 'block' : 'none';
@@ -824,6 +845,72 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    const initializeAccessUi = async () => {
+        try {
+            accessServiceConfig = await fetchAccessControlServiceConfig();
+        } catch (error) {
+            setAccessServiceConfigStatus(String(error?.message || 'Could not load access service config.').trim(), 'invalid');
+        }
+        renderAccessServiceConfig();
+        refreshAccessServiceHealth().catch(() => undefined);
+
+        try {
+            const access = await fetchExtensionAccessState({ allowStale: true });
+            renderExtensionAccessState(access);
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+            if (!access?.email) {
+                try {
+                    const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
+                    renderIdentityDiagnostics(diagnostics);
+                } catch (diagnosticError) {
+                    renderIdentityDiagnostics({
+                        preferredTabId: PANEL_HOST_TAB_ID,
+                        tabs: [],
+                        storedSnapshot: null,
+                        error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
+                    });
+                }
+            } else {
+                renderIdentityDiagnostics(null);
+            }
+
+            fetchExtensionAccessState({ forceRefresh: true, allowStale: true })
+                .then((freshAccess) => {
+                    renderExtensionAccessState(freshAccess);
+                    renderAccessRequestSection();
+                    renderAccessServiceConfig();
+                    applyExtensionFeatureAccessToUi();
+                    if (!freshAccess?.email) return;
+                    renderIdentityDiagnostics(null);
+                })
+                .catch(() => undefined);
+        } catch (error) {
+            renderExtensionAccessState({
+                initialized: false,
+                allowed: false,
+                email: '',
+                reason: String(error?.message || 'Could not resolve MailroomNavigator access.').trim().slice(0, 260),
+                detectionSource: ''
+            });
+            renderAccessRequestSection();
+            renderAccessServiceConfig();
+            applyExtensionFeatureAccessToUi();
+            try {
+                const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
+                renderIdentityDiagnostics(diagnostics);
+            } catch (diagnosticError) {
+                renderIdentityDiagnostics({
+                    preferredTabId: PANEL_HOST_TAB_ID,
+                    tabs: [],
+                    storedSnapshot: null,
+                    error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
+                });
+            }
+        }
+    };
+
     // The advanced auth module is owner-only UI. The existing background/service
     // actions remain the single source of truth for access policy enforcement.
     const syncEnhancedAuthManagement = async (management = null) => {
@@ -870,7 +957,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (accessServiceKeyInput) accessServiceKeyInput.value = accessServiceConfig.sharedKey || '';
         setElementVisible(
             accessServiceConfigSection,
-            !extensionAccessState?.allowed || Boolean(accessServiceConfig?.enabled),
+            !extensionAccessState?.allowed || Boolean(accessServiceConfig?.enabled && !accessServiceConfig?.isDefault),
             ''
         );
         if (accessServiceConfig?.enabled && accessServiceConfig.baseUrl) {
@@ -1081,69 +1168,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return management;
     };
 
-    try {
-        accessServiceConfig = await fetchAccessControlServiceConfig();
-    } catch (error) {
-        setAccessServiceConfigStatus(String(error?.message || 'Could not load access service config.').trim(), 'invalid');
-    }
     renderAccessServiceConfig();
-    refreshAccessServiceHealth().catch(() => undefined);
-
-    try {
-        const access = await fetchExtensionAccessState({ allowStale: true });
-        renderExtensionAccessState(access);
-        renderAccessRequestSection();
-        renderAccessServiceConfig();
-        applyExtensionFeatureAccessToUi();
-        if (!access?.email) {
-            try {
-                const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
-                renderIdentityDiagnostics(diagnostics);
-            } catch (diagnosticError) {
-                renderIdentityDiagnostics({
-                    preferredTabId: PANEL_HOST_TAB_ID,
-                    tabs: [],
-                    storedSnapshot: null,
-                    error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
-                });
-            }
-        } else {
-            renderIdentityDiagnostics(null);
-        }
-
-        fetchExtensionAccessState({ forceRefresh: true, allowStale: true })
-            .then((freshAccess) => {
-                renderExtensionAccessState(freshAccess);
-                renderAccessRequestSection();
-                renderAccessServiceConfig();
-                applyExtensionFeatureAccessToUi();
-                if (!freshAccess?.email) return;
-                renderIdentityDiagnostics(null);
-            })
-            .catch(() => undefined);
-    } catch (error) {
-        renderExtensionAccessState({
-            initialized: false,
-            allowed: false,
-            email: '',
-            reason: String(error?.message || 'Could not resolve MailroomNavigator access.').trim().slice(0, 260),
-            detectionSource: ''
-        });
-        renderAccessRequestSection();
-        renderAccessServiceConfig();
-        applyExtensionFeatureAccessToUi();
-        try {
-            const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
-            renderIdentityDiagnostics(diagnostics);
-        } catch (diagnosticError) {
-            renderIdentityDiagnostics({
-                preferredTabId: PANEL_HOST_TAB_ID,
-                tabs: [],
-                storedSnapshot: null,
-                error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
-            });
-        }
-    }
 
     saveAccessServiceConfigBtn?.addEventListener('click', async () => {
         try {
@@ -1228,9 +1253,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     
     // C. Setup Navigation Tabs
-    document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
-    document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView'));
-    document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView'));
+    document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView', { force: true }));
+    document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView', { force: true }));
+    document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView', { force: true }));
+    initializeAccessUi().catch((error) => {
+        console.error('Failed to initialize MailroomNavigator access UI:', error);
+    });
 
     managedUserRoleInput?.addEventListener('change', () => {
         renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
@@ -1498,14 +1526,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('taskRecipientsBtn')?.addEventListener('click', async () => {
         try {
             const ods = Navigator.requireSelectedOdsCode();
-            await chrome.runtime.sendMessage({ action: 'openPractice', input: ods, settingType: 'task_recipients' });
+            await chrome.runtime.sendMessage({
+                action: 'openPractice',
+                input: ods,
+                settingType: 'task_recipients',
+                ...getProtectedActionPayload()
+            });
         } catch (err) { showToast(err.message); }
     });
 
     document.getElementById('openEhrSettingsBtn')?.addEventListener('click', async () => {
         try {
             const ods = Navigator.requireSelectedOdsCode();
-            await chrome.runtime.sendMessage({ action: 'openPractice', input: ods, settingType: 'ehr_settings' });
+            await chrome.runtime.sendMessage({
+                action: 'openPractice',
+                input: ods,
+                settingType: 'ehr_settings',
+                ...getProtectedActionPayload()
+            });
         } catch (e) { showToast(e.message); }
     });
 
@@ -4191,7 +4229,7 @@ ${error?.message || String(error)}`, 'invalid');
     updateDocValidation();
     updateJobValidation();
     updateBulkValidation();
-    if (hasAnyExtensionFeature(['job_panel', 'linear_create_issue'])) {
+    if (hasAnyExtensionFeature(['job_panel', 'linear_create_issue']) || extensionAccessState === null) {
         await loadRecentIds();
         await syncDashboardSuggestionRows({ silent: true });
     }
@@ -4215,21 +4253,24 @@ ${error?.message || String(error)}`, 'invalid');
         }
     });
 
-    if (hasExtensionFeature('practice_navigator')) {
+    if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
         await tryAutoSelectPracticeFromActiveTab();
     }
 
-    showView(getInitialAccessibleViewId());
+    showView('practiceNavigatorView', { force: true });
 
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
-    if (hasExtensionFeature('practice_navigator')) {
+    if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
         try {
             const cache = await syncPracticeCache();
             const cacheSize = Object.keys(cache || {}).length;
 
             if (cacheSize === 0) {
                 // Compatibility fallback when background returns cache without scrape refresh
-                const response = await chrome.runtime.sendMessage({ action: 'getPracticeCache' });
+                const response = await chrome.runtime.sendMessage({
+                    action: 'getPracticeCache',
+                    ...getProtectedActionPayload()
+                });
                 if (response && response.practiceCache) {
                     setCachedPractices(response.practiceCache);
                     Navigator.buildCdbIndex();

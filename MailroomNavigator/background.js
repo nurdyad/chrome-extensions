@@ -76,6 +76,7 @@ const MORNING_DASHBOARD_ALERT_REQUESTS = [
     }
 ];
 const CACHE_REQUIRED_ACTIONS = new Set([
+    'getPracticeCache',
     'requestActiveScrape',
     'getPracticeStatus',
     'hydratePracticeCdb'
@@ -104,15 +105,6 @@ const OTHER_VIEW_FEATURE_KEYS = [
     'bookmarklet_tools'
 ];
 const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
-    getPracticeCache: ['practice_navigator'],
-    requestActiveScrape: ['practice_navigator'],
-    getPracticeLiveCounts: ['practice_navigator'],
-    getPracticeStatus: ['practice_navigator'],
-    hydratePracticeCdb: ['practice_navigator'],
-    openPractice: ['practice_navigator'],
-    openUrlInNewTab: ['dashboard_hover_tools'],
-    createLinearIssueFromEnv: ['linear_create_issue'],
-    createLinearIssueAndNotifySlack: ['linear_create_issue'],
     syncLinearSlackWorkspaceTargets: ['slack_sync'],
     triggerLinearBotJobsRun: ['linear_trigger'],
     triggerLinearReconcileRun: ['linear_reconcile'],
@@ -1041,23 +1033,54 @@ async function callLinearTriggerServer(path, options = {}) {
 async function callAccessControlService(path, options = {}) {
     const config = await getStoredAccessControlServiceConfig();
     const usingRemoteConfig = Boolean(config.enabled && config.baseUrl);
-    const baseUrl = usingRemoteConfig ? config.baseUrl : LINEAR_TRIGGER_SERVER_BASE_URL;
-    const extraHeaders = { ...(options.extraHeaders || {}) };
+    const localBaseUrl = LINEAR_TRIGGER_SERVER_BASE_URL;
+    const remoteBaseUrl = usingRemoteConfig ? config.baseUrl : '';
+    const localHeaders = { ...(options.extraHeaders || {}) };
+    const remoteHeaders = { ...localHeaders };
+
     if (usingRemoteConfig && config.sharedKey) {
-        extraHeaders[ACCESS_CONTROL_SHARED_KEY_HEADER] = config.sharedKey;
+        remoteHeaders[ACCESS_CONTROL_SHARED_KEY_HEADER] = config.sharedKey;
     }
-    const request = await callJsonService(baseUrl, path, {
-        ...options,
-        timeoutMs: usingRemoteConfig
-            ? Math.max(250, Number(options.timeoutMs) || ACCESS_CONTROL_REMOTE_TIMEOUT_MS)
-            : options.timeoutMs,
-        extraHeaders
-    });
-    return {
-        ...request,
-        usingRemoteConfig,
-        baseUrl
-    };
+
+    if (!usingRemoteConfig) {
+        const request = await callJsonService(localBaseUrl, path, {
+            ...options,
+            extraHeaders: localHeaders
+        });
+        return {
+            ...request,
+            usingRemoteConfig: false,
+            fellBackFromRemote: false,
+            baseUrl: localBaseUrl
+        };
+    }
+
+    try {
+        const request = await callJsonService(remoteBaseUrl, path, {
+            ...options,
+            timeoutMs: Math.max(250, Number(options.timeoutMs) || ACCESS_CONTROL_REMOTE_TIMEOUT_MS),
+            extraHeaders: remoteHeaders
+        });
+        return {
+            ...request,
+            usingRemoteConfig: true,
+            fellBackFromRemote: false,
+            baseUrl: remoteBaseUrl
+        };
+    } catch (error) {
+        const request = await callJsonService(localBaseUrl, path, {
+            ...options,
+            extraHeaders: localHeaders
+        });
+        return {
+            ...request,
+            usingRemoteConfig: false,
+            fellBackFromRemote: true,
+            baseUrl: localBaseUrl,
+            remoteBaseUrl,
+            remoteError: sanitizeSingleLine(error?.message, 220)
+        };
+    }
 }
 
 function normalizeLinearTriggerError(error) {
@@ -2363,8 +2386,8 @@ async function handleGetExtensionAccessState(rawPayload = {}, sender = null) {
     }
 }
 
-async function ensureProtectedExtensionAccess(actionName, sender = null) {
-    const result = await handleGetExtensionAccessState({}, sender);
+async function ensureProtectedExtensionAccess(actionName, sender = null, rawPayload = {}) {
+    const result = await handleGetExtensionAccessState(rawPayload, sender);
     if (!result?.success || !result?.access) {
         return {
             success: false,
@@ -2922,7 +2945,7 @@ async function handleGetAccessControlServiceHealth() {
     }
 }
 
-async function fetchPracticeCdbByOds(odsCode) {
+async function fetchPracticeCdbByOds(odsCode, preferredTabId = null) {
     const normalizedOds = String(odsCode || '').trim();
     if (!normalizedOds) return '';
 
@@ -2943,7 +2966,7 @@ async function fetchPracticeCdbByOds(odsCode) {
         } catch (e) {
             return '';
         }
-    }, [normalizedOds]);
+    }, [normalizedOds], preferredTabId);
 
     if (typeof cdbFromSessionFetch === 'string' && cdbFromSessionFetch.trim()) {
         return cdbFromSessionFetch.trim();
@@ -3839,8 +3862,8 @@ async function resolveLiveMailroomCountsByOds(odsCode, options = {}) {
     return promise;
 }
 
-async function hydrateMissingCdbs(limit = 25) {
-    await ensureCacheLoaded();
+async function hydrateMissingCdbs(limit = 25, preferredTabId = null) {
+    await ensureCacheLoaded(preferredTabId);
 
     const entries = Object.entries(practiceCache || {});
     const targets = entries
@@ -3853,7 +3876,7 @@ async function hydrateMissingCdbs(limit = 25) {
 
     let updated = 0;
     for (const [key, practice] of targets) {
-        const cdb = await fetchPracticeCdbByOds(practice.ods);
+        const cdb = await fetchPracticeCdbByOds(practice.ods, preferredTabId);
         if (cdb) {
             practiceCache[key] = { ...practice, cdb, practiceCDB: cdb, timestamp: Date.now() };
             updated += 1;
@@ -3872,7 +3895,7 @@ async function scrapePracticeListViaTab() {
     return [];
 }
 
-async function scrapePracticeListViaSessionTab() {
+async function scrapePracticeListViaSessionTab(preferredTabId = null) {
     const result = await runInExistingBetterLetterTab(async () => {
         try {
             const response = await fetch('/admin_panel/practices', {
@@ -3937,7 +3960,7 @@ async function scrapePracticeListViaSessionTab() {
         } catch (e) {
             return [];
         }
-    });
+    }, [], preferredTabId);
 
     return Array.isArray(result) ? result : [];
 }
@@ -3952,7 +3975,7 @@ async function loadCacheFromStorage() {
     return result;
 }
 
-async function fetchAndCachePracticeList(purpose = 'background refresh') {
+async function fetchAndCachePracticeList(purpose = 'background refresh', preferredTabId = null) {
     if (practiceCacheRefreshPromise) {
         try {
             return await practiceCacheRefreshPromise;
@@ -3964,7 +3987,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
     practiceCacheRefreshPromise = (async () => {
         isScrapingActive = true;
         try {
-            let practicesArray = await scrapePracticeListViaSessionTab();
+            let practicesArray = await scrapePracticeListViaSessionTab(preferredTabId);
 
             if (!Array.isArray(practicesArray) || practicesArray.length === 0) {
                 try {
@@ -4013,7 +4036,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
             await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
 
             // Hydrate missing CDB values in the background without blocking UI responsiveness
-            hydrateMissingCdbs(15).catch(() => undefined);
+            hydrateMissingCdbs(15, preferredTabId).catch(() => undefined);
 
             return practicesArray;
         } catch (e) {
@@ -4031,7 +4054,7 @@ async function fetchAndCachePracticeList(purpose = 'background refresh') {
     }
 }
 
-async function ensureCacheLoaded() {
+async function ensureCacheLoaded(preferredTabId = null) {
     if (Object.keys(practiceCache).length > 0) return;
 
     const result = await loadCacheFromStorage();
@@ -4040,13 +4063,13 @@ async function ensureCacheLoaded() {
 
         // Do not block UI on cold start if cache is stale; refresh in background.
         if (!result.cacheTimestamp || (Date.now() - result.cacheTimestamp >= CACHE_EXPIRY)) {
-            fetchAndCachePracticeList('stale-cache-refresh').catch(() => undefined);
+            fetchAndCachePracticeList('stale-cache-refresh', preferredTabId).catch(() => undefined);
         }
         return;
     }
 
     // Truly no cache available, fetch now.
-    await fetchAndCachePracticeList('initial-load');
+    await fetchAndCachePracticeList('initial-load', preferredTabId);
 }
 
 function openPanelPopup(hostTabId = null) {
@@ -4319,7 +4342,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         if (PROTECTED_EXTENSION_ACTIONS.has(message?.action)) {
-            const accessCheck = await ensureProtectedExtensionAccess(String(message.action || 'this feature'), sender);
+            const accessCheck = await ensureProtectedExtensionAccess(
+                String(message.action || 'this feature'),
+                sender,
+                message && typeof message === 'object' ? message : {}
+            );
             if (!accessCheck.success) {
                 return {
                     success: false,
@@ -4330,7 +4357,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         if (CACHE_REQUIRED_ACTIONS.has(message?.action)) {
-            await ensureCacheLoaded();
+            await ensureCacheLoaded(
+                typeof message?.preferredTabId === 'number' ? message.preferredTabId : null
+            );
         }
 
         if (message.action === 'getPracticeCache') {
@@ -4368,7 +4397,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return await handleGetLinearBotJobsTriggerStatus();
         }
         if (message.action === 'requestActiveScrape') {
-            const data = await fetchAndCachePracticeList('manual-refresh');
+            const data = await fetchAndCachePracticeList(
+                'manual-refresh',
+                typeof message?.preferredTabId === 'number' ? message.preferredTabId : null
+            );
             return { success: true, practicesCount: (data || []).length };
         }
         if (message.action === 'getPracticeLiveCounts') {
@@ -4392,7 +4424,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
             if (p && looksInvalidCdb && /^[A-Z]\d{5}$/.test(normalizedOds)) {
-                fetchPracticeCdbByOds(normalizedOds)
+                fetchPracticeCdbByOds(
+                    normalizedOds,
+                    typeof message?.preferredTabId === 'number' ? message.preferredTabId : null
+                )
                     .then(async (cdb) => {
                         if (!cdb) return;
                         const refreshed = { ...p, cdb, practiceCDB: cdb, timestamp: Date.now() };
@@ -4414,7 +4449,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             };
         }
         if (message.action === 'hydratePracticeCdb') {
-            const updated = await hydrateMissingCdbs(message.limit || 25);
+            const updated = await hydrateMissingCdbs(
+                message.limit || 25,
+                typeof message?.preferredTabId === 'number' ? message.preferredTabId : null
+            );
             return { success: true, updated };
         }
         return { error: "Unknown action" };

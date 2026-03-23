@@ -136,7 +136,10 @@
         try {
             const response = await sendRuntimeMessage({
                 action: 'getExtensionAccessState',
-                payload: { forceRefresh }
+                payload: {
+                    forceRefresh,
+                    allowStale: true
+                }
             });
             if (response?.success && response?.access) {
                 restrictedToolsAccess = {
@@ -230,41 +233,84 @@
     }
 
     function createFloatingDocPanel() {
-        if (document.getElementById('bl-doc-nav-panel')) return document.getElementById('bl-doc-nav-panel');
+        if (!floatingNavPanel || !document.body.contains(floatingNavPanel)) {
+            floatingNavPanel = document.createElement('div');
+            floatingNavPanel.id = 'bl-doc-nav-panel';
 
-        floatingNavPanel = document.createElement('div');
-        floatingNavPanel.id = 'bl-doc-nav-panel';
+            Object.assign(floatingNavPanel.style, {
+                position: 'absolute',
+                zIndex: '2147483647',
+                display: 'none',
+                flexDirection: 'column',
+                gap: '3px',
+                background: '#ffffff',
+                padding: '2px 4px',
+                border: '1px solid #007bff',
+                borderRadius: '4px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                pointerEvents: 'auto',
+                alignItems: 'center',
+                whiteSpace: 'nowrap',
+                minWidth: 'fit-content'
+            });
 
-        Object.assign(floatingNavPanel.style, {
-            position: 'absolute',
-            zIndex: '2147483647',
-            display: 'none',
-            flexDirection: 'column',
-            gap: '4px',
-            background: '#ffffff',
-            padding: '3px 5px',
-            border: '1px solid #007bff',
-            borderRadius: '4px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-            fontFamily: 'system-ui, -apple-system, sans-serif',
-            pointerEvents: 'auto',
-            alignItems: 'center',
-            whiteSpace: 'nowrap',
-            minWidth: 'fit-content'
-        });
+            floatingNavPanel.addEventListener('mouseenter', () => { isMouseInDocPanel = true; });
+            floatingNavPanel.addEventListener('mouseleave', () => { isMouseInDocPanel = false; hideDocPanel(); });
 
-        floatingNavPanel.addEventListener('mouseenter', () => { isMouseInDocPanel = true; });
-        floatingNavPanel.addEventListener('mouseleave', () => { isMouseInDocPanel = false; hideDocPanel(); });
+            document.body.appendChild(floatingNavPanel);
+        }
 
-        const createNavBtn = (label, color, getUrl) => createButton({
-            label,
-            color,
-            onClick: () => {
-                const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
-                if (!docId) return;
-                openUrlInNewTab(getUrl(docId));
-            }
-        });
+        floatingNavPanel.innerHTML = '';
+
+        const applyCompactButtonStyle = (btn, options = {}) => {
+            btn.style.padding = options.padding || '1px 5px';
+            btn.style.fontSize = options.fontSize || '10px';
+            btn.style.lineHeight = '1.15';
+        };
+
+        const createNavActionGroup = (label, color, getUrl) => {
+            const group = document.createElement('div');
+            Object.assign(group.style, {
+                display: 'inline-flex',
+                alignItems: 'stretch',
+                gap: '0',
+                borderRadius: '3px',
+                overflow: 'hidden'
+            });
+
+            const openBtn = createButton({
+                label,
+                color,
+                title: `Open ${label} link`,
+                onClick: () => {
+                    const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
+                    if (!docId) return;
+                    openUrlInNewTab(getUrl(docId));
+                }
+            });
+            openBtn.style.borderRadius = '3px 0 0 3px';
+            applyCompactButtonStyle(openBtn);
+
+            const copyBtn = createButton({
+                color: '#f0f0f0',
+                title: `Copy ${label} link`,
+                icon: COPY_ICON_SVG,
+                onClick: (btn) => {
+                    const docId = activeDocIdElement?.textContent?.trim()?.replace(/\D/g, '');
+                    if (!docId) return;
+                    copyToClipboard(getUrl(docId), () => flashButton(btn));
+                }
+            });
+            copyBtn.style.color = '#333';
+            copyBtn.style.border = '1px solid rgba(0, 0, 0, 0.15)';
+            copyBtn.style.borderLeft = 'none';
+            copyBtn.style.borderRadius = '0 3px 3px 0';
+            applyCompactButtonStyle(copyBtn, { padding: '1px 4px' });
+
+            group.append(openBtn, copyBtn);
+            return group;
+        };
 
         const copyFilterBtn = createButton({
             color: '#f0f0f0',
@@ -278,6 +324,7 @@
         });
         copyFilterBtn.style.color = '#333';
         copyFilterBtn.style.border = '1px solid #ccc';
+        applyCompactButtonStyle(copyFilterBtn, { padding: '1px 4px' });
 
         const copyIdBtn = createButton({
             color: '#f0f0f0',
@@ -291,6 +338,7 @@
         });
         copyIdBtn.style.color = '#333';
         copyIdBtn.style.border = '1px solid #ccc';
+        applyCompactButtonStyle(copyIdBtn, { padding: '1px 4px' });
 
         const createIssueBtn = createButton({
             label: 'Issue',
@@ -361,7 +409,7 @@
         Object.assign(primaryRow.style, {
             display: 'flex',
             flexDirection: 'row',
-            gap: '3px',
+            gap: '2px',
             alignItems: 'center',
             flexWrap: 'nowrap'
         });
@@ -370,30 +418,25 @@
         Object.assign(secondaryRow.style, {
             display: 'flex',
             flexDirection: 'row',
-            gap: '3px',
+            gap: '2px',
             alignItems: 'center',
-            flexWrap: 'nowrap',
-            width: '100%'
+            flexWrap: 'nowrap'
         });
 
-        createIssueBtn.style.flex = '1 1 auto';
+        applyCompactButtonStyle(createIssueBtn, { padding: '1px 6px' });
+        createIssueBtn.style.minWidth = '46px';
         createIssueBtn.style.justifyContent = 'center';
+        createIssueBtn.style.whiteSpace = 'nowrap';
 
-        if (hasRestrictedFeature('dashboard_hover_tools')) {
-            primaryRow.append(
-                createNavBtn('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`),
-                createNavBtn('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`),
-                createNavBtn('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`),
-                createNavBtn('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`)
-            );
-        }
+        const jobsGroup = createNavActionGroup('Jobs', '#6c757d', id => `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${id}`);
+        const obanGroup = createNavActionGroup('Oban', '#fd7e14', id => `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${id}`);
+        const logGroup = createNavActionGroup('Log', '#17a2b8', id => `https://app.betterletter.ai/admin_panel/event_log/${id}`);
+        const adminGroup = createNavActionGroup('Admin', '#007bff', id => `https://app.betterletter.ai/admin_panel/letter/${id}`);
 
-        if (hasRestrictedFeature('linear_create_issue')) {
-            secondaryRow.append(createIssueBtn);
-        }
-        if (hasRestrictedFeature('dashboard_hover_tools')) {
-            secondaryRow.append(copyFilterBtn, copyIdBtn);
-        }
+        primaryRow.append(jobsGroup, obanGroup, logGroup);
+
+        secondaryRow.append(adminGroup, createIssueBtn);
+        secondaryRow.append(copyFilterBtn, copyIdBtn);
 
         if (primaryRow.childNodes.length > 0) {
             floatingNavPanel.append(primaryRow);
@@ -402,7 +445,6 @@
             floatingNavPanel.append(secondaryRow);
         }
 
-        document.body.appendChild(floatingNavPanel);
         return floatingNavPanel;
     }
 
@@ -733,7 +775,6 @@
     }
 
     function attachMetaListeners() {
-        if (!hasRestrictedFeature('dashboard_hover_tools')) return;
         const rows = document.querySelectorAll('table tbody tr');
         rows.forEach(row => {
             if (row.dataset.blMetaBound === 'true') return;
@@ -804,14 +845,16 @@
     const observer = new MutationObserver(() => attachListeners());
 
     async function init() {
-        const access = await ensureRestrictedToolsAccess(false);
-        if (!hasRestrictedFeature('dashboard_hover_tools') && !hasRestrictedFeature('linear_create_issue')) {
-            return;
-        }
         if (listenersStarted) return;
         listenersStarted = true;
         observer.observe(document.body, { childList: true, subtree: true });
         attachListeners();
+        ensureRestrictedToolsAccess(false)
+            .then(() => {
+                if (floatingNavPanel) createFloatingDocPanel();
+                attachListeners();
+            })
+            .catch(() => undefined);
     }
 
     init().catch(() => undefined);

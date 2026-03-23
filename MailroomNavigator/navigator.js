@@ -4,10 +4,25 @@ import { copyTextToClipboard, showStatus, showToast } from './utils.js';
 
 const ALL_PRACTICES_CODE = 'ALL';
 const ALL_PRACTICES_LABEL = 'All practices';
+const PANEL_HOST_TAB_ID = (() => {
+    try {
+        const rawValue = new URLSearchParams(window.location.search).get('hostTabId');
+        const parsed = Number.parseInt(String(rawValue || ''), 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    } catch (error) {
+        return null;
+    }
+})();
 const LIVE_COUNT_KEYS = ['preparing', 'edit', 'review', 'coding', 'rejected'];
 const statusFetchInFlightByOds = new Map();
 const lastKnownLiveCountsByOds = new Map();
 let statusDisplayInteractionsBound = false;
+
+function withPreferredTabId(message = {}) {
+    return typeof PANEL_HOST_TAB_ID === 'number'
+        ? { ...message, preferredTabId: PANEL_HOST_TAB_ID }
+        : { ...message };
+}
 
 // navigator.js - Safety check to prevent duplicate buttons
 export function cleanDuplicateButtons() {
@@ -472,7 +487,8 @@ export async function displayPracticeStatus(options = {}) {
     try {
         const statusPromise = existingInFlight || chrome.runtime.sendMessage({
             action: 'getPracticeStatus',
-            odsCode: selectedOds
+            odsCode: selectedOds,
+            ...withPreferredTabId()
         });
         if (!existingInFlight) {
             statusFetchInFlightByOds.set(selectedOds, statusPromise);
