@@ -30,18 +30,6 @@
         <button id="refreshAccessRequestBtn" class="btn btn-sm btn-ghost" type="button">Refresh Access</button>
       </div>
     </div>
-    <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-bottom: 12px;">
-      <h3>Access Service</h3>
-      <label for="accessServiceUrlInput">Shared Access Service URL</label>
-      <input id="accessServiceUrlInput" type="url" placeholder="e.g. http://192.168.1.20:4817" autocomplete="off">
-      <label for="accessServiceKeyInput" style="margin-top: 8px;">Shared Access Key (optional)</label>
-      <input id="accessServiceKeyInput" type="password" placeholder="Required only if remote access key is enabled" autocomplete="off">
-      <div class="btn-row" style="margin-top: 8px;">
-        <button id="saveAccessServiceConfigBtn" class="btn btn-sm" type="button">Save Access Service</button>
-        <button id="clearAccessServiceConfigBtn" class="btn btn-sm btn-ghost" type="button">Use Local</button>
-      </div>
-      <div id="accessServiceConfigStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Using local access service.</div>
-    </div>
     <!-- Top-level view switcher: Navigator / Job Panel / Others -->
     <div class="btn-row global-nav-buttons-row">
       <button id="navigatorGlobalToggleBtn" class="btn active-tab">
@@ -424,6 +412,19 @@
         </label>
         <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger idle.</div>
         </div>
+      </div>
+
+      <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-top: 12px;">
+        <h3>Access Service</h3>
+        <label for="accessServiceUrlInput">Shared Access Service URL</label>
+        <input id="accessServiceUrlInput" type="url" placeholder="e.g. http://192.168.1.20:4817" autocomplete="off">
+        <label for="accessServiceKeyInput" style="margin-top: 8px;">Shared Access Key (optional)</label>
+        <input id="accessServiceKeyInput" type="password" placeholder="Required only if remote access key is enabled" autocomplete="off">
+        <div class="btn-row" style="margin-top: 8px;">
+          <button id="saveAccessServiceConfigBtn" class="btn btn-sm" type="button">Save Access Service</button>
+          <button id="clearAccessServiceConfigBtn" class="btn btn-sm btn-ghost" type="button">Use Local</button>
+        </div>
+        <div id="accessServiceConfigStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Using local access service.</div>
       </div>
 
       <div id="extensionUserManagementSection" class="section-container collapsible-section" style="margin-top: 12px; display: none;">
