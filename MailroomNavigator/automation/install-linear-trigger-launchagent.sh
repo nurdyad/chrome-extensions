@@ -13,6 +13,11 @@ ENV_FILE="$REPO_ROOT/.env"
 SERVER_SCRIPT="$SCRIPT_DIR/linear-trigger-server.mjs"
 BOT_JOBS_ENTRY="${LINEAR_TRIGGER_BOT_JOBS_ENTRY:-bot-jobs.js}"
 PORT="${LINEAR_TRIGGER_SERVER_PORT:-4817}"
+HOST="${LINEAR_TRIGGER_SERVER_HOST:-127.0.0.1}"
+
+if [[ "$HOST" == "0.0.0.0" || "$HOST" == "::" || "$HOST" == "[::]" ]]; then
+  HOST="127.0.0.1"
+fi
 
 resolve_default_bot_jobs_dir() {
   local candidates=(
@@ -95,6 +100,8 @@ cat >"$PLIST_PATH" <<PLIST
       <string>${BOT_JOBS_ENTRY}</string>
       <key>LINEAR_TRIGGER_SERVER_PORT</key>
       <string>${PORT}</string>
+      <key>LINEAR_TRIGGER_SERVER_HOST</key>
+      <string>${HOST}</string>
     </dict>
 
     <key>RunAtLoad</key>

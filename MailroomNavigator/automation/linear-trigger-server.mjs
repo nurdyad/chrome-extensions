@@ -19,7 +19,16 @@ const REPO_ROOT = resolve(__dirname, "..");
 const DEFAULT_ENV_PATH = resolve(REPO_ROOT, ".env");
 loadDotenv({ path: process.env.DOTENV_CONFIG_PATH || DEFAULT_ENV_PATH });
 
-const HOST = String(process.env.LINEAR_TRIGGER_SERVER_HOST || "127.0.0.1");
+function normalizeTriggerServerHost(rawHost) {
+  const normalized = String(rawHost || "").trim();
+  if (!normalized) return "127.0.0.1";
+  if (normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]") {
+    return "127.0.0.1";
+  }
+  return normalized;
+}
+
+const HOST = normalizeTriggerServerHost(process.env.LINEAR_TRIGGER_SERVER_HOST || "127.0.0.1");
 const PORT = Number(process.env.LINEAR_TRIGGER_SERVER_PORT || 4817);
 function resolveDefaultBotJobsDir() {
   const candidates = [
