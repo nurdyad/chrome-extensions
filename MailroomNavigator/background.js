@@ -108,7 +108,8 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     syncLinearSlackWorkspaceTargets: ['slack_sync'],
     triggerLinearBotJobsRun: ['linear_trigger'],
     triggerLinearReconcileRun: ['linear_reconcile'],
-    getLinearBotJobsTriggerStatus: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync']
+    getLinearBotJobsTriggerStatus: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
+    lookupSuperblocksUuidStatus: ['job_panel']
 };
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
 
@@ -245,6 +246,11 @@ function sanitizeMultiline(value, maxLength = 12000) {
         .replace(/\u0000/g, '')
         .trim()
         .slice(0, maxLength);
+}
+
+function extractUuid(value) {
+    const match = sanitizeSingleLine(value, 240).match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    return match ? match[0].toLowerCase() : '';
 }
 
 function normalizeEmail(value) {
@@ -581,6 +587,31 @@ function sanitizeLinearTriggerRun(rawRun = null) {
         issueCandidatesTotal: Number.isFinite(Number(rawRun.issueCandidatesTotal)) ? Number(rawRun.issueCandidatesTotal) : 0,
         floodMode: Boolean(rawRun.floodMode),
         slackNotification: sanitizeLinearSlackResult(rawRun.slackNotification)
+    };
+}
+
+function sanitizeSuperblocksLookupResult(rawLookup = null) {
+    if (!rawLookup || typeof rawLookup !== 'object') {
+        return {
+            uuid: '',
+            found: false,
+            status: '',
+            detail: '',
+            checkedAt: '',
+            matchedStatusPath: ''
+        };
+    }
+
+    return {
+        uuid: extractUuid(rawLookup.uuid),
+        found: Boolean(rawLookup.found),
+        status: sanitizeSingleLine(rawLookup.status, 240),
+        detail: sanitizeSingleLine(rawLookup.detail, 320),
+        documentId: sanitizeSingleLine(rawLookup.documentId, 80),
+        documentLink: sanitizeSingleLine(rawLookup.documentLink, 1200),
+        rejectionReason: sanitizeSingleLine(rawLookup.rejectionReason, 320),
+        checkedAt: sanitizeSingleLine(rawLookup.checkedAt, 80),
+        matchedStatusPath: sanitizeSingleLine(rawLookup.matchedStatusPath, 160)
     };
 }
 
@@ -1195,6 +1226,43 @@ async function handleGetLinearBotJobsTriggerStatus() {
                 lastRun: sanitizeLinearTriggerRun(payload.lastRun),
                 serverTime: sanitizeSingleLine(payload.serverTime, 80)
             }
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
+async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
+    try {
+        const uuid = extractUuid(rawPayload?.uuid || rawPayload);
+        if (!uuid) {
+            throw new Error('Invalid or missing UUID.');
+        }
+
+        const { response, payload } = await callLinearTriggerServer(`/superblocks/uuid-status?uuid=${encodeURIComponent(uuid)}`, {
+            method: 'GET'
+        });
+
+        if (!response.ok || !payload?.ok) {
+            const serverError = sanitizeSingleLine(payload?.error, 240);
+            if (response.status === 404 || serverError.toLowerCase() === 'not found.') {
+                return {
+                    success: false,
+                    error: 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).'
+                };
+            }
+            return {
+                success: false,
+                error: serverError || `Trigger service failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            result: sanitizeSuperblocksLookupResult(payload.lookup)
         };
     } catch (error) {
         return {
@@ -4395,6 +4463,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (message.action === 'getLinearBotJobsTriggerStatus') {
             return await handleGetLinearBotJobsTriggerStatus();
+        }
+        if (message.action === 'lookupSuperblocksUuidStatus') {
+            return await handleLookupSuperblocksUuidStatus(message.payload);
         }
         if (message.action === 'requestActiveScrape') {
             const data = await fetchAndCachePracticeList(

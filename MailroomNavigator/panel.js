@@ -35,6 +35,9 @@ const EXTENSION_FEATURE_CATALOG = [
     { key: 'dashboard_hover_tools', label: 'Dashboard Hover Tools', description: 'Use Jobs/Admin/Issue hover actions on BetterLetter dashboards.' }
 ];
 const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => feature.key);
+const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const SUPERBLOCKS_LOOKUP_REQUEST_TIMEOUT_MS = 12000;
+const SUPERBLOCKS_LOOKUP_LOADING_DELAY_MS = 120;
 const NAVIGATOR_VIEW_FEATURE_KEYS = [
     'practice_navigator',
     'email_formatter',
@@ -580,6 +583,11 @@ function extractJobId(value) {
     return '';
 }
 
+function extractUuid(value) {
+    const match = String(value || '').trim().match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    return match ? match[0].toLowerCase() : '';
+}
+
 function extractAllNumericIds(value) {
     const matches = String(value || '').match(/\d+/g) || [];
     return [...new Set(matches.map(id => id.trim()).filter(Boolean))];
@@ -625,6 +633,28 @@ function truncateText(value, max = 90) {
     const clean = collapseText(value);
     if (clean.length <= max) return clean;
     return `${clean.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function truncateMiddleText(value, lead = 12, tail = 10) {
+    const clean = collapseText(value);
+    if (!clean) return '';
+    if (clean.length <= (lead + tail + 1)) return clean;
+    return `${clean.slice(0, Math.max(0, lead))}…${clean.slice(Math.max(0, clean.length - tail))}`;
+}
+
+function formatLookupDisplayValue(value) {
+    const clean = collapseText(value).replace(/[_-]+/g, ' ');
+    if (!clean) return '';
+    return clean.replace(/\b([a-z])/g, (match, char) => char.toUpperCase());
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 
 async function openUrlsWithLoading(urls, actionButtons = []) {
@@ -1740,11 +1770,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // K. JOB PANEL QUICK ACTIONS
     const manualDocIdInput = document.getElementById('manualDocId');
     const jobStatusInput = document.getElementById('jobStatusInput');
+    const superblocksUuidLookupInput = document.getElementById('superblocksUuidLookupInput');
     const bulkIdsInput = document.getElementById('bulkIdsInput');
     const bulkActionType = document.getElementById('bulkActionType');
 
     const manualDocValidation = document.getElementById('manualDocValidation');
     const jobStatusValidation = document.getElementById('jobStatusValidation');
+    const superblocksUuidLookupStatus = document.getElementById('superblocksUuidLookupStatus');
     const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
     const docIdAutocompleteResultsContainer = document.getElementById('docIdAutocompleteResultsContainer');
@@ -1831,6 +1863,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     let linearIssueContext = null;
     let linearSlackTargetsCache = { channels: [], users: [], syncedAt: '' };
     let linearSlackTargetSyncPromise = null;
+    let superblocksLookupRequestSeq = 0;
+    let superblocksLookupAbortController = null;
+    let superblocksLookupLoadingTimer = null;
+    let lastSuperblocksLookupUuid = '';
+    const superblocksLookupCache = new Map();
+    const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -1844,6 +1882,279 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             el.classList.add('invalid');
             el.textContent = invalidText;
+        }
+    };
+
+    const setSuperblocksLookupStatus = (message, tone = 'neutral') => {
+        if (!superblocksUuidLookupStatus) return;
+        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        superblocksUuidLookupStatus.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
+        superblocksUuidLookupStatus.classList.remove('superblocks-lookup-status', 'superblocks-lookup-card-host');
+        superblocksUuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID to check its Superblocks status.';
+    };
+
+    const pruneSuperblocksLookupCache = () => {
+        const now = Date.now();
+        superblocksLookupCache.forEach((entry, key) => {
+            if (!entry || (now - Number(entry.cachedAt || 0)) > SUPERBLOCKS_LOOKUP_CACHE_TTL_MS) {
+                superblocksLookupCache.delete(key);
+            }
+        });
+    };
+
+    const getCachedSuperblocksLookup = (uuid) => {
+        pruneSuperblocksLookupCache();
+        const key = String(uuid || '').trim().toLowerCase();
+        if (!key) return null;
+        const entry = superblocksLookupCache.get(key);
+        if (!entry) return null;
+        return entry.result || null;
+    };
+
+    const rememberSuperblocksLookup = (uuid, result) => {
+        const key = String(uuid || '').trim().toLowerCase();
+        if (!key || !result || typeof result !== 'object') return;
+        superblocksLookupCache.set(key, {
+            cachedAt: Date.now(),
+            result
+        });
+    };
+
+    const clearSuperblocksLookupLoadingTimer = () => {
+        if (superblocksLookupLoadingTimer !== null) {
+            window.clearTimeout(superblocksLookupLoadingTimer);
+            superblocksLookupLoadingTimer = null;
+        }
+    };
+
+    const cancelSuperblocksLookupRequest = () => {
+        clearSuperblocksLookupLoadingTimer();
+        if (superblocksLookupAbortController) {
+            superblocksLookupAbortController.abort();
+            superblocksLookupAbortController = null;
+        }
+    };
+
+    const buildSuperblocksLookupUrl = (uuid) => {
+        return `${LINEAR_TRIGGER_SERVER_BASE_URL}/superblocks/uuid-status?uuid=${encodeURIComponent(uuid)}`;
+    };
+
+    const normalizeSuperblocksLookupError = (message, status = 0) => {
+        const normalized = collapseText(message);
+        if (status === 404 || normalized.toLowerCase() === 'not found.') {
+            return 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).';
+        }
+        if (normalized) return normalized;
+        return status ? `Trigger service failed with status ${status}.` : 'Superblocks lookup failed.';
+    };
+
+    const fetchSuperblocksLookupDirect = async (uuid, { signal } = {}) => {
+        const response = await fetch(buildSuperblocksLookupUrl(uuid), {
+            method: 'GET',
+            cache: 'no-store',
+            signal
+        });
+        const rawBody = await response.text();
+        let payload = null;
+        try {
+            payload = rawBody ? JSON.parse(rawBody) : null;
+        } catch (error) {
+            payload = null;
+        }
+
+        if (!response.ok || !payload?.ok) {
+            throw new Error(normalizeSuperblocksLookupError(payload?.error || rawBody, response.status));
+        }
+
+        return payload.lookup || {};
+    };
+
+    const fetchSuperblocksLookupViaBackground = async (uuid) => {
+        const response = await chrome.runtime.sendMessage({
+            action: 'lookupSuperblocksUuidStatus',
+            payload: { uuid },
+            ...getProtectedActionPayload()
+        });
+
+        if (!response?.success) {
+            throw new Error(String(response?.error || 'Superblocks lookup failed.').trim());
+        }
+
+        return response.result || {};
+    };
+
+    const fetchSuperblocksLookup = async (uuid, { signal } = {}) => {
+        try {
+            return await fetchSuperblocksLookupDirect(uuid, { signal });
+        } catch (error) {
+            if (signal?.aborted || error?.name === 'AbortError') {
+                throw error;
+            }
+            const message = collapseText(error?.message || '');
+            if (!(error instanceof TypeError) && !/failed to fetch|networkerror|load failed/i.test(message)) {
+                throw error;
+            }
+            return fetchSuperblocksLookupViaBackground(uuid);
+        }
+    };
+
+    let superblocksLookupWarmPromise = null;
+    const warmSuperblocksLookupConnection = async () => {
+        if (superblocksLookupWarmPromise) return superblocksLookupWarmPromise;
+        superblocksLookupWarmPromise = fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}/health`, {
+            method: 'GET',
+            cache: 'no-store'
+        }).catch(() => null).finally(() => {
+            superblocksLookupWarmPromise = null;
+        });
+        return superblocksLookupWarmPromise;
+    };
+
+    const buildSuperblocksLookupCardHtml = (result = {}, { loading = false } = {}) => {
+        if (!superblocksUuidLookupStatus) return;
+
+        const uuid = collapseText(result.uuid || superblocksUuidLookupInput?.value || '');
+        const documentId = collapseText(result.documentId || '');
+        const documentStatus = collapseText(result.status || '');
+        const documentLink = collapseText(result.documentLink || result.detail || '');
+        const rejectionReason = collapseText(result.rejectionReason || '');
+        const displayTitle = documentId ? `Document ${documentId}` : (loading ? 'Looking up UUID' : 'Document status');
+        const displaySubtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'Superblocks UUID lookup';
+        const normalizedStatus = documentStatus.toLowerCase();
+        const prettyStatus = formatLookupDisplayValue(documentStatus) || 'Unknown';
+        const prettyReason = formatLookupDisplayValue(rejectionReason);
+        const statusToneClass = loading
+            ? 'is-neutral'
+            : normalizedStatus === 'rejected'
+                ? 'is-danger'
+                : normalizedStatus === 'released'
+                    ? 'is-success'
+                    : normalizedStatus
+                        ? 'is-info'
+                        : 'is-neutral';
+        const showReason = Boolean(loading || (normalizedStatus === 'rejected' && rejectionReason));
+        const reasonToneClass = rejectionReason ? 'is-warning' : 'is-neutral';
+        const summaryGridClass = showReason
+            ? 'superblocks-status-summary-grid'
+            : 'superblocks-status-summary-grid has-single-card';
+
+        return `
+            <div class="superblocks-status-card practice-status-card ${loading ? 'is-loading' : ''}">
+                <div class="superblocks-status-header">
+                    <div class="practice-status-kicker">UUID Lookup</div>
+                    ${documentLink && !loading ? `<button type="button" class="practice-status-chip practice-status-chip-button is-cdb superblocks-status-open-button" data-superblocks-open-link="${escapeHtml(documentLink)}">Open link</button>` : ''}
+                </div>
+                <div class="superblocks-status-main">
+                    <div class="practice-status-title">${escapeHtml(displayTitle)}</div>
+                    <div class="practice-status-subtitle superblocks-status-subtitle" title="${escapeHtml(uuid || 'Superblocks UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
+                </div>
+                <div class="${summaryGridClass}">
+                    <div class="practice-status-summary-card ${statusToneClass}">
+                        <span class="practice-status-summary-label">Document Status</span>
+                        <span class="practice-status-summary-value">${escapeHtml(loading ? 'Loading' : prettyStatus)}</span>
+                    </div>
+                    ${showReason ? `
+                        <div class="practice-status-summary-card ${reasonToneClass}">
+                            <span class="practice-status-summary-label">Rejected Reason</span>
+                            <span class="practice-status-summary-value">${escapeHtml(loading ? 'Checking' : (prettyReason || 'N/A'))}</span>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    };
+
+    const renderSuperblocksLookupLoading = (uuid = '') => {
+        if (!superblocksUuidLookupStatus) return;
+        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        superblocksUuidLookupStatus.classList.add('neutral', 'superblocks-lookup-status', 'superblocks-lookup-card-host');
+        superblocksUuidLookupStatus.innerHTML = buildSuperblocksLookupCardHtml({ uuid }, { loading: true });
+    };
+
+    const renderSuperblocksLookupResult = (result = {}) => {
+        if (!superblocksUuidLookupStatus) return;
+        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        superblocksUuidLookupStatus.classList.add('valid', 'superblocks-lookup-status', 'superblocks-lookup-card-host');
+        superblocksUuidLookupStatus.innerHTML = buildSuperblocksLookupCardHtml(result, { loading: false });
+    };
+
+    const runSuperblocksLookup = async ({ force = false } = {}) => {
+        const rawValue = String(superblocksUuidLookupInput?.value || '').trim();
+        const uuid = extractUuid(rawValue);
+        const requestSeq = ++superblocksLookupRequestSeq;
+
+        if (!rawValue) {
+            lastSuperblocksLookupUuid = '';
+            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+            return '';
+        }
+
+        if (!uuid) {
+            lastSuperblocksLookupUuid = '';
+            setSuperblocksLookupStatus('Enter a valid UUID.', 'invalid');
+            return '';
+        }
+
+        if (superblocksUuidLookupInput && superblocksUuidLookupInput.value !== uuid) {
+            superblocksUuidLookupInput.value = uuid;
+        }
+
+        if (!force && uuid === lastSuperblocksLookupUuid) {
+            return uuid;
+        }
+
+        lastSuperblocksLookupUuid = uuid;
+        const cachedResult = force ? null : getCachedSuperblocksLookup(uuid);
+        if (cachedResult) {
+            renderSuperblocksLookupResult(cachedResult);
+            return uuid;
+        }
+
+        cancelSuperblocksLookupRequest();
+        const controller = new AbortController();
+        let requestTimedOut = false;
+        superblocksLookupAbortController = controller;
+        superblocksLookupLoadingTimer = window.setTimeout(() => {
+            if (requestSeq === superblocksLookupRequestSeq && lastSuperblocksLookupUuid === uuid) {
+                renderSuperblocksLookupLoading(uuid);
+            }
+        }, SUPERBLOCKS_LOOKUP_LOADING_DELAY_MS);
+        const timeoutId = window.setTimeout(() => {
+            requestTimedOut = true;
+            controller.abort();
+        }, SUPERBLOCKS_LOOKUP_REQUEST_TIMEOUT_MS);
+
+        try {
+            const result = await fetchSuperblocksLookup(uuid, { signal: controller.signal });
+            if (requestSeq !== superblocksLookupRequestSeq) return uuid;
+            rememberSuperblocksLookup(uuid, result);
+            if (!result.found || !result.status) {
+                setSuperblocksLookupStatus(
+                    String(result.detail || `No Superblocks status found for ${uuid}.`).trim(),
+                    'invalid'
+                );
+                return uuid;
+            }
+
+            renderSuperblocksLookupResult(result);
+            return uuid;
+        } catch (error) {
+            if (requestSeq !== superblocksLookupRequestSeq) return uuid;
+            if (error?.name === 'AbortError' && !requestTimedOut) return uuid;
+            lastSuperblocksLookupUuid = '';
+            setSuperblocksLookupStatus(
+                requestTimedOut
+                    ? 'Local trigger service timed out.'
+                    : String(error?.message || 'Superblocks lookup failed.').trim(),
+                'invalid'
+            );
+            return uuid;
+        } finally {
+            clearSuperblocksLookupLoadingTimer();
+            window.clearTimeout(timeoutId);
+            if (superblocksLookupAbortController === controller) {
+                superblocksLookupAbortController = null;
+            }
         }
     };
 
@@ -4145,6 +4456,52 @@ ${error?.message || String(error)}`, 'invalid');
     });
     jobStatusInput?.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
+    });
+
+    superblocksUuidLookupInput?.addEventListener('input', () => {
+        superblocksLookupRequestSeq += 1;
+        cancelSuperblocksLookupRequest();
+        const rawValue = String(superblocksUuidLookupInput.value || '').trim();
+        if (!rawValue) {
+            lastSuperblocksLookupUuid = '';
+            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+            return;
+        }
+
+        if (!extractUuid(rawValue)) {
+            lastSuperblocksLookupUuid = '';
+            setSuperblocksLookupStatus('Enter a valid UUID.', 'invalid');
+            return;
+        }
+
+        runSuperblocksLookup().catch(() => undefined);
+    });
+    superblocksUuidLookupInput?.addEventListener('focus', () => {
+        warmSuperblocksLookupConnection().catch(() => undefined);
+    });
+    superblocksUuidLookupInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            runSuperblocksLookup().catch(() => undefined);
+        }
+        if (event.key === 'Escape') {
+            superblocksLookupRequestSeq += 1;
+            cancelSuperblocksLookupRequest();
+            lastSuperblocksLookupUuid = '';
+            superblocksUuidLookupInput.value = '';
+            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+        }
+    });
+    superblocksUuidLookupStatus?.addEventListener('click', (event) => {
+        const target = event.target instanceof Element
+            ? event.target.closest('[data-superblocks-open-link]')
+            : null;
+        if (!target) return;
+
+        event.preventDefault();
+        const url = String(target.getAttribute('data-superblocks-open-link') || '').trim();
+        if (!url) return;
+        openTabWithTimeout(url);
     });
 
     bulkIdsInput?.addEventListener('input', updateBulkValidation);

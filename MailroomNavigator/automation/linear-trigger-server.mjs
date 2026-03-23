@@ -79,6 +79,43 @@ const SLACK_API_BASE_URL = "https://slack.com/api";
 const SLACK_SYNC_MEMBER_ONLY = String(process.env.SLACK_SYNC_MEMBER_ONLY || "1")
   .trim()
   .toLowerCase() !== "0";
+const SUPERBLOCKS_UUID_LOOKUP_URL = sanitizeHttpUrl(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_URL
+    || "",
+);
+const SUPERBLOCKS_UUID_LOOKUP_TOKEN = sanitizeSingleLine(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_TOKEN
+    || "",
+  4096,
+);
+const SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER = sanitizeSingleLine(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER
+    || "Authorization",
+  120,
+) || "Authorization";
+const SUPERBLOCKS_UUID_LOOKUP_METHOD = String(process.env.SUPERBLOCKS_UUID_LOOKUP_METHOD || "POST")
+  .trim()
+  .toUpperCase() === "GET" ? "GET" : "POST";
+const SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD = sanitizeSingleLine(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD
+    || "uuid",
+  120,
+) || "uuid";
+const SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH = sanitizeSingleLine(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH
+    || "status",
+  240,
+);
+const SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH = sanitizeSingleLine(
+  process.env.SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH
+    || "",
+  240,
+);
+const SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(process.env.SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS || "12000"), 10);
+  if (!Number.isFinite(parsed)) return 12000;
+  return Math.min(60000, Math.max(1500, parsed));
+})();
 const ACCESS_CONTROL_OWNER_EMAIL = normalizeEmail(
   process.env.MAILROOMNAV_OWNER_EMAIL
     || "nur.siddique@dyad.net",
@@ -117,6 +154,7 @@ const SERVER_LOG_PATH = join(LOG_DIR, "linear-trigger-server.log");
 const LAST_RUN_STATE_PATH = join(STATE_DIR, "linear-trigger-last-run.json");
 const BOT_JOBS_REPORTS_DIR = join(STATE_DIR, "reports");
 const SLACK_TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
+const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const DEFAULT_ALLOWED_ORIGIN_PREFIX = "chrome-extension://";
 const configuredOrigins = String(process.env.LINEAR_TRIGGER_ALLOWED_ORIGINS || "")
@@ -139,6 +177,8 @@ let slackTargetsCache = {
   loadedAt: 0,
   targets: null,
 };
+const superblocksLookupCache = new Map();
+const superblocksLookupInFlight = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -160,6 +200,19 @@ function sanitizeMultiline(value, maxLength = 12000) {
     .slice(0, maxLength);
 }
 
+function sanitizeHttpUrl(value) {
+  try {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const url = new URL(raw);
+    if (!/^https?:$/i.test(url.protocol)) return "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function sanitizeStringList(values, maxItems = 8, maxLength = 220) {
   if (!Array.isArray(values)) return [];
   return values
@@ -172,6 +225,55 @@ function normalizeEmail(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalized)) return "";
   return normalized;
+}
+
+function extractUuid(value) {
+  const match = sanitizeSingleLine(value, 240).match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+  return match ? match[0].toLowerCase() : "";
+}
+
+function getValueByPath(value, path) {
+  const normalizedPath = sanitizeSingleLine(path, 240);
+  if (!normalizedPath) return undefined;
+
+  const segments = normalizedPath
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (!segments.length) return undefined;
+
+  let current = value;
+  for (const segment of segments) {
+    if (Array.isArray(current)) {
+      const index = Number.parseInt(segment, 10);
+      if (!Number.isFinite(index) || index < 0 || index >= current.length) return undefined;
+      current = current[index];
+      continue;
+    }
+
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+
+  return current;
+}
+
+function pickFirstPresentValue(value, paths = []) {
+  for (const path of paths) {
+    const candidate = getValueByPath(value, path);
+    if (candidate === undefined || candidate === null) continue;
+    if (typeof candidate === "string") {
+      const normalized = sanitizeSingleLine(candidate, 320);
+      if (normalized) return { path, value: normalized };
+      continue;
+    }
+    if (typeof candidate === "number" || typeof candidate === "boolean") {
+      return { path, value: String(candidate) };
+    }
+  }
+  return { path: "", value: "" };
 }
 
 const ACCESS_CONTROL_FEATURE_CATALOG = [
@@ -1142,6 +1244,179 @@ async function runSlackApiRequest(method, body = {}) {
   }
 
   return payload;
+}
+
+function ensureSuperblocksLookupConfig() {
+  if (!SUPERBLOCKS_UUID_LOOKUP_URL) {
+    throw new Error("SUPERBLOCKS_UUID_LOOKUP_URL is missing in MailroomNavigator/.env.");
+  }
+}
+
+function getCachedSuperblocksLookup(uuid) {
+  const normalizedUuid = extractUuid(uuid);
+  if (!normalizedUuid) return null;
+  const cached = superblocksLookupCache.get(normalizedUuid);
+  if (!cached) return null;
+  if ((Date.now() - Number(cached.cachedAt || 0)) > SUPERBLOCKS_LOOKUP_CACHE_TTL_MS) {
+    superblocksLookupCache.delete(normalizedUuid);
+    return null;
+  }
+  return cached.result || null;
+}
+
+function rememberSuperblocksLookup(uuid, result) {
+  const normalizedUuid = extractUuid(uuid);
+  if (!normalizedUuid || !result || typeof result !== "object") return;
+  superblocksLookupCache.set(normalizedUuid, {
+    cachedAt: Date.now(),
+    result,
+  });
+}
+
+async function runSuperblocksUuidLookup(uuid, { forceRefresh = false } = {}) {
+  ensureSuperblocksLookupConfig();
+
+  const normalizedUuid = extractUuid(uuid);
+  if (!normalizedUuid) {
+    throw new Error("Invalid or missing UUID.");
+  }
+
+  if (!forceRefresh) {
+    const cached = getCachedSuperblocksLookup(normalizedUuid);
+    if (cached) return cached;
+
+    const inFlight = superblocksLookupInFlight.get(normalizedUuid);
+    if (inFlight) return inFlight;
+  }
+
+  const runPromise = (async () => {
+    const endpoint = new URL(SUPERBLOCKS_UUID_LOOKUP_URL);
+    const headers = {
+      Accept: "application/json",
+    };
+    let body = null;
+
+    if (SUPERBLOCKS_UUID_LOOKUP_TOKEN) {
+      headers[SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER] = SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER.toLowerCase() === "authorization"
+        && !/^bearer\s+/i.test(SUPERBLOCKS_UUID_LOOKUP_TOKEN)
+        ? `Bearer ${SUPERBLOCKS_UUID_LOOKUP_TOKEN}`
+        : SUPERBLOCKS_UUID_LOOKUP_TOKEN;
+    }
+
+    if (SUPERBLOCKS_UUID_LOOKUP_METHOD === "GET") {
+      endpoint.searchParams.set(SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD, normalizedUuid);
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify({ [SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD]: normalizedUuid });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS);
+
+    let response;
+    let rawBody = "";
+    try {
+      response = await fetch(endpoint, {
+        method: SUPERBLOCKS_UUID_LOOKUP_METHOD,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      rawBody = await response.text();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    let parsedBody = null;
+    try {
+      parsedBody = rawBody ? JSON.parse(rawBody) : null;
+    } catch {
+      parsedBody = null;
+    }
+
+    if (!response.ok) {
+      const bodySnippet = sanitizeSingleLine(
+        parsedBody?.error
+          || parsedBody?.message
+          || rawBody,
+        320,
+      );
+      throw new Error(
+        `Superblocks lookup failed with status ${response.status}${bodySnippet ? `: ${bodySnippet}` : ""}`,
+      );
+    }
+
+    const payload = parsedBody ?? {};
+    const statusPaths = [
+      SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH,
+      "status",
+      "data.status",
+      "result.status",
+      "record.status",
+      "output.status",
+      "outputs.status",
+      "data.result.status",
+      "data.record.status",
+    ].filter(Boolean);
+    const detailPaths = [
+      SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH,
+      "detail",
+      "message",
+      "data.detail",
+      "data.message",
+      "result.detail",
+      "result.message",
+      "record.detail",
+      "record.message",
+      "error",
+    ].filter(Boolean);
+
+    const { path: matchedStatusPath, value: status } = pickFirstPresentValue(payload, statusPaths);
+    const { value: detailValue } = pickFirstPresentValue(payload, detailPaths);
+    const detail = detailValue || (!status ? sanitizeSingleLine(rawBody, 320) : "");
+
+    const result = {
+      uuid: normalizedUuid,
+      found: Boolean(status),
+      status,
+      detail,
+      documentId: pickFirstPresentValue(payload, [
+        "document_id",
+        "data.document_id",
+        "result.document_id",
+        "output.result.0.document_id",
+        "output.FetchDocumentID.0.document_id",
+      ]).value,
+      documentLink: pickFirstPresentValue(payload, [
+        "document_link",
+        "data.document_link",
+        "result.document_link",
+        "output.result.0.document_link",
+        "output.FetchDocumentID.0.document_link",
+      ]).value,
+      rejectionReason: pickFirstPresentValue(payload, [
+        "rejection_reason",
+        "data.rejection_reason",
+        "result.rejection_reason",
+        "output.result.0.rejection_reason",
+        "output.FetchDocumentID.0.rejection_reason",
+      ]).value,
+      matchedStatusPath,
+      checkedAt: nowIso(),
+    };
+
+    rememberSuperblocksLookup(normalizedUuid, result);
+    return result;
+  })();
+
+  superblocksLookupInFlight.set(normalizedUuid, runPromise);
+  try {
+    return await runPromise;
+  } finally {
+    if (superblocksLookupInFlight.get(normalizedUuid) === runPromise) {
+      superblocksLookupInFlight.delete(normalizedUuid);
+    }
+  }
 }
 
 function isLikelySlackId(value, prefixes = "CGD") {
@@ -2179,6 +2454,12 @@ const server = createServer(async (req, res) => {
         slack: {
           configured: Boolean(SLACK_BOT_TOKEN),
         },
+        superblocks: {
+          configured: Boolean(SUPERBLOCKS_UUID_LOOKUP_URL),
+          method: SUPERBLOCKS_UUID_LOOKUP_METHOD,
+          uuidField: SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD,
+          statusPath: SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH,
+        },
         access: {
           enabled: Boolean(ACCESS_CONTROL_OWNER_EMAIL),
           ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
@@ -2389,6 +2670,28 @@ const server = createServer(async (req, res) => {
         sendJson(res, 403, origin, {
           ok: false,
           error: sanitizeSingleLine(error?.message, 260) || "Could not delete MailroomNavigator user.",
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/superblocks/uuid-status") {
+      try {
+        const lookup = await runSuperblocksUuidLookup(url.searchParams.get("uuid"));
+        sendJson(res, 200, origin, {
+          ok: true,
+          lookup,
+        });
+      } catch (error) {
+        const message = sanitizeSingleLine(error?.message, 320) || "Could not look up Superblocks status.";
+        const statusCode = /missing in MailroomNavigator\/\.env/i.test(message)
+          ? 503
+          : /Invalid or missing UUID/i.test(message)
+            ? 400
+            : 502;
+        sendJson(res, statusCode, origin, {
+          ok: false,
+          error: message,
         });
       }
       return;
