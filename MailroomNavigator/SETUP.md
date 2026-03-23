@@ -53,6 +53,14 @@ cp .env.example .env
      - `MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET_TYPE`
      - `MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET`
      - `MAILROOMNAV_ACCESS_CONTROL_ALERT_COOLDOWN_MINUTES`
+   - optional Superblocks UUID lookup settings:
+     - `SUPERBLOCKS_UUID_LOOKUP_URL`
+     - `SUPERBLOCKS_UUID_LOOKUP_TOKEN`
+     - `SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER`
+     - `SUPERBLOCKS_UUID_LOOKUP_METHOD`
+     - `SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD`
+     - `SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH`
+     - `SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH`
    - optional linear trigger settings
 
 3. Never commit `.env`:
@@ -209,6 +217,26 @@ Access requests:
 - the host owner can review `Requests` in `Access Control`
 - the shared access service stores the requester email, recent IPs, request count, requested features, note, and last user agent
 - IPs may reflect a proxy, VPN, or NAT rather than a unique device
+
+## 5.2 Superblocks UUID Lookup Requirements
+
+The Job Panel Superblocks field calls the same localhost service on `127.0.0.1:4817`.
+
+Required local setup:
+
+- `SUPERBLOCKS_UUID_LOOKUP_URL` exists in `MailroomNavigator/.env`
+- the configured URL accepts the UUID field and returns JSON
+- if auth is required, set `SUPERBLOCKS_UUID_LOOKUP_TOKEN`
+- if the UUID/status keys differ from the defaults, set:
+  - `SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD`
+  - `SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH`
+  - `SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH`
+
+Defaults:
+
+- request method: `POST`
+- request body: `{ "uuid": "<uuid>" }`
+- response status path: `status`
 
 ## 6. Upgrade / Reinstall
 
