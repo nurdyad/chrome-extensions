@@ -358,15 +358,110 @@
     animation: fadeIn 0.3s ease;
 }
 
+.superblocks-lookup-status {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    text-align: left;
+}
+
+.superblocks-lookup-card-host {
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    border: none;
+    box-shadow: none;
+}
+
+.superblocks-status-card {
+    width: 100%;
+}
+
+.superblocks-status-card.is-loading {
+    opacity: 0.94;
+}
+
+.superblocks-status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.superblocks-status-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+
+.superblocks-status-subtitle {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11px;
+    line-height: 1.25;
+    color: #6b8197;
+}
+
+.superblocks-status-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.superblocks-status-summary-grid.has-single-card {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.superblocks-status-summary-grid .practice-status-summary-card {
+    padding: 7px 8px;
+}
+
+.superblocks-status-open-button {
+    flex-shrink: 0;
+    min-height: 24px;
+    padding-inline: 9px;
+}
+
+.practice-status-summary-card.is-info {
+    background: linear-gradient(180deg, #eef6ff 0%, #e0efff 100%);
+    border-color: #bfd8f3;
+}
+
+.practice-status-summary-card.is-success {
+    background: linear-gradient(180deg, #effbf4 0%, #ddf5e7 100%);
+    border-color: #bde6cc;
+}
+
+.practice-status-summary-card.is-warning {
+    background: linear-gradient(180deg, #fff8eb 0%, #ffefd0 100%);
+    border-color: #f0d39c;
+}
+
+.practice-status-summary-card.is-danger {
+    background: linear-gradient(180deg, #fff1f1 0%, #ffdede 100%);
+    border-color: #f3b6b6;
+}
+
+.superblocks-status-card .practice-status-chip-button.is-cdb {
+    cursor: pointer;
+}
+
 @media (max-width: 380px) {
     .practice-status-hero-row {
         flex-direction: column;
         align-items: stretch;
     }
 
-    .practice-status-summary-strip {
-        min-width: 0;
-        width: 100%;
+    .superblocks-status-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .superblocks-status-summary-grid {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .practice-status-metrics {

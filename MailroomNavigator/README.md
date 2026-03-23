@@ -82,6 +82,13 @@ Use `SETUP.md` for installation on a new machine.
   - `Copy Job Link`
   - `Open Problem Review` (opens `/admin_panel/error_fixer/problem_linked_to_problem_review/<job_id>`)
 
+#### Superblocks UUID Lookup
+
+- Input: `superblocksUuidLookupInput`
+- Status badge: `superblocksUuidLookupStatus`
+- Looks up the UUID through the local trigger service so the extension only renders the field and returned status, not the full Superblocks app UI
+- Requires `SUPERBLOCKS_UUID_LOOKUP_URL` in `MailroomNavigator/.env` on the machine running the local trigger service
+
 #### Bulk ID Actions
 
 - Multi-ID textarea parser (comma/space/new line)
