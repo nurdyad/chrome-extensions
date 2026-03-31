@@ -7,7 +7,9 @@
  */
 
 globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS = Object.freeze({
-  sharedAccessServiceBaseUrl: 'http://172.16.10.140:4817',
+  sharedAccessServiceBaseUrl: '',
+  serverlessLiteMode: false,
+  openAccessMode: true,
   localAccessGrants: [
     {
       email: 'abby.buckley@dyad.net',

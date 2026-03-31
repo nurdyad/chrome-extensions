@@ -291,7 +291,7 @@
         </div>
       </div>
 
-      <div class="section-container">
+      <div id="superblocksUuidLookupSection" class="section-container">
         <h3>Superblocks UUID Lookup</h3>
         <label for="superblocksUuidLookupInput">UUID</label>
         <div class="search-container dashboard-id-search">
@@ -347,12 +347,13 @@
         <button id="linearIssueSectionToggle" class="section-toggle-btn" type="button" aria-expanded="true" aria-controls="linearIssueSectionBody">
           <span class="section-toggle-copy">
             <span class="section-toggle-title">Linear Issue</span>
-            <span class="section-toggle-subtitle">Create issues, trigger runs, and Slack updates.</span>
+            <span id="linearIssueSectionSubtitle" class="section-toggle-subtitle">Create issues, trigger runs, and Slack updates.</span>
           </span>
           <span class="section-toggle-chevron" aria-hidden="true"></span>
         </button>
 
         <div id="linearIssueSectionBody" class="section-collapse-body">
+        <div id="linearServerlessLiteNotice" class="validation-badge neutral" style="display: none; margin-bottom: 8px; white-space: pre-wrap;">Serverless Lite keeps draft generation only. Generate the issue details below and copy them into Linear manually.</div>
         <div id="linearCreateIssueControls">
           <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
           <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
@@ -410,8 +411,15 @@
           <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create Linear Issue</button>
           <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="background: #0f766e;">Trigger Linear</button>
         </div>
+        <div id="linearDraftCopyButtonsRow" class="button-grid" style="margin-top: 8px; display: none; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="copyLinearIssueTitleBtn" class="btn btn-sm btn-ghost" type="button">Copy Title</button>
+          <button id="copyLinearIssueDescriptionBtn" class="btn btn-sm btn-ghost" type="button">Copy Description</button>
+        </div>
         <div id="reconcileLinearControls" style="margin-top: 8px;">
           <button id="reconcileLinearBotIssuesBtn" class="btn btn-sm" style="width: 100%; background: #1d4ed8;">Reconcile Linear</button>
+        </div>
+        <div id="linearServiceControls" style="margin-top: 8px;">
+          <button id="restartLinearTriggerServerBtn" class="btn btn-sm btn-ghost" style="width: 100%;" type="button">Restart Trigger Service</button>
         </div>
         <label id="triggerLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
           <input id="triggerLinearDryRunInput" type="checkbox">
@@ -427,6 +435,13 @@
 
       <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-top: 12px;">
         <h3>Access Service</h3>
+        <label style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px;">
+          <input id="accessOpenModeInput" type="checkbox">
+          Open Access Mode on this machine
+        </label>
+        <div class="jobs-helper-text" style="margin-top: 6px;">
+          When enabled, everyone gets MailroomNavigator features immediately. Owner-only user management stays restricted to the configured owner account.
+        </div>
         <label for="accessServiceUrlInput">Shared Access Service URL</label>
         <input id="accessServiceUrlInput" type="url" placeholder="e.g. http://192.168.1.20:4817" autocomplete="off">
         <label for="accessServiceKeyInput" style="margin-top: 8px;">Shared Access Key (optional)</label>

@@ -108,6 +108,7 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     syncLinearSlackWorkspaceTargets: ['slack_sync'],
     triggerLinearBotJobsRun: ['linear_trigger'],
     triggerLinearReconcileRun: ['linear_reconcile'],
+    restartLinearTriggerServer: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
     getLinearBotJobsTriggerStatus: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
     lookupSuperblocksUuidStatus: ['job_panel']
 };
@@ -115,6 +116,11 @@ const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE
 
 let extensionAccessStateCache = null;
 const extensionAccessResolveInFlightByKey = new Map();
+const ACCESS_CONTROL_OWNER_CACHE_TTL_MS = 2 * 60 * 1000;
+let accessControlOwnerEmailCache = {
+    email: '',
+    checkedAt: 0
+};
 
 async function clearLegacyMailroomApiStorage() {
     try {
@@ -127,53 +133,128 @@ clearLegacyMailroomApiStorage();
 
 // --- 2. TAB RE-USE & LIVEVIEW CLICKING ---
 
-/**
- * 🛡️ THE FIX: Searches ALL open windows and monitors for a matching practice tab.
- */
-async function findAndFocusPracticeTab(odsCode) {
-    const targetUrl = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
-    // Query ALL windows across ALL monitors
-    const tabs = await chrome.tabs.query({ url: `${targetUrl}*` });
-    
-    if (tabs.length > 0) {
-        const existingTab = tabs[0];
-        // Focus the correct window first (crucial for multi-monitor setups)
-        await chrome.windows.update(existingTab.windowId, { focused: true });
-        // Activate the specific tab
-        await chrome.tabs.update(existingTab.id, { active: true });
-        return existingTab.id;
-    }
-    return null;
+function buildPracticeAdminUrl(odsCode) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    return `${BETTERLETTER_ORIGIN}/admin_panel/practices/${encodeURIComponent(normalizedOds)}`;
 }
 
-/**
- * 🛡️ THE FIX: Polling Clicker for Phoenix LiveView.
- * Waits for the 'phx-click' attribute to be ready before firing.
- */
-async function clickLiveViewTab(tabId, settingType) {
-    const selectorMap = {
-        ehr_settings: "[data-test-id='tab-ehr_settings']",
-        task_recipients: "[data-test-id='tab-task_recipients']"
-    };
-    const selector = selectorMap[settingType];
-    if (!selector) return;
+function isPracticeAdminRootUrl(url, odsCode) {
+    try {
+        const normalizedOds = String(odsCode || '').trim().toUpperCase();
+        const parsed = new URL(String(url || ''));
+        const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+        return parsed.origin === BETTERLETTER_ORIGIN
+            && normalizedPath === `/admin_panel/practices/${encodeURIComponent(normalizedOds)}`;
+    } catch (error) {
+        return false;
+    }
+}
 
-    const injectedClick = async (sel) => {
+async function findAndFocusPracticeTab(odsCode) {
+    const targetUrl = buildPracticeAdminUrl(odsCode);
+    const tabs = await chrome.tabs.query({ url: `${targetUrl}*` });
+    const exactPracticeTab = tabs.find((tab) => isPracticeAdminRootUrl(getTabUrl(tab), odsCode));
+
+    if (!exactPracticeTab) return null;
+
+    await chrome.windows.update(exactPracticeTab.windowId, { focused: true });
+    await chrome.tabs.update(exactPracticeTab.id, { active: true });
+    return exactPracticeTab.id;
+}
+
+async function clickLiveViewTab(tabId, settingType) {
+    const settingConfigMap = {
+        ehr_settings: {
+            selectors: [
+                "[data-test-id='tab-ehr_settings']",
+                "#tab-ehr_settings",
+                "[aria-controls='ehr_settings']",
+                "[aria-controls='tab-panel-ehr_settings']",
+                "a[href$='#ehr_settings']"
+            ],
+            labelText: 'ehr'
+        },
+        task_recipients: {
+            selectors: [
+                "[data-test-id='tab-task_recipients']",
+                "#tab-task_recipients",
+                "[aria-controls='task_recipients']",
+                "[aria-controls='tab-panel-task_recipients']",
+                "a[href$='#task_recipients']"
+            ],
+            labelText: 'task recipients'
+        }
+    };
+    const settingConfig = settingConfigMap[settingType];
+    if (!settingConfig) return;
+
+    const injectedClick = async ({ selectors, labelText }) => {
         return new Promise((resolve) => {
+            const normalizeText = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const normalizedLabel = normalizeText(labelText);
+
+            const isUsableTab = (element) => {
+                if (!(element instanceof HTMLElement)) return false;
+                if (element.hasAttribute('disabled')) return false;
+                if (String(element.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return false;
+
+                const style = window.getComputedStyle(element);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') {
+                    return false;
+                }
+
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 || rect.height > 0;
+            };
+
+            const findCandidate = () => {
+                for (const selector of Array.isArray(selectors) ? selectors : []) {
+                    const directMatch = document.querySelector(selector);
+                    if (isUsableTab(directMatch)) return directMatch;
+                }
+
+                if (!normalizedLabel) return null;
+
+                return Array.from(document.querySelectorAll("button, a, [role='tab'], [data-test-id], [phx-click]"))
+                    .find((element) => isUsableTab(element) && normalizeText(element.textContent).includes(normalizedLabel)) || null;
+            };
+
+            const activate = (element) => {
+                element.scrollIntoView({ block: 'center', inline: 'center' });
+                element.focus();
+
+                try {
+                    element.click();
+                } catch (error) {
+                    // Fall through to synthetic events below.
+                }
+
+                ['mousedown', 'mouseup', 'click'].forEach((type) => {
+                    element.dispatchEvent(new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    }));
+                });
+            };
+
             let attempts = 0;
             const interval = setInterval(() => {
-                const el = document.querySelector(sel);
-                // Check if element exists AND has LiveView attributes ready
-                if (el && el.getAttribute('phx-click')) {
-                    // Dispatch sequence for robust Phoenix interaction
-                    el.focus();
-                    ['mousedown', 'mouseup', 'click'].forEach(type => 
-                        el.dispatchEvent(new MouseEvent(type, { bubbles: true }))
-                    );
+                const element = findCandidate();
+                if (element) {
+                    if (element.getAttribute('aria-selected') === 'true') {
+                        clearInterval(interval);
+                        resolve(true);
+                        return;
+                    }
+
+                    activate(element);
                     clearInterval(interval);
                     resolve(true);
+                    return;
                 }
-                if (attempts++ > 30) { // 15 second total timeout
+
+                if (attempts++ >= 30) {
                     clearInterval(interval);
                     resolve(false);
                 }
@@ -181,28 +262,34 @@ async function clickLiveViewTab(tabId, settingType) {
         });
     };
 
-    await chrome.scripting.executeScript({
+    const [executionResult] = await chrome.scripting.executeScript({
         target: { tabId },
         func: injectedClick,
-        args: [selector]
+        args: [settingConfig]
     });
+
+    if (!executionResult?.result) {
+        throw new Error(`Could not find the ${settingType.replace(/_/g, ' ')} tab on the practice page.`);
+    }
 }
 
 async function handleOpenPractice(input, settingType = "ehr_settings") {
-    const odsMatch = input.match(/\(([^)]+)\)$/);
-    const odsCode = odsMatch ? odsMatch[1] : input.trim();
-    
-    // 1. Scan all monitors for an existing tab
+    const normalizedInput = String(input || '').trim();
+    const odsMatch = normalizedInput.match(/\(([^)]+)\)$/);
+    const odsCode = String(odsMatch ? odsMatch[1] : normalizedInput).trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(odsCode)) {
+        throw new Error('Invalid practice code.');
+    }
+
+    const targetUrl = buildPracticeAdminUrl(odsCode);
     let tabId = await findAndFocusPracticeTab(odsCode);
-    
+
     if (!tabId) {
-        // 2. Open new tab if none found
-        const url = `https://app.betterletter.ai/admin_panel/practices/${odsCode}`;
-        const newTab = await chrome.tabs.create({ url, active: true });
+        const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
         tabId = newTab.id;
     }
 
-    // 3. Trigger the click once LiveView is interactive
+    await waitForTabComplete(tabId, 15000).catch(() => undefined);
     await clickLiveViewTab(tabId, settingType);
     return { success: true };
 }
@@ -284,6 +371,22 @@ function getDeploymentDefaultAccessServiceBaseUrl() {
     return sanitizeServiceBaseUrl(DEPLOYMENT_DEFAULTS?.sharedAccessServiceBaseUrl);
 }
 
+function getDeploymentDefaultOpenAccessMode() {
+    const rawValue = DEPLOYMENT_DEFAULTS?.openAccessMode ?? DEPLOYMENT_DEFAULTS?.disableAccessManagement;
+    if (typeof rawValue === 'string') {
+        return ['1', 'true', 'yes', 'open'].includes(rawValue.trim().toLowerCase());
+    }
+    return Boolean(rawValue);
+}
+
+function isServerlessLiteModeEnabled() {
+    const rawValue = DEPLOYMENT_DEFAULTS?.serverlessLiteMode ?? DEPLOYMENT_DEFAULTS?.serverlessMode;
+    if (typeof rawValue === 'string') {
+        return ['1', 'true', 'yes', 'lite'].includes(rawValue.trim().toLowerCase());
+    }
+    return Boolean(rawValue);
+}
+
 function getDeploymentLocalAccessGrants() {
     const rawGrants = Array.isArray(DEPLOYMENT_DEFAULTS?.localAccessGrants)
         ? DEPLOYMENT_DEFAULTS.localAccessGrants
@@ -332,14 +435,20 @@ function sanitizeAccessControlServiceConfig(rawConfig = null) {
     const sharedKey = sanitizeSingleLine(rawConfig?.sharedKey, 240);
     const useLocalOverride = Boolean(rawConfig?.useLocalOverride);
     const defaultBaseUrl = getDeploymentDefaultAccessServiceBaseUrl();
+    const defaultOpenAccessMode = getDeploymentDefaultOpenAccessMode();
+    const openAccessMode = rawConfig?.openAccessMode === undefined
+        ? defaultOpenAccessMode
+        : Boolean(rawConfig?.openAccessMode);
     const effectiveBaseUrl = useLocalOverride ? '' : (baseUrl || defaultBaseUrl);
     return {
         enabled: Boolean(effectiveBaseUrl),
         baseUrl: effectiveBaseUrl,
         sharedKey: useLocalOverride ? '' : sharedKey,
         useLocalOverride,
+        openAccessMode,
         isDefault: Boolean(!useLocalOverride && !baseUrl && defaultBaseUrl),
-        defaultBaseUrl
+        defaultBaseUrl,
+        defaultOpenAccessMode
     };
 }
 
@@ -354,12 +463,16 @@ async function getStoredAccessControlServiceConfig() {
 
 async function saveStoredAccessControlServiceConfig(rawConfig = null) {
     const useLocalOverride = Boolean(rawConfig?.useLocalOverride);
+    const openAccessMode = rawConfig?.openAccessMode === undefined
+        ? getDeploymentDefaultOpenAccessMode()
+        : Boolean(rawConfig?.openAccessMode);
     const config = sanitizeAccessControlServiceConfig(rawConfig);
     await chrome.storage.local.set({
         [ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY]: {
             baseUrl: useLocalOverride ? '' : sanitizeServiceBaseUrl(rawConfig?.baseUrl),
             sharedKey: useLocalOverride ? '' : sanitizeSingleLine(rawConfig?.sharedKey, 240),
-            useLocalOverride
+            useLocalOverride,
+            openAccessMode
         }
     });
     clearExtensionAccessCache();
@@ -373,6 +486,17 @@ function sanitizeLinearSlackPayload(rawSlack = null) {
         targetType: normalizeSlackTargetType(rawSlack.targetType),
         target: sanitizeSingleLine(rawSlack.target, 80).replace(/^[@#]/, '')
     };
+}
+
+function sanitizeLinearIssueLabelList(rawLabels = []) {
+    if (!Array.isArray(rawLabels)) return [];
+    const unique = new Set();
+    rawLabels.forEach((label) => {
+        const normalized = sanitizeSingleLine(label, 120);
+        if (!normalized) return;
+        unique.add(normalized);
+    });
+    return [...unique].slice(0, 20);
 }
 
 async function getStoredLinearSlackPrefs() {
@@ -447,12 +571,24 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
         title: sanitizeSingleLine(rawPayload.title, 240),
         description: sanitizeMultiline(rawPayload.description, 12000),
         priority: clampLinearPriority(rawPayload.priority),
+        labels: sanitizeLinearIssueLabelList(rawPayload.labels),
+        stateName: sanitizeSingleLine(rawPayload.stateName, 120),
         slack: sanitizeLinearSlackPayload(rawPayload?.slack)
     };
 }
 
+function isDocumentOptionalLinearIssuePayload(payload) {
+    const normalizedTitle = sanitizeSingleLine(payload?.title, 240);
+    const failedJobId = sanitizeSingleLine(payload?.failedJobId, 120);
+    return Boolean(
+        /^Bot Job Error:/i.test(normalizedTitle)
+        || /^Practice Support Ticket:/i.test(normalizedTitle)
+        || failedJobId
+    );
+}
+
 function validateLinearIssuePayload(payload) {
-    if (!/^\d+$/.test(payload.documentId)) {
+    if (!/^\d+$/.test(payload.documentId) && !isDocumentOptionalLinearIssuePayload(payload)) {
         throw new Error('Invalid or missing Document ID.');
     }
     if (!payload.title) {
@@ -464,6 +600,12 @@ function validateLinearIssuePayload(payload) {
 }
 
 async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Create Linear Issue',
+            'Serverless Lite keeps local draft generation only. Copy the generated title and description into Linear manually.'
+        );
+    }
     try {
         const payload = sanitizeLinearIssuePayload(rawPayload);
         if (!payload.slack) {
@@ -518,6 +660,12 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
 }
 
 async function handleSyncLinearSlackWorkspaceTargets(rawOptions = null) {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Slack Sync',
+            'Serverless Lite mode does not expose Slack workspace syncing because it would require shipping your Slack bot token in the extension.'
+        );
+    }
     try {
         const force = Boolean(rawOptions && typeof rawOptions === 'object' && rawOptions.force);
         const path = force ? '/slack/targets?force=1' : '/slack/targets';
@@ -616,6 +764,7 @@ function sanitizeSuperblocksLookupResult(rawLookup = null) {
 }
 
 function sanitizeExtensionAccessState(rawAccess = null) {
+    const serverlessLiteMode = isServerlessLiteModeEnabled();
     if (!rawAccess || typeof rawAccess !== 'object') {
         return {
             enabled: true,
@@ -623,6 +772,8 @@ function sanitizeExtensionAccessState(rawAccess = null) {
             allowed: false,
             isOwner: false,
             canManageUsers: false,
+            openAccessMode: false,
+            serverlessLiteMode,
             role: '',
             email: '',
             matchedRule: '',
@@ -648,6 +799,8 @@ function sanitizeExtensionAccessState(rawAccess = null) {
         allowed: Boolean(rawAccess.allowed),
         isOwner: Boolean(rawAccess.isOwner),
         canManageUsers: Boolean(rawAccess.canManageUsers),
+        openAccessMode: Boolean(rawAccess.openAccessMode),
+        serverlessLiteMode,
         role: sanitizeSingleLine(rawAccess.role, 40),
         email: normalizeEmail(rawAccess.email),
         matchedRule: sanitizeSingleLine(rawAccess.matchedRule, 120),
@@ -672,6 +825,7 @@ function buildUnavailableExtensionAccessState(identity = null, reason = '') {
         allowed: false,
         isOwner: false,
         canManageUsers: false,
+        openAccessMode: false,
         role: '',
         email: normalizeEmail(identity?.email),
         reason,
@@ -1114,6 +1268,61 @@ async function callAccessControlService(path, options = {}) {
     }
 }
 
+async function resolveAccessControlOwnerEmail({ forceRefresh = false } = {}) {
+    const now = Date.now();
+    if (
+        !forceRefresh
+        && accessControlOwnerEmailCache.email
+        && (now - Number(accessControlOwnerEmailCache.checkedAt || 0)) < ACCESS_CONTROL_OWNER_CACHE_TTL_MS
+    ) {
+        return accessControlOwnerEmailCache.email;
+    }
+
+    try {
+        const { response, payload } = await callAccessControlService('/health', {
+            method: 'GET',
+            timeoutMs: Math.min(ACCESS_CONTROL_REMOTE_TIMEOUT_MS, 1800)
+        });
+        const ownerEmail = response.ok && payload?.ok
+            ? normalizeEmail(payload?.access?.ownerEmail)
+            : '';
+        accessControlOwnerEmailCache = {
+            email: ownerEmail,
+            checkedAt: now
+        };
+        return ownerEmail;
+    } catch (error) {
+        accessControlOwnerEmailCache = {
+            email: '',
+            checkedAt: now
+        };
+        return '';
+    }
+}
+
+function buildOpenExtensionAccessState(identity = null, ownerEmail = '') {
+    const email = normalizeEmail(identity?.email);
+    const resolvedOwnerEmail = normalizeEmail(ownerEmail);
+    const isOwner = Boolean(email && resolvedOwnerEmail && email === resolvedOwnerEmail);
+    return sanitizeExtensionAccessState({
+        initialized: true,
+        allowed: true,
+        isOwner,
+        canManageUsers: isOwner,
+        openAccessMode: true,
+        role: isOwner ? 'owner' : 'open',
+        email,
+        matchedRule: 'open_access_mode',
+        reason: '',
+        detectionSource: sanitizeSingleLine(identity?.source, 120),
+        features: buildExtensionFeatureAccessMap([], true)
+    });
+}
+
+function shouldResolveOpenAccessOwnerEmail(accessControlConfig = null) {
+    return Boolean(accessControlConfig?.enabled && sanitizeServiceBaseUrl(accessControlConfig?.baseUrl));
+}
+
 function normalizeLinearTriggerError(error) {
     const errorName = sanitizeSingleLine(error?.name, 80).toLowerCase();
     if (errorName === 'aborterror') {
@@ -1156,7 +1365,25 @@ function normalizeAccessControlServiceError(error, { usingRemoteConfig = false }
     return message;
 }
 
+function buildServerlessLiteUnsupportedResponse(featureLabel, guidance = '') {
+    const message = [
+        `${String(featureLabel || 'This feature').trim()} is disabled in Serverless Lite mode.`,
+        guidance || 'Use the browser-only tools, or move this feature to a shared hosted service if you need it everywhere.'
+    ].filter(Boolean).join(' ');
+    return {
+        success: false,
+        error: message
+    };
+}
+
 async function handleTriggerLinearRun(rawPayload, triggerPath = '/trigger-linear') {
+    if (isServerlessLiteModeEnabled()) {
+        const label = triggerPath === '/trigger-linear-reconcile' ? 'Reconcile Linear' : 'Trigger Linear';
+        return buildServerlessLiteUnsupportedResponse(
+            label,
+            'These actions run external bot-jobs scripts, which Chrome extensions cannot execute without a service.'
+        );
+    }
     try {
         const payload = sanitizeLinearTriggerRunPayload(rawPayload);
         const { response, payload: serverPayload } = await callLinearTriggerServer(triggerPath, {
@@ -1208,7 +1435,63 @@ async function handleTriggerLinearReconcileRun(rawPayload) {
     return handleTriggerLinearRun(rawPayload, '/trigger-linear-reconcile');
 }
 
+async function handleRestartLinearTriggerServer() {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Restart Trigger Service',
+            'Serverless Lite mode does not run the local trigger service.'
+        );
+    }
+    try {
+        const { response, payload } = await callLinearTriggerServer('/service/restart', {
+            method: 'POST'
+        });
+
+        if (response.status === 409) {
+            return {
+                success: false,
+                running: Boolean(payload?.running),
+                error: sanitizeSingleLine(payload?.error, 240) || 'A Linear run is already in progress.'
+            };
+        }
+
+        if (!response.ok || !payload?.ok) {
+            const serverError = sanitizeSingleLine(payload?.error, 260);
+            if (response.status === 404 || serverError.toLowerCase() === 'not found.') {
+                return {
+                    success: false,
+                    error: 'Local trigger service is running an older version. Restart it manually once so the new in-extension restart button is available.'
+                };
+            }
+            return {
+                success: false,
+                error: serverError || `Trigger service restart failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            message: sanitizeSingleLine(payload?.message, 240) || 'Restart requested.'
+        };
+    } catch (error) {
+        const normalizedError = normalizeLinearTriggerError(error);
+        const fallbackMessage = 'Local trigger service is unavailable. This button can restart the installed service after it is already running, but it cannot cold-start it from the extension.';
+        return {
+            success: false,
+            error: normalizedError.toLowerCase().includes('unavailable')
+                ? fallbackMessage
+                : normalizedError
+        };
+    }
+}
+
 async function handleGetLinearBotJobsTriggerStatus() {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Linear run status',
+            'Serverless Lite mode does not run Trigger Linear or Reconcile Linear.'
+        );
+    }
     try {
         const { response, payload } = await callLinearTriggerServer('/health', { method: 'GET' });
         if (!response.ok || !payload?.ok) {
@@ -1236,6 +1519,12 @@ async function handleGetLinearBotJobsTriggerStatus() {
 }
 
 async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Superblocks UUID Lookup',
+            'The current lookup still depends on a token-backed workflow. We can add a browser-safe direct config next if you want.'
+        );
+    }
     try {
         const uuid = extractUuid(rawPayload?.uuid || rawPayload);
         if (!uuid) {
@@ -2321,6 +2610,25 @@ async function handleGetExtensionAccessState(rawPayload = {}, sender = null) {
         const forceRefresh = Boolean(rawPayload?.forceRefresh);
         const allowStale = Boolean(rawPayload?.allowStale);
         const identity = await resolveCurrentBetterLetterUserIdentity({ preferredTabId, forceRefresh });
+        const accessControlConfig = await getStoredAccessControlServiceConfig();
+        if (accessControlConfig.openAccessMode) {
+            const ownerEmail = (isServerlessLiteModeEnabled() || !shouldResolveOpenAccessOwnerEmail(accessControlConfig))
+                ? ''
+                : await resolveAccessControlOwnerEmail({ forceRefresh });
+            const access = buildOpenExtensionAccessState(identity, ownerEmail);
+            extensionAccessStateCache = {
+                ...(extensionAccessStateCache || {}),
+                cacheKey: `open-access|${identity.email || 'unknown'}|${preferredTabId || 'any'}|${ownerEmail || 'no-owner'}`,
+                access,
+                checkedAt: Date.now()
+            };
+            await saveStoredExtensionAccessSnapshot(access, Date.now());
+            return {
+                success: true,
+                access,
+                stale: false
+            };
+        }
         const deploymentLocalGrant = findDeploymentLocalAccessGrant(identity?.email);
         if (deploymentLocalGrant) {
             const access = buildDeploymentLocalGrantAccessState(identity, deploymentLocalGrant);
@@ -4460,6 +4768,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (message.action === 'triggerLinearReconcileRun') {
             return await handleTriggerLinearReconcileRun(message.payload);
+        }
+        if (message.action === 'restartLinearTriggerServer') {
+            return await handleRestartLinearTriggerServer();
         }
         if (message.action === 'getLinearBotJobsTriggerStatus') {
             return await handleGetLinearBotJobsTriggerStatus();

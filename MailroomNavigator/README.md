@@ -138,6 +138,7 @@ Use `SETUP.md` for installation on a new machine.
 - Input flow:
   - paste Document ID or full stuck-letter detail block
   - click `Generate Details` to build title + description
+  - in `Serverless Lite`, use `Copy Title` / `Copy Description` to paste the draft into Linear manually
   - optional Slack sync:
     - click `Sync Slack` to load workspace channels/users into suggestions
     - enable `Notify Slack`
@@ -146,11 +147,20 @@ Use `SETUP.md` for installation on a new machine.
   - review/edit and click `Create Linear Issue`
 - Buttons:
   - `Generate Details`
+  - `Copy Title` / `Copy Description` in `Serverless Lite`
   - `Create Linear Issue`
   - `Trigger Linear` (calls local trigger service)
 - Status badges:
   - `linearSlackStatus` (issue generation/create status)
   - `linearTriggerStatus`
+
+#### Access Service
+
+- `Open Access Mode on this machine` bypasses feature gating locally so everyone can use the extension immediately
+- the default GitHub/distributed setup is `Hybrid` with `Open Access Mode` enabled, so users are not blocked from Navigator, Job Panel, dashboard hover tools, or other browser-side features
+- localhost-backed tools like `Trigger Linear` and `Superblocks UUID Lookup` remain visible, but they still require the optional local trigger service to work
+- shared access service URL/key remain available when you want cross-machine user management
+- owner-only `Access Control` stays available for the configured owner account
 
 #### Bookmarklet Tools
 
