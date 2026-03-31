@@ -14,11 +14,14 @@
     let isMouseInMetaPanel = false;
     let metaHideTimer = null;
     let metaReanchorTimer = null;
+    let navigatorToastEl = null;
+    let navigatorToastTimer = null;
     const createdIssueByDedupeKey = new Map();
     let restrictedToolsAccess = {
         enabled: true,
         allowed: false,
         reason: '',
+        serverlessLiteMode: false,
         features: {
             dashboard_hover_tools: false,
             linear_create_issue: false
@@ -28,15 +31,26 @@
 
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
+    const BOT_JOB_TITLE_PREFIX = 'Bot Job Error:';
+    const PRACTICE_SUPPORT_TITLE_PREFIX = 'Practice Support Ticket:';
+    const BOT_JOB_DEFAULT_PRIORITY = 3;
+    const BOT_JOB_LABELS_ALWAYS = ['bot-jobs', 'automation'];
+    const HIDDEN_DEDUPE_PREFIX = 'BOT_JOBS_DEDUPE:';
+    const GROUP_DEDUPE_PREFIX = 'BOT_JOBS_GROUP:';
+    const REJECTED_PRACTICE_ISSUE_HOST_ID = 'bl-rejected-practice-issue-host';
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     const LINK_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path></svg>';
 
     const HEADER_KEYS = {
         documentid: 'document',
+        originalname: 'originalName',
         jobtype: 'jobType',
         practice: 'practice',
         jobid: 'jobId',
         added: 'added',
+        reason: 'reason',
+        rejectedby: 'rejectedBy',
+        on: 'rejectedOn',
         status: 'status'
     };
 
@@ -72,44 +86,360 @@
         return '';
     }
 
-    function buildLinearIssuePayloadFromRow(rowData, fallbackDocId = '') {
+    function extractBotJobType(value) {
+        const match = collapseText(value).match(/\b(docman_[a-z_]+|emis_[a-z_]+|generate_output)\b/i);
+        return match?.[1] || '';
+    }
+
+    function parseAttempts(text) {
+        const match = String(text || '').match(/\b(\d+)\s+attempts?\b/i);
+        if (!match?.[1]) return null;
+        const parsed = Number.parseInt(match[1], 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function shortPractice(text) {
+        const normalized = collapseText(text);
+        return normalized.length > 60 ? `${normalized.slice(0, 60)}...` : normalized;
+    }
+
+    function normalizeFingerprint(statusText) {
+        return String(statusText || '')
+            .toLowerCase()
+            .replace(/\bmade\s+\d+\s+attempts\b/g, 'made attempts')
+            .replace(/\b\d+\s+attempts\b/g, 'attempts')
+            .replace(/\b\d{4}-\d{2}-\d{2}\b/g, '')
+            .replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function normalizeGroupKeyPart(value) {
+        return collapseText(value).toLowerCase();
+    }
+
+    function computeDedupeKey(row) {
+        const fingerprint = normalizeFingerprint(row?.status_text);
+        if (row?.job_id) return { kind: 'job_id', key: row.job_id, fingerprint };
+        if (row?.document_id && row?.job_type) {
+            return { kind: 'doc_job_fp', key: `${row.document_id}|${row.job_type}|${fingerprint}`, fingerprint };
+        }
+        if (row?.practice_name && row?.job_type) {
+            return { kind: 'practice_job_fp', key: `${row.practice_name}|${row.job_type}|${fingerprint}`, fingerprint };
+        }
+        return { kind: 'fallback', key: fingerprint, fingerprint };
+    }
+
+    function computePracticeGroupKey(row, dedupeKey = null) {
+        const practice = normalizeGroupKeyPart(row?.practice_name);
+        const jobType = normalizeGroupKeyPart(row?.job_type);
+        const fingerprint = normalizeGroupKeyPart(dedupeKey?.fingerprint || normalizeFingerprint(row?.status_text));
+        if (!practice || !jobType || !fingerprint) return '';
+        return `${practice}|${jobType}|${fingerprint}`;
+    }
+
+    function escapeMarkdownReferenceTitle(text) {
+        return String(text || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"');
+    }
+
+    function buildHiddenDedupeBlock(dedupeKeys = [], groupKeys = []) {
+        const seen = new Set();
+        const markers = [];
+        let dedupeIndex = 0;
+        let groupIndex = 0;
+
+        dedupeKeys.forEach((rawKey) => {
+            const key = collapseText(rawKey);
+            if (!key) return;
+            const normalized = key.toLowerCase();
+            if (seen.has(`dedupe:${normalized}`)) return;
+            seen.add(`dedupe:${normalized}`);
+            dedupeIndex += 1;
+            markers.push(
+                `[bot-jobs-dedupe-${dedupeIndex}]: # "${escapeMarkdownReferenceTitle(`${HIDDEN_DEDUPE_PREFIX}${key}`)}"`
+            );
+        });
+
+        const normalizedGroupKeys = Array.isArray(groupKeys) ? groupKeys : [groupKeys];
+        normalizedGroupKeys.forEach((rawGroupKey) => {
+            const groupKey = collapseText(rawGroupKey);
+            if (!groupKey) return;
+            const normalized = groupKey.toLowerCase();
+            if (seen.has(`group:${normalized}`)) return;
+            seen.add(`group:${normalized}`);
+            groupIndex += 1;
+            markers.push(
+                `[bot-jobs-group-${groupIndex}]: # "${escapeMarkdownReferenceTitle(`${GROUP_DEDUPE_PREFIX}${groupKey}`)}"`
+            );
+        });
+
+        return markers.length ? `\n\n${markers.join('\n')}` : '';
+    }
+
+    function inferEhrLabel(jobType) {
+        const normalized = String(jobType || '').toLowerCase();
+        if (normalized.includes('docman')) return 'Docman';
+        if (normalized.includes('emis')) return 'Emis';
+        if (normalized.includes('sys1') || normalized.includes('systemone')) return 'Sys1';
+        return '';
+    }
+
+    function inferIssueTypeLabel(row) {
+        return String(row?.job_type || '').toLowerCase() === 'docman_import'
+            ? 'Collection'
+            : 'Stuck letters / Manual intervention';
+    }
+
+    function inferSupportTypeLabel(row) {
+        const status = String(row?.status_text || '').toLowerCase();
+        if (
+            status.includes('traceback') ||
+            status.includes('nonetype') ||
+            status.includes('exception') ||
+            status.includes('attribute')
+        ) {
+            return 'Engineering';
+        }
+        if (status.includes('unknown') || status.includes('still erroring')) {
+            return 'Investigation';
+        }
+        return 'Technical';
+    }
+
+    function inferLetterStageLabel(row) {
+        const jobType = String(row?.job_type || '').toLowerCase();
+        if (jobType.startsWith('emis_') || jobType.includes('generate_output')) return 'Coding/Coding';
+        if (jobType === 'docman_import') return '';
+        if (jobType.startsWith('docman_')) return 'Coding/Filing';
+        if (jobType.includes('ocr')) return 'Preparing/OCR';
+        return '';
+    }
+
+    function inferPriority(row) {
+        const status = String(row?.status_text || '').toLowerCase();
+        const attempts = Number(row?.attempts_count || 0);
+        const jobType = String(row?.job_type || '').toLowerCase();
+
+        if (jobType === 'docman_import') return 1;
+        if (['emis_api_consultation', 'docman_file', 'docman_review'].includes(jobType)) return 2;
+        if (jobType === 'docman_delete_original') return 4;
+        if (status.includes('no response from bot') || status.includes('made 10 attempts') || attempts >= 10) return 1;
+        if (attempts >= 4) return 2;
+        if (['docman_file', 'docman_validate', 'emis_coding'].includes(jobType)) return 2;
+        return BOT_JOB_DEFAULT_PRIORITY;
+    }
+
+    function buildLabels(row) {
+        const labels = [...BOT_JOB_LABELS_ALWAYS];
+        const ehr = inferEhrLabel(row?.job_type);
+        if (ehr) labels.push(ehr);
+        labels.push(inferIssueTypeLabel(row));
+        labels.push(inferSupportTypeLabel(row));
+        const stage = inferLetterStageLabel(row);
+        if (stage) labels.push(stage);
+        return [...new Set(labels.filter(Boolean))];
+    }
+
+    function buildAnnotationEditorUrl(documentId) {
+        return `https://app.betterletter.ai/mailroom/annotations/${encodeURIComponent(documentId)}`;
+    }
+
+    function buildLetterAdminUrl(documentId) {
+        return `https://app.betterletter.ai/admin_panel/letter/${encodeURIComponent(documentId)}`;
+    }
+
+    function buildLetterBotsDocumentUrl(documentId) {
+        return `https://app.betterletter.ai/admin_panel/bots/dashboard?document_id=${encodeURIComponent(documentId)}`;
+    }
+
+    function buildObanJobsDocumentUrl(documentId) {
+        return `https://app.betterletter.ai/oban/jobs?args=document_id%2B%2B${encodeURIComponent(documentId)}`;
+    }
+
+    function buildLetterJobUrl(jobId) {
+        return `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(jobId)}`;
+    }
+
+    function buildIssueTitleSubject(row) {
+        if (row?.document_id) return row.document_id;
+        if (String(row?.job_type || '').toLowerCase() === 'docman_import') return 'collection-error';
+        return 'unknown-document-id';
+    }
+
+    function buildIssueTitle(row) {
+        const subject = buildIssueTitleSubject(row);
+        const practice = shortPractice(row?.practice_name || 'unknown-practice');
+        return `${BOT_JOB_TITLE_PREFIX} ${row?.job_type || 'unknown-job'} | ${subject} | ${practice}`;
+    }
+
+    function buildIssueDescription(row, dedupeKey = computeDedupeKey(row)) {
+        const practiceGroupKey = computePracticeGroupKey(row, dedupeKey);
+        const hiddenBlock = buildHiddenDedupeBlock(
+            dedupeKey?.key ? [dedupeKey.key] : [],
+            practiceGroupKey ? [practiceGroupKey] : []
+        );
+        const documentId = collapseText(row?.document_id);
+        const jobId = collapseText(row?.job_id);
+        const annotationEditorUrl = documentId ? buildAnnotationEditorUrl(documentId) : 'N/A';
+        const letterAdminUrl = documentId ? buildLetterAdminUrl(documentId) : 'N/A';
+        const letterBotsUrl = documentId ? buildLetterBotsDocumentUrl(documentId) : 'N/A';
+        const obanJobsUrl = documentId ? buildObanJobsDocumentUrl(documentId) : 'N/A';
+        const displayDocumentId = documentId || 'N/A';
+
+        return `
+## Summary
+- Status: ${collapseText(row?.status_text)}
+
+## Key details
+- Document ID: ${displayDocumentId}
+- Annotation editor: ${annotationEditorUrl}
+- Letter Admin: ${letterAdminUrl}
+- Letter Bots link: ${letterBotsUrl}
+- Oban Jobs Link: ${obanJobsUrl}
+- Job Type: ${collapseText(row?.job_type)}
+- Practice: ${collapseText(row?.practice_name)}
+- Practice Code: ${collapseText(row?.practice_code)}
+- Job ID: ${jobId}
+- Letter Job Link: ${jobId ? buildLetterJobUrl(jobId) : ''}
+- Added: ${collapseText(row?.added_at)}
+- Attempts: ${row?.attempts_count ?? ''}
+${row?.error_snippet ? `\n\n\`\`\`\n${String(row.error_snippet)}\n\`\`\`\n` : ''}
+${hiddenBlock}
+`.trim();
+    }
+
+    function buildBotJobRowFromRowData(rowData, fallbackDocId = '') {
+        const documentId = extractNumericId(rowData?.document || fallbackDocId);
+        const jobType = extractBotJobType(rowData?.jobType || '') || collapseText(rowData?.jobType) || 'unknown-job';
+        const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '') || 'unknown-practice';
+        const practiceCode = collapseText(rowData?.odsCode || '').toUpperCase();
+        const jobId = extractJobId(rowData?.jobId || '');
+        const addedAt = collapseText(rowData?.added || '');
+        const rowText = collapseText(rowData?.row?.innerText || '');
+        const statusText = collapseText(rowData?.status || '') || rowText || 'Unknown status';
+        const attemptsCount = parseAttempts(`${statusText} ${rowText}`);
+        if (!documentId && !jobId && !jobType) return null;
+
+        return {
+            document_id: documentId,
+            job_type: jobType,
+            practice_name: practiceName,
+            practice_code: practiceCode,
+            job_id: jobId,
+            added_at: addedAt,
+            status_text: statusText,
+            attempts_count: attemptsCount,
+            error_snippet: null
+        };
+    }
+
+    function buildLinearIssuePayloadFromMailroomRejectedRow(rowData, fallbackDocId = '') {
         const documentId = extractNumericId(rowData?.document || fallbackDocId);
         if (!documentId) return null;
 
-        const failedJobId = extractJobId(rowData?.jobId || '');
         const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '');
+        const originalName = collapseText(rowData?.originalName || '');
+        const reason = collapseText(rowData?.reason || '');
+        const rejectedBy = collapseText(rowData?.rejectedBy || '');
+        const rejectedOn = collapseText(rowData?.rejectedOn || '');
+        const status = collapseText(rowData?.status || '') || 'Rejected';
         const title = practiceName
-            ? `Stuck letter: ${documentId} (${practiceName})`
-            : `Stuck letter: ${documentId}`;
-        const letterAdminLink = `https://app.betterletter.ai/admin_panel/letter/${documentId}`;
-        const failedJobLink = failedJobId
-            ? `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(failedJobId)}`
-            : 'https://app.betterletter.ai/admin_panel/bots/jobs/';
+            ? `Mailroom Rejected: ${documentId} | ${practiceName}`
+            : `Mailroom Rejected: ${documentId}`;
+        const description = `
+## Summary
+- Status: ${status}
 
-        const description = [
-            `Letter ID: ${documentId}`,
-            `Failed job ID: ${failedJobId || 'N/A'}`,
-            'File size: N/A',
-            `Practice: ${practiceName || 'N/A'}`,
-            '',
-            'Letter admin link:',
-            letterAdminLink,
-            '',
-            'Failed job link:',
-            failedJobLink
-        ].join('\n');
+## Key details
+- Document ID: ${documentId}
+- Original Name: ${originalName}
+- Practice: ${practiceName}
+- Reason: ${reason}
+- Rejected By: ${rejectedBy}
+- On: ${rejectedOn}
+- Annotation editor: ${buildAnnotationEditorUrl(documentId)}
+- Letter Admin: ${buildLetterAdminUrl(documentId)}
+- Letter Bots link: ${buildLetterBotsDocumentUrl(documentId)}
+- Oban Jobs Link: ${buildObanJobsDocumentUrl(documentId)}
+`.trim();
 
         return {
             documentId,
-            failedJobId,
+            failedJobId: '',
             fileSizeBytes: 'N/A',
             practiceName: practiceName || 'N/A',
-            letterAdminLink,
-            failedJobLink,
+            letterAdminLink: buildLetterAdminUrl(documentId),
+            failedJobLink: '',
             title,
             description,
-            priority: 0
+            priority: 2
         };
+    }
+
+    function buildLinearIssuePayloadFromBotDashboardRow(rowData, fallbackDocId = '') {
+        const botJobRow = buildBotJobRowFromRowData(rowData, fallbackDocId);
+        if (!botJobRow) return null;
+        const dedupeKey = computeDedupeKey(botJobRow);
+        const failedJobLink = botJobRow.job_id ? buildLetterJobUrl(botJobRow.job_id) : '';
+
+        return {
+            documentId: botJobRow.document_id || '',
+            failedJobId: botJobRow.job_id,
+            fileSizeBytes: 'N/A',
+            practiceName: botJobRow.practice_name || 'N/A',
+            letterAdminLink: botJobRow.document_id ? buildLetterAdminUrl(botJobRow.document_id) : '',
+            failedJobLink,
+            title: buildIssueTitle(botJobRow),
+            description: buildIssueDescription(botJobRow, dedupeKey),
+            priority: inferPriority(botJobRow),
+            labels: buildLabels(botJobRow),
+            stateName: 'Todo',
+            dedupeKey: dedupeKey.key,
+            jobType: botJobRow.job_type
+        };
+    }
+
+    function buildLinearIssuePayloadFromRejectedPracticeContext(context) {
+        const practiceName = collapseText(context?.practiceName);
+        const practiceCode = collapseText(context?.practiceCode || '').toUpperCase();
+        const rejectedCount = Number(context?.rejectedCount || 0);
+        if (!practiceName || rejectedCount <= 0) return null;
+
+        const issueTitle = `${PRACTICE_SUPPORT_TITLE_PREFIX} ${practiceName}`;
+        const description = `
+## Summary
+- ${rejectedCount} rejected letters need to be processed by Practice.
+
+## Practice details
+- Practice: ${practiceName}
+- Practice Code: ${practiceCode || 'N/A'}
+- Rejected letters needing processing: ${rejectedCount}
+- Rejected queue: ${window.location.href}
+`.trim();
+
+        return {
+            documentId: '',
+            failedJobId: '',
+            fileSizeBytes: 'N/A',
+            practiceName,
+            letterAdminLink: '',
+            failedJobLink: '',
+            title: issueTitle,
+            description,
+            priority: 2,
+            stateName: 'Todo',
+            dedupeKey: `practice_support_ticket|${practiceCode || normalizeGroupKeyPart(practiceName)}`
+        };
+    }
+
+    function buildLinearIssuePayloadFromRow(rowData, fallbackDocId = '') {
+        if (!rowData) return null;
+        if (rowData.sourceKind === 'mailroom_rejected') {
+            return buildLinearIssuePayloadFromMailroomRejectedRow(rowData, fallbackDocId);
+        }
+        return buildLinearIssuePayloadFromBotDashboardRow(rowData, fallbackDocId);
     }
 
     function sendRuntimeMessage(message) {
@@ -146,6 +476,7 @@
                     enabled: true,
                     allowed: Boolean(response.access.allowed),
                     reason: collapseText(response.access.reason || ''),
+                    serverlessLiteMode: Boolean(response.access?.serverlessLiteMode),
                     features: {
                         dashboard_hover_tools: Boolean(response.access?.features?.dashboard_hover_tools),
                         linear_create_issue: Boolean(response.access?.features?.linear_create_issue)
@@ -161,6 +492,7 @@
             enabled: true,
             allowed: false,
             reason: 'MailroomNavigator access could not be verified.',
+            serverlessLiteMode: false,
             features: {
                 dashboard_hover_tools: false,
                 linear_create_issue: false
@@ -179,6 +511,47 @@
         }).catch(() => {
             console.warn('[BL Navigator] Clipboard copy failed.');
         });
+    }
+
+    function showNavigatorToast(message, tone = 'neutral') {
+        const normalizedMessage = collapseText(message);
+        if (!normalizedMessage) return;
+
+        if (!navigatorToastEl || !document.body.contains(navigatorToastEl)) {
+            navigatorToastEl = document.createElement('div');
+            navigatorToastEl.id = 'bl-navigator-toast';
+            Object.assign(navigatorToastEl.style, {
+                position: 'fixed',
+                top: '16px',
+                right: '16px',
+                zIndex: '2147483647',
+                maxWidth: '360px',
+                padding: '10px 12px',
+                borderRadius: '10px',
+                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.22)',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                fontSize: '12px',
+                lineHeight: '1.4',
+                color: '#fff',
+                opacity: '0',
+                pointerEvents: 'none',
+                transition: 'opacity 120ms ease'
+            });
+            document.body.appendChild(navigatorToastEl);
+        }
+
+        navigatorToastEl.textContent = normalizedMessage;
+        navigatorToastEl.style.background = tone === 'invalid' ? '#b91c1c' : tone === 'valid' ? '#047857' : '#1f2937';
+        navigatorToastEl.style.opacity = '1';
+
+        if (navigatorToastTimer) {
+            clearTimeout(navigatorToastTimer);
+        }
+        navigatorToastTimer = window.setTimeout(() => {
+            if (navigatorToastEl) {
+                navigatorToastEl.style.opacity = '0';
+            }
+        }, 2600);
     }
 
     function flashButton(btn) {
@@ -230,6 +603,84 @@
         };
 
         return btn;
+    }
+
+    async function handleCreateIssueWithPayload(btn, payload = null) {
+        const originalLabel = btn.textContent || 'Issue';
+        const originalBg = btn.style.background;
+        if (!payload?.title || !payload?.description) return;
+
+        const dedupeKey = collapseText(payload.dedupeKey || payload.failedJobId || payload.documentId || payload.title);
+        const existingIssue = dedupeKey ? createdIssueByDedupeKey.get(dedupeKey) : null;
+        if (existingIssue?.identifier) {
+            btn.textContent = String(existingIssue.identifier);
+            btn.style.background = '#0f766e';
+            if (existingIssue.url) openUrlInNewTab(existingIssue.url);
+            setTimeout(() => {
+                btn.textContent = originalLabel;
+                btn.style.background = originalBg;
+            }, 1500);
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Creating...';
+        btn.style.background = '#1d4ed8';
+
+        try {
+            const response = await sendRuntimeMessage({
+                action: 'createLinearIssueFromEnv',
+                payload
+            });
+
+            if (!response?.success || !response?.issue?.identifier) {
+                const reason = collapseText(response?.error || 'Could not create issue.');
+                throw new Error(reason);
+            }
+
+            if (dedupeKey) {
+                createdIssueByDedupeKey.set(dedupeKey, {
+                    identifier: String(response.issue.identifier || ''),
+                    url: collapseText(response.issue.url || '')
+                });
+            }
+            btn.textContent = String(response.issue.identifier || 'Created');
+            btn.style.background = '#16a34a';
+            showNavigatorToast(`Created ${String(response.issue.identifier || 'issue')}.`, 'valid');
+            setTimeout(() => {
+                btn.textContent = originalLabel;
+                btn.style.background = originalBg;
+                btn.disabled = false;
+            }, 1800);
+        } catch (error) {
+            const failureMessage = collapseText(error?.message || 'Could not create issue.');
+            btn.textContent = 'Failed';
+            btn.style.background = '#dc2626';
+            btn.title = failureMessage;
+            showNavigatorToast(failureMessage, 'invalid');
+            console.warn('[BL Navigator] Issue creation failed.', { payload, error: failureMessage });
+            setTimeout(() => {
+                btn.textContent = originalLabel;
+                btn.style.background = originalBg;
+                btn.disabled = false;
+            }, 2200);
+        }
+    }
+
+    async function handleCreateIssueForRow(btn, rowData = null, fallbackDocId = '') {
+        const payload = buildLinearIssuePayloadFromRow(rowData, fallbackDocId);
+        await handleCreateIssueWithPayload(btn, payload);
+    }
+
+    function makeCreateIssueAction(rowData, fallbackDocId = '') {
+        return createButton({
+            label: 'Issue',
+            color: '#2563eb',
+            title: 'Create Linear issue for this row',
+            onClick: (btn) => {
+                handleCreateIssueForRow(btn, rowData, fallbackDocId).catch(() => undefined);
+            }
+        });
     }
 
     function createFloatingDocPanel() {
@@ -345,63 +796,9 @@
             color: '#2563eb',
             title: 'Create Linear issue for this document',
             onClick: async (btn) => {
-                const originalLabel = btn.textContent || 'Issue';
-                const originalBg = btn.style.background;
                 const docId = extractNumericId(activeDocIdElement?.textContent);
                 const rowData = activeDocIdElement ? getRowDataFromElement(activeDocIdElement) : null;
-                const payload = buildLinearIssuePayloadFromRow(rowData, docId);
-                if (!payload?.documentId) return;
-                const dedupeKey = payload.failedJobId || payload.documentId;
-                const existingIssue = dedupeKey ? createdIssueByDedupeKey.get(dedupeKey) : null;
-                if (existingIssue?.identifier) {
-                    btn.textContent = String(existingIssue.identifier);
-                    btn.style.background = '#0f766e';
-                    if (existingIssue.url) openUrlInNewTab(existingIssue.url);
-                    setTimeout(() => {
-                        btn.textContent = originalLabel;
-                        btn.style.background = originalBg;
-                    }, 1500);
-                    return;
-                }
-
-                btn.disabled = true;
-                btn.textContent = 'Creating...';
-                btn.style.background = '#1d4ed8';
-
-                try {
-                    const response = await sendRuntimeMessage({
-                        action: 'createLinearIssueFromEnv',
-                        payload
-                    });
-
-                    if (!response?.success || !response?.issue?.identifier) {
-                        const reason = collapseText(response?.error || 'Could not create issue.');
-                        throw new Error(reason);
-                    }
-
-                    if (dedupeKey) {
-                        createdIssueByDedupeKey.set(dedupeKey, {
-                            identifier: String(response.issue.identifier || ''),
-                            url: collapseText(response.issue.url || '')
-                        });
-                    }
-                    btn.textContent = String(response.issue.identifier || 'Created');
-                    btn.style.background = '#16a34a';
-                    setTimeout(() => {
-                        btn.textContent = originalLabel;
-                        btn.style.background = originalBg;
-                        btn.disabled = false;
-                    }, 1800);
-                } catch (error) {
-                    btn.textContent = 'Failed';
-                    btn.style.background = '#dc2626';
-                    btn.title = collapseText(error?.message || 'Could not create issue.');
-                    setTimeout(() => {
-                        btn.textContent = originalLabel;
-                        btn.style.background = originalBg;
-                        btn.disabled = false;
-                    }, 2200);
-                }
+                await handleCreateIssueForRow(btn, rowData, docId);
             }
         });
 
@@ -435,7 +832,10 @@
 
         primaryRow.append(jobsGroup, obanGroup, logGroup);
 
-        secondaryRow.append(adminGroup, createIssueBtn);
+        secondaryRow.append(adminGroup);
+        if (!restrictedToolsAccess?.serverlessLiteMode && hasRestrictedFeature('linear_create_issue')) {
+            secondaryRow.append(createIssueBtn);
+        }
         secondaryRow.append(copyFilterBtn, copyIdBtn);
 
         if (primaryRow.childNodes.length > 0) {
@@ -492,7 +892,10 @@
             if (key) map[key] = index;
         });
 
-        if (typeof map.document !== 'number') return null;
+        if (typeof map.document !== 'number' && typeof map.originalName === 'number') {
+            map.document = map.originalName;
+        }
+        if (typeof map.document !== 'number' && typeof map.jobId !== 'number' && typeof map.status !== 'number') return null;
         return map;
     }
 
@@ -505,19 +908,34 @@
         const cells = Array.from(row.querySelectorAll('td'));
         const getCell = (key) => cells[headerMap[key]] || null;
         const getText = (key) => collapseText(getCell(key)?.innerText || getCell(key)?.textContent || '');
+        const documentCell = getCell('document');
+        const documentCellText = collapseText(documentCell?.innerText || documentCell?.textContent || '');
+        const documentLinkText = collapseText(documentCell?.querySelector('a')?.textContent || '');
+        const documentId = extractNumericId(documentLinkText || documentCellText);
 
         const practiceCellText = getText('practice');
         const odsCode = practiceCellText.match(/\b[A-Z]\d{5}\b/)?.[0] || '';
         const practiceName = collapseText(practiceCellText.replace(odsCode, '')) || practiceCellText;
+        const originalName = collapseText(
+            documentCellText.replace(new RegExp(`\\b${documentId}\\b`, 'g'), '')
+        );
+        const sourceKind = window.location.pathname.includes('/mailroom/rejected')
+            ? 'mailroom_rejected'
+            : 'bot_dashboard';
 
         return {
             row,
-            document: getText('document'),
+            sourceKind,
+            document: documentId || getText('document'),
+            originalName,
             jobType: getText('jobType'),
             practice: practiceCellText,
             practiceName,
             jobId: getText('jobId'),
             added: getText('added'),
+            reason: getText('reason'),
+            rejectedBy: getText('rejectedBy'),
+            rejectedOn: getText('rejectedOn'),
             status: getText('status'),
             odsCode
         };
@@ -760,8 +1178,140 @@
         return `https://app.betterletter.ai/admin_panel/bots/jobs/${encodeURIComponent(normalizedId)}`;
     }
 
+    function isRejectedMailroomPage() {
+        return window.location.pathname.includes('/mailroom/rejected');
+    }
+
+    function getElementDisplayText(element) {
+        if (!(element instanceof Element)) return '';
+        if (element instanceof HTMLSelectElement) {
+            const selectedOption = element.selectedOptions?.[0];
+            return collapseText(selectedOption?.textContent || element.value || '');
+        }
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+            return collapseText(element.value || element.placeholder || '');
+        }
+        return collapseText(element.textContent || '');
+    }
+
+    function findRejectedPracticeToggleElement() {
+        return Array.from(document.querySelectorAll('button, [role="button"], a, label, span, div'))
+            .find((element) => /^Practice\s*\(\d+\)$/i.test(getElementDisplayText(element))) || null;
+    }
+
+    function resolveRejectedPracticeCount() {
+        const toggleText = getElementDisplayText(findRejectedPracticeToggleElement());
+        const toggleMatch = toggleText.match(/\((\d+)\)/);
+        if (toggleMatch?.[1]) {
+            const parsed = Number.parseInt(toggleMatch[1], 10);
+            if (Number.isFinite(parsed)) return parsed;
+        }
+
+        return Array.from(document.querySelectorAll('table tbody tr'))
+            .filter((row) => row instanceof HTMLElement && row.offsetParent !== null)
+            .length;
+    }
+
+    function resolveRejectedPracticeDetails() {
+        const firstVisibleRow = Array.from(document.querySelectorAll('table tbody tr'))
+            .find((row) => row instanceof HTMLElement && row.offsetParent !== null);
+        const probeElement = firstVisibleRow?.querySelector('td') || firstVisibleRow || null;
+        const rowData = probeElement ? getRowDataFromElement(probeElement) : null;
+        const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '');
+        const practiceCodeFromUrl = collapseText(new URLSearchParams(window.location.search).get('practice') || '').toUpperCase();
+        const practiceCode = collapseText(rowData?.odsCode || practiceCodeFromUrl).toUpperCase();
+
+        return {
+            practiceName,
+            practiceCode,
+            rejectedCount: resolveRejectedPracticeCount()
+        };
+    }
+
+    function findRejectedPracticeNameAnchor(practiceName) {
+        const normalizedPracticeName = collapseText(practiceName);
+        if (!normalizedPracticeName) return null;
+
+        const candidates = Array.from(document.querySelectorAll('select, button, [role="combobox"], input, [aria-haspopup="listbox"]'));
+        return candidates.find((element) => {
+            if (!(element instanceof HTMLElement)) return false;
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 180 || rect.height < 24 || rect.top < 0 || rect.top > 140) return false;
+            const text = getElementDisplayText(element);
+            return text === normalizedPracticeName || text.includes(normalizedPracticeName);
+        }) || null;
+    }
+
+    function attachRejectedPracticeIssueButton() {
+        const existingHost = document.getElementById(REJECTED_PRACTICE_ISSUE_HOST_ID);
+        if (!isRejectedMailroomPage() || restrictedToolsAccess?.serverlessLiteMode || !hasRestrictedFeature('linear_create_issue')) {
+            existingHost?.remove();
+            return;
+        }
+
+        const context = resolveRejectedPracticeDetails();
+        const payload = buildLinearIssuePayloadFromRejectedPracticeContext(context);
+        if (!payload) {
+            existingHost?.remove();
+            return;
+        }
+
+        const practiceNameAnchor = findRejectedPracticeNameAnchor(context.practiceName);
+        const practiceToggleElement = findRejectedPracticeToggleElement();
+        const anchorElement = practiceNameAnchor || practiceToggleElement;
+        const anchorParent = anchorElement?.parentElement || null;
+        if (!anchorElement || !anchorParent) {
+            existingHost?.remove();
+            return;
+        }
+
+        const host = existingHost || document.createElement('div');
+        host.id = REJECTED_PRACTICE_ISSUE_HOST_ID;
+        Object.assign(host.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            marginLeft: '8px'
+        });
+
+        let button = host.querySelector('button');
+        if (!button) {
+            button = createButton({
+                label: 'Issue',
+                color: '#2563eb',
+                title: 'Create a practice support ticket for this rejected queue',
+                onClick: (btn) => {
+                    const nextContext = resolveRejectedPracticeDetails();
+                    const nextPayload = buildLinearIssuePayloadFromRejectedPracticeContext(nextContext);
+                    handleCreateIssueWithPayload(btn, nextPayload).catch(() => undefined);
+                }
+            });
+            Object.assign(button.style, {
+                padding: '8px 12px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                lineHeight: '1.1',
+                minHeight: '36px',
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.16)'
+            });
+            host.appendChild(button);
+        }
+
+        button.title = `Create practice support ticket for ${context.practiceName} (${context.rejectedCount} rejected letters)`;
+        host.dataset.practiceName = context.practiceName;
+        host.dataset.practiceCount = String(context.rejectedCount);
+
+        if (practiceNameAnchor && practiceNameAnchor.nextElementSibling !== host) {
+            practiceNameAnchor.insertAdjacentElement('afterend', host);
+            return;
+        }
+
+        if (!practiceNameAnchor && practiceToggleElement && practiceToggleElement.nextElementSibling !== host) {
+            practiceToggleElement.insertAdjacentElement('afterend', host);
+        }
+    }
+
     function attachDocListeners() {
-        const items = document.querySelectorAll('td:nth-child(2) a, td:first-child span, td:first-child div, a[href*="document_id="]');
+        const items = document.querySelectorAll('td:nth-child(2) a, td:first-child a, td:first-child span, td:first-child div, a[href*="document_id="]');
         items.forEach(el => {
             if (el.dataset.blNavReady) return;
             const text = el.textContent.trim();
@@ -801,7 +1351,18 @@
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
 
-            bindCell('jobType', (rowData) => [makeCopyAction(rowData.jobType, { title: 'Copy job type', icon: COPY_ICON_SVG })]);
+            bindCell('jobType', (rowData) => {
+                const actions = [makeCopyAction(rowData.jobType, { title: 'Copy job type', icon: COPY_ICON_SVG })];
+                if (
+                    !rowData.document
+                    && rowData.sourceKind === 'bot_dashboard'
+                    && !restrictedToolsAccess?.serverlessLiteMode
+                    && hasRestrictedFeature('linear_create_issue')
+                ) {
+                    actions.unshift(makeCreateIssueAction(rowData));
+                }
+                return actions;
+            });
             bindCell('practice', (rowData) => {
                 const actions = [];
                 if (rowData.practiceName) {
@@ -822,6 +1383,14 @@
             bindCell('jobId', (rowData) => {
                 const jobUrl = getJobUrl(rowData.jobId);
                 const actions = [makeCopyAction(rowData.jobId, 'job ID')];
+                if (
+                    !rowData.document
+                    && rowData.sourceKind === 'bot_dashboard'
+                    && !restrictedToolsAccess?.serverlessLiteMode
+                    && hasRestrictedFeature('linear_create_issue')
+                ) {
+                    actions.unshift(makeCreateIssueAction(rowData));
+                }
                 if (jobUrl) {
                     actions.push(makeCopyAction(jobUrl, {
                         title: 'Copy job link',
@@ -840,6 +1409,7 @@
     function attachListeners() {
         attachDocListeners();
         attachMetaListeners();
+        attachRejectedPracticeIssueButton();
     }
 
     const observer = new MutationObserver(() => attachListeners());

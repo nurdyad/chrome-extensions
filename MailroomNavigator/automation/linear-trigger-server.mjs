@@ -168,6 +168,10 @@ const allowNoOrigin = String(process.env.LINEAR_TRIGGER_ALLOW_NO_ORIGIN || "1")
 let activeRun = null;
 let lastRun = null;
 let resolvedLinearTeam = null;
+let resolvedLinearWorkflowStateCatalog = null;
+let resolvedLinearIssueLabelCatalog = null;
+const resolvedLinearStateIdCache = new Map();
+const resolvedLinearLabelIdCache = new Map();
 const accessControlAlertSentAt = new Map();
 let accessControlCache = {
   loadedAt: 0,
@@ -179,6 +183,7 @@ let slackTargetsCache = {
 };
 const superblocksLookupCache = new Map();
 const superblocksLookupInFlight = new Map();
+let restartRequested = false;
 
 function nowIso() {
   return new Date().toISOString();
@@ -186,6 +191,45 @@ function nowIso() {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function supportsSelfRestart() {
+  const launchAgentEnvFile = sanitizeSingleLine(process.env.LINEAR_TRIGGER_ENV_FILE || "", 400);
+  const launchAgentBotJobsDir = sanitizeSingleLine(process.env.LINEAR_TRIGGER_BOT_JOBS_DIR || "", 400);
+  const launchdServiceName = sanitizeSingleLine(
+    process.env.XPC_SERVICE_NAME || process.env.LAUNCH_JOB_LABEL || "",
+    200,
+  );
+  return Boolean(
+    launchAgentEnvFile
+    || launchAgentBotJobsDir
+    || /launchagents/i.test(launchAgentEnvFile)
+    || /projects\/bot-jobs-linear/i.test(launchAgentBotJobsDir)
+    || /mailroomnavigator\/\.env/i.test(launchAgentEnvFile)
+    || /mailroomnavigator/i.test(launchAgentBotJobsDir)
+    || /linear-trigger-server/i.test(launchdServiceName)
+    || (process.platform === "darwin" && process.ppid === 1)
+  );
+}
+
+function scheduleServerRestart(reason = "manual") {
+  if (restartRequested) return false;
+  restartRequested = true;
+  const normalizedReason = sanitizeSingleLine(reason, 80) || "manual";
+  appendServerLog(`[${nowIso()}] linear-trigger restart requested reason=${normalizedReason}`).catch(() => undefined);
+
+  setTimeout(() => {
+    server.close(() => {
+      appendServerLog(`[${nowIso()}] linear-trigger server restarting reason=${normalizedReason}`).catch(() => undefined);
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      process.exit(0);
+    }, 1500);
+  }, 180);
+
+  return true;
 }
 
 function sanitizeSingleLine(value, maxLength = 1024) {
@@ -646,6 +690,17 @@ function getLinearDefaultPriority() {
   return clampLinearPriority(process.env.LINEAR_ISSUE_DEFAULT_PRIORITY);
 }
 
+function sanitizeLinearIssueLabelList(rawLabels = []) {
+  if (!Array.isArray(rawLabels)) return [];
+  const unique = new Set();
+  rawLabels.forEach((label) => {
+    const normalized = sanitizeSingleLine(label, 120);
+    if (!normalized) return;
+    unique.add(normalized);
+  });
+  return [...unique].slice(0, 20);
+}
+
 function ensureLinearConfig() {
   if (!LINEAR_API_KEY) {
     throw new Error("LINEAR_API_KEY is missing in MailroomNavigator/.env.");
@@ -666,12 +721,24 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
     title: sanitizeSingleLine(rawPayload.title, 240),
     description: sanitizeMultiline(rawPayload.description, 12000),
     priority: clampLinearPriority(rawPayload.priority),
+    labels: sanitizeLinearIssueLabelList(rawPayload.labels),
+    stateName: sanitizeSingleLine(rawPayload.stateName, 120),
     slack: sanitizeLinearSlackPayload(rawPayload?.slack),
   };
 }
 
+function isDocumentOptionalLinearIssuePayload(payload) {
+  const normalizedTitle = sanitizeSingleLine(payload?.title, 240);
+  const failedJobId = sanitizeSingleLine(payload?.failedJobId, 120);
+  return Boolean(
+    /^Bot Job Error:/i.test(normalizedTitle)
+    || /^Practice Support Ticket:/i.test(normalizedTitle)
+    || failedJobId
+  );
+}
+
 function validateLinearIssuePayload(payload) {
-  if (!/^\d+$/.test(payload.documentId)) {
+  if (!/^\d+$/.test(payload.documentId) && !isDocumentOptionalLinearIssuePayload(payload)) {
     throw new Error("Invalid or missing Document ID.");
   }
   if (!payload.title) {
@@ -835,6 +902,118 @@ async function resolveLinearTeam() {
   return resolvedLinearTeam;
 }
 
+async function resolveLinearWorkflowStateId(teamId, rawStateName) {
+  const stateName = sanitizeSingleLine(rawStateName, 120);
+  if (!teamId || !stateName) return "";
+
+  const cacheKey = `${teamId}:${stateName.toLowerCase()}`;
+  if (resolvedLinearStateIdCache.has(cacheKey)) {
+    return resolvedLinearStateIdCache.get(cacheKey) || "";
+  }
+
+  try {
+    if (!resolvedLinearWorkflowStateCatalog) {
+      const query = `
+        query workflowStates($first: Int) {
+          workflowStates(first: $first) {
+            nodes {
+              id
+              name
+              team {
+                id
+              }
+            }
+          }
+        }
+      `;
+      const data = await runLinearGraphqlRequest(query, { first: 250 });
+      resolvedLinearWorkflowStateCatalog = Array.isArray(data?.workflowStates?.nodes)
+        ? data.workflowStates.nodes
+        : [];
+    }
+    const nodes = Array.isArray(resolvedLinearWorkflowStateCatalog) ? resolvedLinearWorkflowStateCatalog : [];
+    const match = nodes.find((node) =>
+      sanitizeSingleLine(node?.team?.id, 64) === teamId
+      && sanitizeSingleLine(node?.name, 120).toLowerCase() === stateName.toLowerCase()
+    );
+    const stateId = sanitizeSingleLine(match?.id, 64);
+    if (!stateId) {
+      await appendServerLog(
+        `[${nowIso()}] linear workflow state missing for "${stateName}" on team ${teamId}`
+      ).catch(() => undefined);
+    }
+    resolvedLinearStateIdCache.set(cacheKey, stateId);
+    return stateId;
+  } catch (error) {
+    await appendServerLog(
+      `[${nowIso()}] linear workflow state resolve failed for "${stateName}": ${sanitizeSingleLine(error?.message || error, 260)}`
+    ).catch(() => undefined);
+    resolvedLinearStateIdCache.set(cacheKey, "");
+    return "";
+  }
+}
+
+async function resolveLinearLabelIds(labelNames = []) {
+  const uniqueNames = sanitizeLinearIssueLabelList(labelNames);
+  if (!uniqueNames.length) return [];
+
+  const resolvedIds = [];
+  if (!resolvedLinearIssueLabelCatalog) {
+    const query = `
+      query issueLabels($first: Int) {
+        issueLabels(first: $first) {
+          nodes {
+            id
+            name
+          }
+        }
+      }
+    `;
+    try {
+      const data = await runLinearGraphqlRequest(query, { first: 250 });
+      resolvedLinearIssueLabelCatalog = Array.isArray(data?.issueLabels?.nodes)
+        ? data.issueLabels.nodes
+        : [];
+    } catch (error) {
+      await appendServerLog(
+        `[${nowIso()}] linear label catalog load failed: ${sanitizeSingleLine(error?.message || error, 260)}`
+      ).catch(() => undefined);
+      resolvedLinearIssueLabelCatalog = [];
+    }
+  }
+
+  for (const labelName of uniqueNames) {
+    const cacheKey = labelName.toLowerCase();
+    if (resolvedLinearLabelIdCache.has(cacheKey)) {
+      const cachedId = resolvedLinearLabelIdCache.get(cacheKey);
+      if (cachedId) resolvedIds.push(cachedId);
+      continue;
+    }
+
+    try {
+      const nodes = Array.isArray(resolvedLinearIssueLabelCatalog) ? resolvedLinearIssueLabelCatalog : [];
+      const exactMatch = nodes.find((node) =>
+        sanitizeSingleLine(node?.name, 120).toLowerCase() === labelName.toLowerCase()
+      );
+      const labelId = sanitizeSingleLine(exactMatch?.id, 64);
+      if (!labelId) {
+        await appendServerLog(
+          `[${nowIso()}] linear label missing for "${labelName}"`
+        ).catch(() => undefined);
+      }
+      resolvedLinearLabelIdCache.set(cacheKey, labelId);
+      if (labelId) resolvedIds.push(labelId);
+    } catch (error) {
+      await appendServerLog(
+        `[${nowIso()}] linear label resolve failed for "${labelName}": ${sanitizeSingleLine(error?.message || error, 260)}`
+      ).catch(() => undefined);
+      resolvedLinearLabelIdCache.set(cacheKey, "");
+    }
+  }
+
+  return resolvedIds;
+}
+
 async function createLinearIssue(payload) {
   const team = await resolveLinearTeam();
   const effectivePriority = payload.priority > 0 ? payload.priority : getLinearDefaultPriority();
@@ -845,6 +1024,14 @@ async function createLinearIssue(payload) {
   };
   if (payload.description) issueInput.description = payload.description;
   if (effectivePriority > 0) issueInput.priority = effectivePriority;
+  if (payload.stateName) {
+    const stateId = await resolveLinearWorkflowStateId(team.id, payload.stateName);
+    if (stateId) issueInput.stateId = stateId;
+  }
+  if (Array.isArray(payload.labels) && payload.labels.length > 0) {
+    const labelIds = await resolveLinearLabelIds(payload.labels);
+    if (labelIds.length > 0) issueInput.labelIds = labelIds;
+  }
 
   const mutation = `
     mutation CreateIssue($input: IssueCreateInput!) {
@@ -2074,6 +2261,49 @@ async function readBotJobsReport(reportPath) {
   }
 }
 
+function isBotJobsReportShape(report) {
+  return Boolean(
+    report
+      && typeof report === "object"
+      && (
+        Array.isArray(report.pages_visited)
+        || (report.summary && typeof report.summary === "object")
+      )
+  );
+}
+
+function parseBotJobsReportFromStdout(stdoutText) {
+  const raw = String(stdoutText || "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (isBotJobsReportShape(parsed)) return parsed;
+  } catch {
+    // Fall through and try to find the final JSON object after log lines.
+  }
+
+  const startOffsets = [];
+  const objectStartPattern = /(^|\n)\{/g;
+  let match;
+  while ((match = objectStartPattern.exec(raw)) !== null) {
+    startOffsets.push(match.index + (match[1] ? match[1].length : 0));
+  }
+
+  for (let index = startOffsets.length - 1; index >= 0; index -= 1) {
+    const candidate = raw.slice(startOffsets[index]).trim();
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (isBotJobsReportShape(parsed)) return parsed;
+    } catch {
+      // Try the previous "{"
+    }
+  }
+
+  return null;
+}
+
 function summarizeBotJobsReport(report) {
   if (!report || typeof report !== "object") {
     return {
@@ -2087,6 +2317,23 @@ function summarizeBotJobsReport(report) {
       floodMode: false,
     };
   }
+
+  const rowsScannedFromPages = Array.isArray(report.pages_visited)
+    ? report.pages_visited.reduce((sum, entry) => sum + Number(entry?.rows_scanned || 0), 0)
+    : 0;
+  const actionableFoundFromPages = Array.isArray(report.pages_visited)
+    ? report.pages_visited.reduce((sum, entry) => sum + Number(entry?.actionable_found || 0), 0)
+    : 0;
+  const actionableFoundTotal = Number.isFinite(Number(report.summary?.actionable_found_total))
+    ? Number(report.summary.actionable_found_total)
+    : actionableFoundFromPages;
+  const issueCandidatesTotal = Number.isFinite(Number(report.summary?.issue_candidates_total))
+    ? Number(report.summary.issue_candidates_total)
+    : Number.isFinite(Number(report.grouping?.issue_candidates_total))
+      ? Number(report.grouping.issue_candidates_total)
+      : Number.isFinite(Number(report.safeguards?.estimated_new_issues))
+        ? Number(report.safeguards.estimated_new_issues)
+        : 0;
 
   return {
     summaryLines: sanitizeStringList(report.summary?.lines, 10, 240),
@@ -2104,8 +2351,9 @@ function summarizeBotJobsReport(report) {
     createdIssuesTotal: Array.isArray(report.issues_created) ? report.issues_created.length : 0,
     previewIssuesTotal: Array.isArray(report.issues_preview) ? report.issues_preview.length : 0,
     skippedDuplicatesTotal: Array.isArray(report.issues_skipped_duplicate) ? report.issues_skipped_duplicate.length : 0,
-    actionableFoundTotal: Number(report.summary?.actionable_found_total || 0),
-    issueCandidatesTotal: Number(report.summary?.issue_candidates_total || 0),
+    rowsScannedTotal: rowsScannedFromPages,
+    actionableFoundTotal,
+    issueCandidatesTotal,
     floodMode: Boolean(report.safeguards?.flood_mode),
   };
 }
@@ -2275,6 +2523,7 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
   await writeLastRunState();
 
   let runFinalized = false;
+  let stdoutBuffer = "";
   const finalizeRun = async (result, logMessage) => {
     if (runFinalized) return;
     runFinalized = true;
@@ -2297,7 +2546,14 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
           slack: sanitizeLinearSlackPayload(slack),
           slackNotification: null,
         };
-    const reportSummary = summarizeBotJobsReport(await readBotJobsReport(baseRun.reportPath || reportPath));
+    let rawReport = await readBotJobsReport(baseRun.reportPath || reportPath);
+    if (!rawReport) {
+      rawReport = parseBotJobsReportFromStdout(stdoutBuffer);
+      if (rawReport && baseRun.reportPath) {
+        writeFile(baseRun.reportPath, `${JSON.stringify(rawReport, null, 2)}\n`, "utf8").catch(() => undefined);
+      }
+    }
+    const reportSummary = summarizeBotJobsReport(rawReport);
     const finalStatus =
       String(result?.status || "").toLowerCase() === "success" && reportSummary.reportErrors.length
         ? "failed"
@@ -2354,7 +2610,12 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
   }
 
   child.stdout?.on("data", (chunk) => {
-    const text = String(chunk || "").replace(/\r?\n$/, "");
+    const rawText = String(chunk || "");
+    stdoutBuffer = `${stdoutBuffer}${rawText}`;
+    if (stdoutBuffer.length > 2_000_000) {
+      stdoutBuffer = stdoutBuffer.slice(-2_000_000);
+    }
+    const text = rawText.replace(/\r?\n$/, "");
     appendServerLog(`[${nowIso()}] [${runId}] [stdout] ${text}`).catch(() => undefined);
   });
 
@@ -2766,6 +3027,33 @@ const server = createServer(async (req, res) => {
         ok: true,
         accepted: true,
         run: result.run,
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/service/restart") {
+      if (activeRun) {
+        sendJson(res, 409, origin, {
+          ok: false,
+          running: true,
+          error: "A Linear run is in progress. Wait for it to finish before restarting the trigger service.",
+        });
+        return;
+      }
+      if (!supportsSelfRestart()) {
+        sendJson(res, 409, origin, {
+          ok: false,
+          running: false,
+          error: "Self-restart is only available when the trigger service is running as a managed background service.",
+        });
+        return;
+      }
+
+      scheduleServerRestart("panel");
+      sendJson(res, 202, origin, {
+        ok: true,
+        restarting: true,
+        message: "Restart requested. The local trigger service should be back in a moment.",
       });
       return;
     }

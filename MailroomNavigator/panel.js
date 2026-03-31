@@ -74,6 +74,8 @@ function normalizePanelAccessState(rawAccess = null) {
         allowed: Boolean(rawAccess?.allowed),
         isOwner: Boolean(rawAccess?.isOwner),
         canManageUsers: Boolean(rawAccess?.canManageUsers),
+        openAccessMode: Boolean(rawAccess?.openAccessMode),
+        serverlessLiteMode: Boolean(rawAccess?.serverlessLiteMode),
         role: String(rawAccess?.role || '').trim().slice(0, 40),
         email: String(rawAccess?.email || '').trim().slice(0, 240),
         reason: String(rawAccess?.reason || '').trim().slice(0, 260),
@@ -381,6 +383,39 @@ function renderExtensionAccessState(access) {
             .join('\n');
     }
 
+    if (extensionAccessState.openAccessMode) {
+        notice.classList.remove('invalid');
+        notice.classList.add('valid');
+        notice.style.display = 'block';
+        notice.textContent = [
+            emailLine,
+            extensionAccessState.serverlessLiteMode
+                ? 'Serverless Lite is enabled. Browser-only tools are available everywhere, and localhost-only tools are hidden.'
+                : '',
+            extensionAccessState.isOwner
+                ? 'Open access mode enabled. Owner controls are available for this signed-in account.'
+                : (
+                    extensionAccessState.serverlessLiteMode
+                        ? 'Open access mode enabled on this machine. Serverless Lite tools are ready without localhost setup.'
+                        : 'Open access mode enabled on this machine. All MailroomNavigator features are available.'
+                ),
+            !extensionAccessState.email
+                ? 'BetterLetter email is not detected yet, so owner-only management stays hidden until you open a signed-in BetterLetter tab.'
+                : '',
+            sourceLine
+        ].filter(Boolean).join('\n');
+        if (identityPanel) identityPanel.style.display = 'none';
+        if (identityDiagnostics) {
+            identityDiagnostics.style.display = 'none';
+            identityDiagnostics.textContent = '';
+        }
+        if (navButtonsRow) navButtonsRow.style.display = '';
+        accessNoticeHideTimer = setTimeout(() => {
+            notice.style.display = 'none';
+        }, 10000);
+        return;
+    }
+
     if (extensionAccessState.allowed) {
         notice.classList.remove('invalid');
         notice.classList.add('valid');
@@ -504,7 +539,10 @@ function applyCollapsibleSectionUi(section, body, toggleButton, collapsed) {
 function applyExtensionFeatureAccessToUi() {
     const navRow = document.querySelector('.global-nav-buttons-row');
     const accessAllowed = Boolean(extensionAccessState?.allowed);
+    const serverlessLiteMode = Boolean(extensionAccessState?.serverlessLiteMode);
     const availableViewIds = getAvailableViewIds();
+    const linearSlackStatus = document.getElementById('linearSlackStatus');
+    const linearIssueSectionSubtitle = document.getElementById('linearIssueSectionSubtitle');
 
     const navButtonMap = {
         practiceNavigatorView: document.getElementById('navigatorGlobalToggleBtn'),
@@ -528,27 +566,54 @@ function applyExtensionFeatureAccessToUi() {
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runEmailFormatterToolBtn', hasExtensionFeature('email_formatter'));
     setElementVisible('runWorkflowGroupsToolBtn', hasExtensionFeature('workflow_groups'));
-    setElementVisible('linearIssueSection', hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync']));
-    setElementVisible('linearCreateIssueControls', hasExtensionFeature('linear_create_issue'));
-    setElementVisible('linearSlackControls', hasExtensionFeature('slack_sync'));
-    setElementVisible('createLinearSlackIssueBtn', hasExtensionFeature('linear_create_issue'), '');
-    setElementVisible('triggerLinearBotJobsBtn', hasExtensionFeature('linear_trigger'), '');
-    setElementVisible('triggerLinearDryRunLabel', hasExtensionFeature('linear_trigger'), 'flex');
-    setElementVisible('reconcileLinearControls', hasExtensionFeature('linear_reconcile'));
-    setElementVisible('reconcileLinearDryRunLabel', hasExtensionFeature('linear_reconcile'), 'flex');
+    setElementVisible(
+        'linearIssueSection',
+        serverlessLiteMode || hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
+    );
+    setElementVisible('linearCreateIssueControls', serverlessLiteMode || hasExtensionFeature('linear_create_issue'));
+    setElementVisible('linearServerlessLiteNotice', serverlessLiteMode);
+    setElementVisible('linearSlackControls', !serverlessLiteMode && hasExtensionFeature('slack_sync'));
+    setElementVisible('createLinearSlackIssueBtn', !serverlessLiteMode && hasExtensionFeature('linear_create_issue'), '');
+    setElementVisible('triggerLinearBotJobsBtn', !serverlessLiteMode && hasExtensionFeature('linear_trigger'), '');
+    setElementVisible('triggerLinearDryRunLabel', !serverlessLiteMode && hasExtensionFeature('linear_trigger'), 'flex');
+    setElementVisible('reconcileLinearControls', !serverlessLiteMode && hasExtensionFeature('linear_reconcile'));
+    setElementVisible('reconcileLinearDryRunLabel', !serverlessLiteMode && hasExtensionFeature('linear_reconcile'), 'flex');
+    setElementVisible(
+        'linearServiceControls',
+        !serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
+    );
+    setElementVisible('linearDraftCopyButtonsRow', serverlessLiteMode);
+    setElementVisible('superblocksUuidLookupSection', !serverlessLiteMode && hasExtensionFeature('job_panel'));
     setElementVisible(
         'linearTriggerStatus',
-        hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
+        !serverlessLiteMode
+            && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
             && Boolean(String(document.getElementById('linearTriggerStatus')?.textContent || '').trim())
     );
-    setElementVisible('extensionUserManagementSection', Boolean(extensionAccessState?.isOwner));
+    setElementVisible('extensionUserManagementSection', !serverlessLiteMode && Boolean(extensionAccessState?.isOwner));
 
     const actionRow = document.getElementById('linearActionButtonsRow');
     const canCreateIssue = hasExtensionFeature('linear_create_issue');
     const canTriggerLinear = hasExtensionFeature('linear_trigger');
     if (actionRow) {
-        actionRow.style.display = (canCreateIssue || canTriggerLinear) ? 'grid' : 'none';
+        actionRow.style.display = (!serverlessLiteMode && (canCreateIssue || canTriggerLinear)) ? 'grid' : 'none';
         actionRow.style.gridTemplateColumns = canCreateIssue && canTriggerLinear ? '1fr 1fr' : '1fr';
+    }
+    if (linearIssueSectionSubtitle) {
+        linearIssueSectionSubtitle.textContent = serverlessLiteMode
+            ? 'Generate draft details and copy them into Linear manually.'
+            : 'Create issues, trigger runs, and Slack updates.';
+    }
+    if (linearSlackStatus) {
+        const nextMode = serverlessLiteMode ? 'serverless-lite' : 'full';
+        if (linearSlackStatus.dataset.mode !== nextMode) {
+            linearSlackStatus.dataset.mode = nextMode;
+            linearSlackStatus.classList.remove('valid', 'invalid');
+            linearSlackStatus.classList.add('neutral');
+            linearSlackStatus.textContent = serverlessLiteMode
+                ? 'Paste a Document ID and click Generate Details. Then copy the title and description into Linear manually.'
+                : 'Paste a Document ID and click Generate Details.';
+        }
     }
 }
 
@@ -741,11 +806,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const submitAccessRequestBtn = document.getElementById('submitAccessRequestBtn');
     const refreshAccessRequestBtn = document.getElementById('refreshAccessRequestBtn');
     const accessServiceConfigSection = document.getElementById('accessServiceConfigSection');
+    const accessOpenModeInput = document.getElementById('accessOpenModeInput');
     const accessServiceUrlInput = document.getElementById('accessServiceUrlInput');
     const accessServiceKeyInput = document.getElementById('accessServiceKeyInput');
     const saveAccessServiceConfigBtn = document.getElementById('saveAccessServiceConfigBtn');
     const clearAccessServiceConfigBtn = document.getElementById('clearAccessServiceConfigBtn');
     const accessServiceConfigStatus = document.getElementById('accessServiceConfigStatus');
+    const superblocksUuidLookupSection = document.getElementById('superblocksUuidLookupSection');
     const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
     const managedUserEmailInput = document.getElementById('managedUserEmailInput');
     const managedUserRoleInput = document.getElementById('managedUserRoleInput');
@@ -755,7 +822,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const refreshManagedUsersBtn = document.getElementById('refreshManagedUsersBtn');
     const extensionManagedUsersList = document.getElementById('extensionManagedUsersList');
     let managedUserEditingEmail = '';
-    let accessServiceConfig = { enabled: false, baseUrl: '', sharedKey: '', isDefault: false, defaultBaseUrl: '', useLocalOverride: false };
+    let accessServiceConfig = {
+        enabled: false,
+        baseUrl: '',
+        sharedKey: '',
+        isDefault: false,
+        defaultBaseUrl: '',
+        defaultOpenAccessMode: false,
+        useLocalOverride: false,
+        openAccessMode: false
+    };
     let enhancedAuthManagementReady = false;
     let collapsibleSectionState = await loadPanelCollapsibleSectionState();
 
@@ -840,6 +916,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const renderAccessRequestSection = () => {
+        if (extensionAccessState?.serverlessLiteMode || extensionAccessState?.openAccessMode) {
+            setElementVisible(accessRequestSection, false);
+            return;
+        }
         // This panel only submits a review request. The shared access service still
         // decides whether the current BetterLetter email is granted any features.
         const canRequestAccess = Boolean(extensionAccessState?.email)
@@ -876,13 +956,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const initializeAccessUi = async () => {
+        setElementVisible(accessServiceConfigSection, false);
         try {
             accessServiceConfig = await fetchAccessControlServiceConfig();
         } catch (error) {
             setAccessServiceConfigStatus(String(error?.message || 'Could not load access service config.').trim(), 'invalid');
         }
-        renderAccessServiceConfig();
-        refreshAccessServiceHealth().catch(() => undefined);
 
         try {
             const access = await fetchExtensionAccessState({ allowStale: true });
@@ -890,6 +969,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderAccessRequestSection();
             renderAccessServiceConfig();
             applyExtensionFeatureAccessToUi();
+            if (shouldRefreshAccessServiceHealth()) {
+                refreshAccessServiceHealth().catch(() => undefined);
+            }
             if (!access?.email) {
                 try {
                     const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
@@ -912,6 +994,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     renderAccessRequestSection();
                     renderAccessServiceConfig();
                     applyExtensionFeatureAccessToUi();
+                    if (shouldRefreshAccessServiceHealth()) {
+                        refreshAccessServiceHealth().catch(() => undefined);
+                    }
                     if (!freshAccess?.email) return;
                     renderIdentityDiagnostics(null);
                 })
@@ -982,14 +1067,35 @@ document.addEventListener('DOMContentLoaded', async () => {
         accessServiceConfigStatus.textContent = String(message || '').trim();
     };
 
+    const shouldRefreshAccessServiceHealth = () => (
+        !extensionAccessState?.serverlessLiteMode
+        && Boolean(accessServiceConfig?.enabled && accessServiceConfig?.baseUrl)
+    );
+
     const renderAccessServiceConfig = () => {
+        if (extensionAccessState?.serverlessLiteMode) {
+            setElementVisible(accessServiceConfigSection, false);
+            return;
+        }
+        if (accessOpenModeInput) accessOpenModeInput.checked = Boolean(accessServiceConfig.openAccessMode);
         if (accessServiceUrlInput) accessServiceUrlInput.value = accessServiceConfig.baseUrl || '';
         if (accessServiceKeyInput) accessServiceKeyInput.value = accessServiceConfig.sharedKey || '';
         setElementVisible(
             accessServiceConfigSection,
-            !extensionAccessState?.allowed || Boolean(accessServiceConfig?.enabled && !accessServiceConfig?.isDefault),
+            Boolean(
+                accessServiceConfig?.openAccessMode
+                || !extensionAccessState?.allowed
+                || accessServiceConfig?.enabled
+            ),
             ''
         );
+        if (accessServiceConfig?.openAccessMode) {
+            setAccessServiceConfigStatus(
+                'Open access mode is enabled locally. Everyone on this machine gets MailroomNavigator immediately.',
+                'valid'
+            );
+            return;
+        }
         if (accessServiceConfig?.enabled && accessServiceConfig.baseUrl) {
             const prefix = accessServiceConfig?.isDefault ? 'Using default shared access service' : 'Using shared access service';
             setAccessServiceConfigStatus(`${prefix}: ${accessServiceConfig.baseUrl}`, 'valid');
@@ -1007,14 +1113,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             const ownerLabel = health?.access?.ownerEmail
                 ? ` Owner: ${health.access.ownerEmail}.`
                 : '';
-            setAccessServiceConfigStatus(`Connected to ${serviceLabel}.${ownerLabel}`.trim(), 'valid');
+            const prefix = accessServiceConfig?.openAccessMode
+                ? 'Open access mode enabled. '
+                : '';
+            setAccessServiceConfigStatus(`${prefix}Connected to ${serviceLabel}.${ownerLabel}`.trim(), 'valid');
         } catch (error) {
             const fallbackMessage = accessServiceConfig?.enabled
                 ? `Shared access service unavailable. ${String(error?.message || '').trim()}`
                 : String(error?.message || '').trim();
             setAccessServiceConfigStatus(
-                fallbackMessage || 'Could not reach the configured access service.',
-                'invalid'
+                accessServiceConfig?.openAccessMode
+                    ? `Open access mode enabled. ${fallbackMessage || 'Could not reach the configured access service for owner diagnostics.'}`
+                    : (fallbackMessage || 'Could not reach the configured access service.'),
+                accessServiceConfig?.openAccessMode ? 'neutral' : 'invalid'
             );
         }
     };
@@ -1204,14 +1315,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const baseUrl = sanitizeAccessServiceUrl(accessServiceUrlInput?.value);
             const sharedKey = String(accessServiceKeyInput?.value || '').trim();
-            if (!baseUrl) {
+            const openAccessMode = Boolean(accessOpenModeInput?.checked);
+            if (!baseUrl && !openAccessMode) {
                 throw new Error('Enter a valid shared access service URL.');
             }
 
             saveAccessServiceConfigBtn.disabled = true;
-            accessServiceConfig = await saveAccessControlServiceConfig({ baseUrl, sharedKey, useLocalOverride: false });
+            accessServiceConfig = await saveAccessControlServiceConfig({
+                baseUrl,
+                sharedKey,
+                useLocalOverride: !baseUrl,
+                openAccessMode
+            });
             renderAccessServiceConfig();
-            await refreshAccessServiceHealth();
+            if (shouldRefreshAccessServiceHealth()) {
+                await refreshAccessServiceHealth();
+            }
 
             const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
             renderExtensionAccessState(refreshedAccess);
@@ -1233,9 +1352,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearAccessServiceConfigBtn?.addEventListener('click', async () => {
         try {
             clearAccessServiceConfigBtn.disabled = true;
-            accessServiceConfig = await saveAccessControlServiceConfig({ baseUrl: '', sharedKey: '', useLocalOverride: true });
+            accessServiceConfig = await saveAccessControlServiceConfig({
+                baseUrl: '',
+                sharedKey: '',
+                useLocalOverride: true,
+                openAccessMode: false
+            });
             renderAccessServiceConfig();
-            refreshAccessServiceHealth().catch(() => undefined);
+            if (shouldRefreshAccessServiceHealth()) {
+                refreshAccessServiceHealth().catch(() => undefined);
+            }
             if (extensionAccessState?.isOwner) {
                 await syncEnhancedAuthManagement(extensionUserManagementState);
             }
@@ -1286,7 +1412,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView', { force: true }));
     document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView', { force: true }));
     document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView', { force: true }));
-    initializeAccessUi().catch((error) => {
+    const accessUiInitPromise = initializeAccessUi();
+    accessUiInitPromise.catch((error) => {
         console.error('Failed to initialize MailroomNavigator access UI:', error);
     });
 
@@ -1827,12 +1954,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const linearSlackTargetSuggestions = document.getElementById('linearSlackTargetSuggestions');
     const linearSlackTargetHint = document.getElementById('linearSlackTargetHint');
     const linearSlackStatus = document.getElementById('linearSlackStatus');
+    const linearServerlessLiteNotice = document.getElementById('linearServerlessLiteNotice');
     const createLinearSlackIssueBtn = document.getElementById('createLinearSlackIssueBtn');
     const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
     const reconcileLinearBotIssuesBtn = document.getElementById('reconcileLinearBotIssuesBtn');
+    const restartLinearTriggerServerBtn = document.getElementById('restartLinearTriggerServerBtn');
     const triggerLinearDryRunInput = document.getElementById('triggerLinearDryRunInput');
     const reconcileLinearDryRunInput = document.getElementById('reconcileLinearDryRunInput');
     const linearTriggerStatus = document.getElementById('linearTriggerStatus');
+    const linearDraftCopyButtonsRow = document.getElementById('linearDraftCopyButtonsRow');
+    const copyLinearIssueTitleBtn = document.getElementById('copyLinearIssueTitleBtn');
+    const copyLinearIssueDescriptionBtn = document.getElementById('copyLinearIssueDescriptionBtn');
 
     let recentDocIds = [];
     let recentJobIds = [];
@@ -1853,6 +1985,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // confirmation window before the trigger server posts the Slack summary.
     const LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS = 1000;
     const LINEAR_TRIGGER_STATUS_POLL_WINDOW_MS = 4 * 60 * 1000;
+    const LINEAR_TRIGGER_RESTART_WAIT_INTERVAL_MS = 900;
+    const LINEAR_TRIGGER_RESTART_WAIT_ATTEMPTS = 12;
     // Keep this aligned with the trigger-server Slack delay so the operator sees the
     // terminal run state in-panel before the summary is pushed to Slack.
     const LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS = 2000;
@@ -2991,12 +3125,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     rowEl.append(main, meta);
                     rowEl.addEventListener('click', async () => {
-                        try {
-                            await navigator.clipboard.writeText(getDisplayValue(item));
-                            showToast('Copied.');
-                        } catch (e) {
-                            showToast('Copy failed.');
-                        }
+                        const copied = await copyTextToClipboard(getDisplayValue(item));
+                        showToast(copied ? 'Copied.' : 'Copy failed.');
                     });
                     list.appendChild(rowEl);
                 });
@@ -3011,12 +3141,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             copyAllBtn.addEventListener('click', async () => {
                 const visibleRows = getVisibleRows();
                 if (!visibleRows.length) return showToast('No visible rows.');
-                try {
-                    await navigator.clipboard.writeText(visibleRows.map(getDisplayValue).join(', '));
-                    showToast(`Copied ${visibleRows.length} UUIDs.`);
-                } catch (e) {
-                    showToast('Copy failed.');
-                }
+                const copied = await copyTextToClipboard(visibleRows.map(getDisplayValue).join(', '));
+                showToast(copied ? `Copied ${visibleRows.length} UUIDs.` : 'Copy failed.');
             });
 
             exportBtn.addEventListener('click', () => {
@@ -3559,6 +3685,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         linearSlackStatus.textContent = message;
     };
 
+    const copyLinearDraftField = async (value, emptyMessage, successMessage) => {
+        const normalizedValue = trimMultilineField(value, 12000);
+        if (!normalizedValue) {
+            setLinearSlackStatus(emptyMessage, 'invalid');
+            showToast(emptyMessage);
+            return;
+        }
+        const copied = await copyTextToClipboard(normalizedValue);
+        if (!copied) {
+            setLinearSlackStatus('Copy failed. Try again.', 'invalid');
+            showToast('Copy failed.');
+            return;
+        }
+        setLinearSlackStatus(successMessage, 'valid');
+        showToast(successMessage);
+    };
+
     const setLinearTriggerStatus = (message, tone = null) => {
         if (!linearTriggerStatus) return;
         const normalizedMessage = String(message || '').trim();
@@ -3592,6 +3735,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             setLinearTriggerStatus('', null);
             linearTriggerStatusClearTimer = null;
         }, LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS);
+    };
+
+    const waitForMs = (ms) => new Promise((resolve) => {
+        window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    });
+
+    const setRestartLinearTriggerServerButtonState = (isBusy = false) => {
+        if (!restartLinearTriggerServerBtn) return;
+        restartLinearTriggerServerBtn.disabled = Boolean(isBusy);
+        restartLinearTriggerServerBtn.textContent = isBusy ? 'Restarting…' : 'Restart Trigger Service';
     };
 
     const setLinearTriggerButtonState = (state, runType = 'trigger') => {
@@ -3756,6 +3909,54 @@ document.addEventListener('DOMContentLoaded', async () => {
                 })
                 .catch(() => undefined);
         }, LINEAR_TRIGGER_STATUS_POLL_INTERVAL_MS);
+    };
+
+    const waitForLinearTriggerServiceReady = async () => {
+        let lastError = null;
+        for (let attempt = 0; attempt < LINEAR_TRIGGER_RESTART_WAIT_ATTEMPTS; attempt += 1) {
+            try {
+                await fetchLinearTriggerHealthStatus();
+                return true;
+            } catch (error) {
+                lastError = error;
+                await waitForMs(LINEAR_TRIGGER_RESTART_WAIT_INTERVAL_MS);
+            }
+        }
+        throw lastError || new Error('Local trigger service did not come back online.');
+    };
+
+    const restartLinearTriggerService = async () => {
+        try {
+            dismissedLinearTriggerRunId = '';
+            clearLinearTriggerStatusAutoClearTimer();
+            setRestartLinearTriggerServerButtonState(true);
+            setLinearTriggerButtonState('idle');
+            setLinearTriggerStatus('Requesting local trigger service restart…', 'neutral');
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'restartLinearTriggerServer'
+            });
+
+            if (!response?.success) {
+                throw new Error(trimField(response?.error, 260) || 'Could not restart local trigger service.');
+            }
+
+            setLinearTriggerStatus(
+                trimField(response?.message, 240) || 'Restart requested. Waiting for the local trigger service to come back…',
+                'neutral'
+            );
+
+            await waitForMs(1200);
+            await waitForLinearTriggerServiceReady();
+            setLinearTriggerStatus('Local trigger service restarted.', 'valid');
+            showToast('Trigger service restarted.');
+        } catch (error) {
+            const message = trimField(error?.message, 260) || 'Could not restart local trigger service.';
+            setLinearTriggerStatus(message, 'invalid');
+            showToast(message);
+        } finally {
+            setRestartLinearTriggerServerButtonState(false);
+        }
     };
 
     const triggerLinearBotJobsRun = async () => {
@@ -3996,7 +4197,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     const validateLinearIssuePayload = (payload) => {
-        if (!payload.documentId) return 'Generate details first so Document ID is included.';
+        const normalizedTitle = String(payload?.title || '').trim();
+        const failedJobId = String(payload?.failedJobId || '').trim();
+        const canSkipDocumentId = /^Bot Job Error:/i.test(normalizedTitle)
+            || /^Practice Support Ticket:/i.test(normalizedTitle)
+            || Boolean(failedJobId);
+        if (!payload.documentId && !canSkipDocumentId) return 'Generate details first so Document ID is included.';
         if (!payload.title) return 'Issue title is required.';
         if (!payload.description) return 'Issue description is required.';
         const slackValidationError = validateLinearSlackPrefs(payload?.slack);
@@ -4331,10 +4537,23 @@ ${error?.message || String(error)}`, 'invalid');
         renderRecentIdChips();
     };
 
-    await loadSlackTargetCache();
-    await loadLinearSlackPrefs();
-    if (linearSlackNotifyEnabledInput?.checked) {
-        maybeWarmSlackTargetSuggestions().catch(() => undefined);
+    await accessUiInitPromise.catch(() => undefined);
+
+    if (!extensionAccessState?.serverlessLiteMode) {
+        await loadSlackTargetCache();
+        await loadLinearSlackPrefs();
+        if (linearSlackNotifyEnabledInput?.checked) {
+            maybeWarmSlackTargetSuggestions().catch(() => undefined);
+        }
+    } else {
+        if (linearSlackTargetHint) {
+            linearSlackTargetHint.classList.remove('valid', 'invalid');
+            linearSlackTargetHint.classList.add('neutral');
+            linearSlackTargetHint.textContent = 'Slack sync is unavailable in Serverless Lite.';
+        }
+        if (linearServerlessLiteNotice) {
+            linearServerlessLiteNotice.textContent = 'Serverless Lite keeps draft generation only. Generate the issue details below, then copy the title and description into Linear manually.';
+        }
     }
 
     generateLinearIssueDraftBtn?.addEventListener('click', () => {
@@ -4346,6 +4565,22 @@ ${error?.message || String(error)}`, 'invalid');
         if (!draft) return;
         if (linearIssueTitleInput) linearIssueTitleInput.value = draft.title;
         if (linearIssueDescriptionInput) linearIssueDescriptionInput.value = draft.description;
+    });
+
+    copyLinearIssueTitleBtn?.addEventListener('click', () => {
+        copyLinearDraftField(
+            linearIssueTitleInput?.value,
+            'Generate details first so there is a title to copy.',
+            'Linear issue title copied.'
+        ).catch(() => undefined);
+    });
+
+    copyLinearIssueDescriptionBtn?.addEventListener('click', () => {
+        copyLinearDraftField(
+            linearIssueDescriptionInput?.value,
+            'Generate details first so there is a description to copy.',
+            'Linear issue description copied.'
+        ).catch(() => undefined);
     });
 
     linearIssueSourceInput?.addEventListener('input', () => {
@@ -4410,7 +4645,13 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Could not trigger Linear reconcile run.');
         });
     });
-    if (hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
+    restartLinearTriggerServerBtn?.addEventListener('click', () => {
+        restartLinearTriggerService().catch(() => {
+            setLinearTriggerStatus('Could not restart local trigger service.', 'invalid');
+            showToast('Could not restart local trigger service.');
+        });
+    });
+    if (!extensionAccessState?.serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
         if (isLinearRunActiveOnLoad) {
             startLinearTriggerStatusPolling();
