@@ -36,6 +36,40 @@
     }
   }
 
+  async function copyTextToClipboard(text) {
+    const value = String(text ?? '');
+    if (!value) return false;
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (error) {
+      // Fall back to execCommand below.
+    }
+
+    try {
+      if (!document?.body) return false;
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.left = '-9999px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      return Boolean(copied);
+    } catch (error) {
+      return false;
+    }
+  }
+
   function uuidPickerTool() {
     const existingPanel = document.getElementById('uuid-picker-v6');
     if (existingPanel) existingPanel.remove();
@@ -127,7 +161,8 @@
         `;
 
         itemDiv.onclick = async () => {
-          await navigator.clipboard.writeText(displayValue);
+          const copied = await copyTextToClipboard(displayValue);
+          if (!copied) return;
           item.copied = true;
           itemDiv.style.transition = 'none';
           itemDiv.style.background = '#c3e6cb';
@@ -170,7 +205,8 @@
       const filter = searchInput.value.toLowerCase();
       const dFilter = dateInput.value.toLowerCase();
       const visibleItems = dataMap.filter(i => (i.id.toLowerCase().includes(filter) || i.raw.toLowerCase().includes(filter)) && i.date.toLowerCase().includes(dFilter));
-      await navigator.clipboard.writeText(visibleItems.map(getDisplayValue).join(', '));
+      const copied = await copyTextToClipboard(visibleItems.map(getDisplayValue).join(', '));
+      if (!copied) return;
       visibleItems.forEach(i => { i.copied = true; });
       const btn = document.getElementById('copy-all-btn');
       btn.innerText = `✓ Copied ${visibleItems.length}!`;

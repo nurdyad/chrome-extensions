@@ -174,6 +174,9 @@ MailroomNavigator access is now owner-controlled and stored by the local trigger
 
 Notes:
 
+- `Hybrid` with `Open Access Mode` is now the default deployment mode for this repo
+- new GitHub installs are not blocked from Navigator, Job Panel, dashboard hover tools, or other browser-side features
+- localhost-backed tools such as `Superblocks UUID Lookup`, `Create Linear Issue`, `Slack Sync`, `Trigger Linear`, and `Reconcile Linear` remain visible, but still require the optional local trigger service when someone wants to use them
 - access is matched against the signed-in BetterLetter user email
 - only `nur.siddique@dyad.net` can manage access
 - owner access is always full
@@ -183,6 +186,7 @@ Notes:
 - regular users only see the views and buttons that are enabled for them
 - current BetterLetter user is detected from the active BetterLetter session/tab
 - if identity is not detected, open a signed-in BetterLetter tab and reload the extension
+- if you want to stop access checks on the current machine, open the panel and enable `Open Access Mode on this machine` in `Access Service`
 - after updating the trigger server code, restart the local trigger service:
 
 ```bash
@@ -204,6 +208,7 @@ Host machine:
 Client machine:
 
 - if you want new installs to auto-bootstrap to the shared access service, set `sharedAccessServiceBaseUrl` in `MailroomNavigator/deployment_defaults.js` before distributing the extension
+- if you want new installs to skip feature gating completely, set `openAccessMode: true` in `MailroomNavigator/deployment_defaults.js` before distributing the extension
 - open the panel
 - in `BetterLetter Session Required`, set `Shared Access Service URL` to the host machine URL, for example `http://192.168.1.20:4817`
 - if the host uses `MAILROOMNAV_ACCESS_CONTROL_SHARED_KEY`, enter the same key in `Shared Access Key`
