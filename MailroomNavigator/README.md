@@ -47,6 +47,12 @@ Use `SETUP.md` for installation on a new machine.
   - `Collected`
   - `Service Level`
   - `CDB`
+  - `EMIS API Username`
+  - `EMIS API Password`
+  - `EMIS Web Username`
+  - `EMIS Web Password`
+  - `Docman Username`
+  - `Docman Password`
   - `Preparing`
   - `Edit`
   - `Review`
