@@ -152,6 +152,20 @@
           </button>
         </div>
 
+        <div id="docmanToolSection" class="section-container" style="margin-top: 12px;">
+          <h3>Docman Tools</h3>
+          <label>Run local Docman actions for the selected practice</label>
+          <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+            <button id="runDocmanLoginBtn" class="btn btn-sm" type="button" disabled>Login</button>
+            <button id="runDocmanVerifyBtn" class="btn btn-sm" type="button" disabled>Verify</button>
+            <button id="runDocmanCreateGroupBtn" class="btn btn-sm" type="button" disabled>Create Group</button>
+            <button id="runDocmanCleanProcessingBtn" class="btn btn-sm" type="button" disabled>Clean Processing</button>
+            <button id="runDocmanCleanFilingBtn" class="btn btn-sm" type="button" disabled>Clean Filing</button>
+            <button id="runDocmanOnboardingBtn" class="btn btn-sm" type="button" disabled>Onboarding</button>
+          </div>
+          <div id="docmanToolStatus" class="validation-badge neutral" style="margin-top: 10px; white-space: pre-wrap;">Select a practice to run Docman tools.</div>
+        </div>
+
         <div class="section-container jobs-section">
           <div class="jobs-shell">
             <section class="job-panel job-panel-unified">

@@ -23,6 +23,7 @@ let practiceCacheRefreshPromise = null;
 const BETTERLETTER_ORIGIN = 'https://app.betterletter.ai';
 const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
 const LIVE_COUNTS_CACHE_TTL_MS = 45 * 1000;
+const PRACTICE_EHR_SETTINGS_CACHE_TTL_MS = 2 * 60 * 1000;
 const LIVE_COUNTS_TEMP_TAB_COOLDOWN_MS = 30 * 1000;
 const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
 const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
@@ -40,6 +41,8 @@ const ACCESS_CONTROL_REMOTE_TIMEOUT_MS = 6000;
 const ACCESS_CONTROL_SHARED_KEY_HEADER = 'X-MailroomNavigator-Access-Key';
 const DEPLOYMENT_DEFAULTS = globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS || {};
 const liveCountsCacheByOds = new Map();
+const practiceEhrSettingsCacheByOds = new Map();
+const practiceEhrSettingsResolveInFlightByOds = new Map();
 const liveCountsTempFetchInFlightByOds = new Map();
 const liveCountsLastTempFetchAtByOds = new Map();
 const liveCountsResolveInFlightByOds = new Map();
@@ -110,6 +113,8 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     triggerLinearReconcileRun: ['linear_reconcile'],
     restartLinearTriggerServer: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
     getLinearBotJobsTriggerStatus: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
+    runDocmanToolAction: ['practice_navigator'],
+    getDocmanToolRunStatus: ['practice_navigator'],
     lookupSuperblocksUuidStatus: ['job_panel']
 };
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
@@ -573,6 +578,7 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
         priority: clampLinearPriority(rawPayload.priority),
         labels: sanitizeLinearIssueLabelList(rawPayload.labels),
         stateName: sanitizeSingleLine(rawPayload.stateName, 120),
+        dedupeKey: sanitizeSingleLine(rawPayload.dedupeKey, 160),
         slack: sanitizeLinearSlackPayload(rawPayload?.slack)
     };
 }
@@ -645,6 +651,7 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
                 title: sanitizeSingleLine(serverPayload?.issue?.title, 240),
                 url: sanitizeSingleLine(serverPayload?.issue?.url, 1000)
             },
+            duplicate: Boolean(serverPayload?.duplicate),
             team: {
                 key: sanitizeSingleLine(serverPayload?.team?.key, 32),
                 name: sanitizeSingleLine(serverPayload?.team?.name, 120)
@@ -735,6 +742,69 @@ function sanitizeLinearTriggerRun(rawRun = null) {
         issueCandidatesTotal: Number.isFinite(Number(rawRun.issueCandidatesTotal)) ? Number(rawRun.issueCandidatesTotal) : 0,
         floodMode: Boolean(rawRun.floodMode),
         slackNotification: sanitizeLinearSlackResult(rawRun.slackNotification)
+    };
+}
+
+function normalizeDocmanToolAction(rawAction) {
+    const normalized = sanitizeSingleLine(rawAction, 40).toLowerCase();
+    if (normalized === 'login') return 'login';
+    if (normalized === 'verify') return 'verify';
+    if (['create-group', 'create_group', 'creategroup', 'group'].includes(normalized)) return 'create-group';
+    if (['clean-processing', 'clean_processing', 'processing'].includes(normalized)) return 'clean-processing';
+    if (['clean-filing', 'clean_filing', 'filing'].includes(normalized)) return 'clean-filing';
+    if (normalized === 'onboarding') return 'onboarding';
+    return '';
+}
+
+function sanitizeDocmanToolUsernames(rawUsernames = []) {
+    if (!Array.isArray(rawUsernames)) return [];
+    const seen = new Set();
+    const usernames = [];
+    rawUsernames.forEach((value) => {
+        const username = sanitizeSingleLine(value, 120);
+        if (!username) return;
+        const key = username.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        usernames.push(username);
+    });
+    return usernames.slice(0, 500);
+}
+
+function sanitizeDocmanToolRunPayload(rawPayload = {}) {
+    return {
+        action: normalizeDocmanToolAction(rawPayload?.action),
+        practiceName: sanitizeSingleLine(rawPayload?.practiceName, 240),
+        odsCode: sanitizeSingleLine(rawPayload?.odsCode, 16).toUpperCase(),
+        groupName: sanitizeSingleLine(rawPayload?.groupName, 240),
+        usernames: sanitizeDocmanToolUsernames(rawPayload?.usernames),
+        onboardingInputFolderName: sanitizeSingleLine(rawPayload?.onboardingInputFolderName, 240),
+        docmanUsername: sanitizeSingleLine(rawPayload?.docmanUsername, 240),
+        docmanPassword: String(rawPayload?.docmanPassword ?? '').trim().slice(0, 240)
+    };
+}
+
+function sanitizeDocmanToolRun(rawRun = null) {
+    if (!rawRun || typeof rawRun !== 'object') return null;
+    const status = sanitizeSingleLine(rawRun.status, 32).toLowerCase();
+    const exitCode = typeof rawRun.exitCode === 'number' && Number.isFinite(rawRun.exitCode)
+        ? rawRun.exitCode
+        : null;
+    return {
+        runId: sanitizeSingleLine(rawRun.runId, 80),
+        startedAt: sanitizeSingleLine(rawRun.startedAt, 80),
+        endedAt: sanitizeSingleLine(rawRun.endedAt, 80),
+        status: ['running', 'success', 'failed'].includes(status) ? status : '',
+        action: normalizeDocmanToolAction(rawRun.action),
+        practiceName: sanitizeSingleLine(rawRun.practiceName, 240),
+        odsCode: sanitizeSingleLine(rawRun.odsCode, 16).toUpperCase(),
+        groupName: sanitizeSingleLine(rawRun.groupName, 240),
+        usernamesCount: Number.isFinite(Number(rawRun.usernamesCount)) ? Number(rawRun.usernamesCount) : 0,
+        onboardingInputFolderName: sanitizeSingleLine(rawRun.onboardingInputFolderName, 240),
+        exitCode,
+        signal: sanitizeSingleLine(rawRun.signal, 32),
+        error: sanitizeSingleLine(rawRun.error, 260),
+        summaryLines: sanitizeLinearTriggerRunLines(rawRun.summaryLines, 10, 240)
     };
 }
 
@@ -1507,6 +1577,105 @@ async function handleGetLinearBotJobsTriggerStatus() {
                 running: Boolean(payload.running),
                 activeRun: sanitizeLinearTriggerRun(payload.activeRun),
                 lastRun: sanitizeLinearTriggerRun(payload.lastRun),
+                serverTime: sanitizeSingleLine(payload.serverTime, 80)
+            }
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
+async function handleRunDocmanToolAction(rawPayload) {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Docman Tools',
+            'These actions run the local docman-tool on your machine, so they still need the optional local trigger service.'
+        );
+    }
+    try {
+        const payload = sanitizeDocmanToolRunPayload(rawPayload);
+        const ehrSettings = /^[A-Z]\d{5}$/.test(payload.odsCode)
+            ? await fetchPracticeEhrSettingsByOds(payload.odsCode)
+            : createEmptyPracticeEhrSettings();
+        const directDocmanPayload = sanitizeDocmanToolRunPayload({
+            ...payload,
+            docmanUsername: ehrSettings.docmanUsername || payload.docmanUsername,
+            docmanPassword: ehrSettings.docmanPassword || payload.docmanPassword
+        });
+
+        if (!directDocmanPayload.docmanUsername || !directDocmanPayload.docmanPassword) {
+            return {
+                success: false,
+                error: 'Could not read Docman username/password from BetterLetter settings. Keep a signed-in BetterLetter tab open for this practice and retry.'
+            };
+        }
+
+        const { response, payload: serverPayload } = await callLinearTriggerServer('/docman/run', {
+            method: 'POST',
+            body: directDocmanPayload
+        });
+        const run = sanitizeDocmanToolRun(serverPayload?.run);
+
+        if (response.status === 409) {
+            return {
+                success: false,
+                running: true,
+                run,
+                error: sanitizeSingleLine(serverPayload?.error, 220) || 'A Docman tool run is already in progress.'
+            };
+        }
+
+        if (!response.ok || !serverPayload?.ok) {
+            const serverError = sanitizeSingleLine(serverPayload?.error, 240);
+            if (response.status === 404 || serverError.toLowerCase() === 'not found.') {
+                return {
+                    success: false,
+                    error: 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).'
+                };
+            }
+            return {
+                success: false,
+                error: serverError || `Trigger service failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            run
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: normalizeLinearTriggerError(error)
+        };
+    }
+}
+
+async function handleGetDocmanToolRunStatus() {
+    if (isServerlessLiteModeEnabled()) {
+        return buildServerlessLiteUnsupportedResponse(
+            'Docman tool status',
+            'Serverless Lite mode does not run the local docman-tool trigger service.'
+        );
+    }
+    try {
+        const { response, payload } = await callLinearTriggerServer('/docman/status', { method: 'GET' });
+        if (!response.ok || !payload?.ok) {
+            return {
+                success: false,
+                error: sanitizeSingleLine(payload?.error, 240) || `Trigger service health failed with status ${response.status}.`
+            };
+        }
+
+        return {
+            success: true,
+            status: {
+                running: Boolean(payload.running),
+                activeRun: sanitizeDocmanToolRun(payload.activeRun),
+                lastRun: sanitizeDocmanToolRun(payload.lastRun),
                 serverTime: sanitizeSingleLine(payload.serverTime, 80)
             }
         };
@@ -3321,34 +3490,397 @@ async function handleGetAccessControlServiceHealth() {
     }
 }
 
-async function fetchPracticeCdbByOds(odsCode, preferredTabId = null) {
-    const normalizedOds = String(odsCode || '').trim();
-    if (!normalizedOds) return '';
+function createEmptyPracticeEhrSettings() {
+    return {
+        practiceCdb: '',
+        emisApiUsername: '',
+        emisApiPassword: '',
+        emisWebUsername: '',
+        emisWebPassword: '',
+        emisWebDummyNhsNumber: '',
+        docmanUsername: '',
+        docmanPassword: '',
+        docmanDummyNhsNumber: '',
+        docmanInputFolder: '',
+        docmanProcessingFolder: '',
+        docmanFilingFolder: '',
+        docmanRejectedFolder: ''
+    };
+}
 
-    const cdbFromSessionFetch = await runInExistingBetterLetterTab(async (targetOds) => {
+function getCachedPracticeEhrSettings(odsCode, maxAgeMs = PRACTICE_EHR_SETTINGS_CACHE_TTL_MS) {
+    const key = String(odsCode || '').trim().toUpperCase();
+    const cached = practiceEhrSettingsCacheByOds.get(key);
+    if (!cached || typeof cached !== 'object') return null;
+    if (!Number.isFinite(cached.timestamp)) return null;
+    if (Date.now() - cached.timestamp > maxAgeMs) return null;
+    return cached.details && typeof cached.details === 'object'
+        ? { ...createEmptyPracticeEhrSettings(), ...cached.details }
+        : null;
+}
+
+function setCachedPracticeEhrSettings(odsCode, details, source = 'unknown') {
+    const key = String(odsCode || '').trim().toUpperCase();
+    if (!key || !details || typeof details !== 'object') return;
+    practiceEhrSettingsCacheByOds.set(key, {
+        details: { ...createEmptyPracticeEhrSettings(), ...details },
+        source: String(source || 'unknown'),
+        timestamp: Date.now()
+    });
+}
+
+async function fetchPracticeEhrSettingsByOds(odsCode, preferredTabId = null) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!normalizedOds) return createEmptyPracticeEhrSettings();
+
+    const cached = getCachedPracticeEhrSettings(normalizedOds);
+    if (cached) return cached;
+    if (practiceEhrSettingsResolveInFlightByOds.has(normalizedOds)) {
+        return practiceEhrSettingsResolveInFlightByOds.get(normalizedOds);
+    }
+
+    const promise = runInExistingBetterLetterTab(async (targetOds) => {
+        const createEmptyDetails = () => ({
+            practiceCdb: '',
+            emisApiUsername: '',
+            emisApiPassword: '',
+            emisWebUsername: '',
+            emisWebPassword: '',
+            emisWebDummyNhsNumber: '',
+            docmanUsername: '',
+            docmanPassword: '',
+            docmanDummyNhsNumber: '',
+            docmanInputFolder: '',
+            docmanProcessingFolder: '',
+            docmanFilingFolder: '',
+            docmanRejectedFolder: ''
+        });
+
+        const normalizeText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const SECTION_TITLES = ['EMIS API Settings', 'EMIS Web Settings', 'Docman Settings'];
+        const SECTION_TITLE_SET = new Set(SECTION_TITLES.map((title) => normalizeText(title).toLowerCase()));
+
+        const getOwnText = (element) => {
+            if (!(element instanceof Element)) return '';
+            return Array.from(element.childNodes || [])
+                .filter((node) => node.nodeType === Node.TEXT_NODE)
+                .map((node) => node.textContent || '')
+                .join(' ');
+        };
+
+        const getHeadingText = (element) => {
+            if (!(element instanceof Element)) return '';
+            const preferredText = normalizeText(getOwnText(element));
+            if (preferredText) return preferredText;
+            const ariaText = normalizeText(element.getAttribute('aria-label') || '');
+            if (ariaText) return ariaText;
+            return normalizeText(element.textContent || '');
+        };
+
+        const getControlForLabel = (label) => {
+            if (!(label instanceof Element)) return null;
+            const ownerDoc = label.ownerDocument || document;
+
+            if (label.control) return label.control;
+
+            if (label.htmlFor) {
+                const byId = ownerDoc.getElementById(label.htmlFor);
+                if (byId) return byId;
+            }
+
+            const nested = label.querySelector('input, select, textarea');
+            if (nested) return nested;
+
+            let sibling = label.nextElementSibling;
+            while (sibling) {
+                if (sibling.matches?.('input, select, textarea')) return sibling;
+                const insideSibling = sibling.querySelector?.('input, select, textarea');
+                if (insideSibling) return insideSibling;
+                sibling = sibling.nextElementSibling;
+            }
+
+            const parent = label.parentElement;
+            if (parent) {
+                const controls = parent.querySelectorAll('input, select, textarea');
+                if (controls.length === 1) return controls[0];
+            }
+
+            return null;
+        };
+
+        const findFieldByLabel = (pattern, root = document, options = {}) => {
+            const labels = Array.from(root.querySelectorAll('label'));
+            const requiredType = String(options.type || '').trim().toLowerCase();
+
+            for (const label of labels) {
+                const labelText = normalizeText(label.textContent).toLowerCase();
+                if (!pattern.test(labelText)) continue;
+
+                const control = getControlForLabel(label);
+                if (!control) continue;
+
+                const controlType = normalizeText(control.getAttribute?.('type') || control.type).toLowerCase();
+                if (requiredType && controlType !== requiredType) continue;
+
+                return control;
+            }
+
+            return null;
+        };
+
+        const findInputByHints = (hints, root = document, options = {}) => {
+            const inputs = Array.from(root.querySelectorAll('input, select, textarea'));
+            const preferPassword = Boolean(options.preferPassword);
+            const normalizedHints = hints.map((hint) => normalizeText(hint).toLowerCase());
+
+            const candidates = inputs.filter((input) => {
+                const type = normalizeText(input.getAttribute?.('type') || input.type).toLowerCase();
+                if (type === 'hidden') return false;
+                if (preferPassword && type === 'password') return true;
+
+                const haystack = normalizeText([
+                    input.getAttribute?.('aria-label') || '',
+                    input.getAttribute?.('placeholder') || '',
+                    input.getAttribute?.('name') || '',
+                    input.getAttribute?.('id') || ''
+                ].join(' ')).toLowerCase();
+
+                return normalizedHints.every((hint) => haystack.includes(hint));
+            });
+
+            return candidates[0] || null;
+        };
+
+        const findSectionHeading = (sectionTitle, root = document) => {
+            const normalizedTitle = normalizeText(sectionTitle).toLowerCase();
+            const candidates = Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6, legend, strong, [role="heading"], div, span, p'))
+                .map((element) => ({
+                    element,
+                    text: getHeadingText(element).toLowerCase()
+                }))
+                .filter(({ text }) => text === normalizedTitle)
+                .sort((a, b) => a.text.length - b.text.length || a.element.textContent.length - b.element.textContent.length);
+
+            return candidates[0]?.element || null;
+        };
+
+        const getContainedSectionTitles = (root) => {
+            return new Set(
+                Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6, legend, strong, [role="heading"], div, span, p'))
+                    .map((element) => getHeadingText(element).toLowerCase())
+                    .filter((text) => SECTION_TITLE_SET.has(text))
+            );
+        };
+
+        const findSectionContainer = (sectionTitle, root = document) => {
+            const normalizedTitle = normalizeText(sectionTitle).toLowerCase();
+            const heading = findSectionHeading(sectionTitle, root);
+            if (!heading) return null;
+
+            let fallback = null;
+            let current = heading;
+            for (let depth = 0; depth < 8 && current; depth += 1) {
+                const parent = current.parentElement;
+                if (!parent) break;
+                const inputCount = parent.querySelectorAll('input, select, textarea').length;
+                if (!fallback && inputCount >= 2) {
+                    fallback = parent;
+                }
+
+                const containedSectionTitles = getContainedSectionTitles(parent);
+                if (inputCount >= 2 && containedSectionTitles.size === 1 && containedSectionTitles.has(normalizedTitle)) {
+                    return parent;
+                }
+
+                current = parent;
+            }
+
+            return fallback;
+        };
+
+        const getFieldValue = (field) => {
+            if (!(field instanceof Element)) return '';
+            const propertyValue = typeof field.value === 'string' ? field.value : '';
+            const attributeValue = typeof field.getAttribute === 'function' ? field.getAttribute('value') || '' : '';
+            return normalizeText(propertyValue || attributeValue || '');
+        };
+
+        const findFirstInputByType = (root, allowedTypes) => {
+            if (!(root instanceof Element || root instanceof Document)) return null;
+            const normalizedTypes = new Set(allowedTypes.map((type) => normalizeText(type).toLowerCase()));
+            return Array.from(root.querySelectorAll('input')).find((input) => {
+                const inputType = normalizeText(input.getAttribute('type') || input.type || 'text').toLowerCase();
+                return normalizedTypes.has(inputType);
+            }) || null;
+        };
+
+        const findFieldByConfig = (section, config = {}) => {
+            const labelPatterns = Array.isArray(config.labelPatterns) ? config.labelPatterns : [];
+            for (const pattern of labelPatterns) {
+                const field = findFieldByLabel(pattern, section, { type: config.type });
+                if (field) return field;
+            }
+
+            const hintSets = Array.isArray(config.hints) ? config.hints : [];
+            for (const hints of hintSets) {
+                const field = findInputByHints(hints, section, { preferPassword: config.preferPassword });
+                if (field) return field;
+            }
+
+            const allowedTypes = Array.isArray(config.allowedTypes) ? config.allowedTypes : [];
+            if (allowedTypes.length > 0) {
+                return findFirstInputByType(section, allowedTypes);
+            }
+
+            return null;
+        };
+
+        const readSectionFields = (doc, sectionTitle, fieldConfigs) => {
+            const section = findSectionContainer(sectionTitle, doc);
+            if (!section) {
+                return Object.fromEntries(fieldConfigs.map((config) => [config.key, '']));
+            }
+
+            return Object.fromEntries(fieldConfigs.map((config) => {
+                const field = findFieldByConfig(section, config);
+                return [config.key, getFieldValue(field)];
+            }));
+        };
+
         try {
             const response = await fetch(`/admin_panel/practices/${encodeURIComponent(targetOds)}`, {
                 credentials: 'include',
                 cache: 'no-store'
             });
-            if (!response.ok) return '';
+            if (!response.ok) return createEmptyDetails();
 
             const html = await response.text();
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const cdbInput = doc.getElementById('ehr_settings[practice_cdb]') ||
                 doc.querySelector("input[name='ehr_settings[practice_cdb]']");
+            const emisApi = readSectionFields(doc, 'EMIS API Settings', [
+                {
+                    key: 'username',
+                    labelPatterns: [/username/i],
+                    hints: [['username'], ['user', 'name']],
+                    allowedTypes: ['text', 'email']
+                },
+                {
+                    key: 'password',
+                    labelPatterns: [/password/i],
+                    hints: [['password']],
+                    type: 'password',
+                    preferPassword: true,
+                    allowedTypes: ['password']
+                }
+            ]);
+            const emisWeb = readSectionFields(doc, 'EMIS Web Settings', [
+                {
+                    key: 'username',
+                    labelPatterns: [/username/i],
+                    hints: [['username'], ['user', 'name']],
+                    allowedTypes: ['text', 'email']
+                },
+                {
+                    key: 'password',
+                    labelPatterns: [/password/i],
+                    hints: [['password']],
+                    type: 'password',
+                    preferPassword: true,
+                    allowedTypes: ['password']
+                },
+                {
+                    key: 'dummyNhsNumber',
+                    labelPatterns: [/dummy\s*nhs\s*number/i],
+                    hints: [['dummy', 'nhs'], ['nhs', 'number']],
+                    allowedTypes: ['text', 'number']
+                }
+            ]);
+            const docman = readSectionFields(doc, 'Docman Settings', [
+                {
+                    key: 'username',
+                    labelPatterns: [/username/i],
+                    hints: [['username'], ['user', 'name']],
+                    allowedTypes: ['text', 'email']
+                },
+                {
+                    key: 'password',
+                    labelPatterns: [/password/i],
+                    hints: [['password']],
+                    type: 'password',
+                    preferPassword: true,
+                    allowedTypes: ['password']
+                },
+                {
+                    key: 'dummyNhsNumber',
+                    labelPatterns: [/dummy\s*nhs\s*number/i],
+                    hints: [['dummy', 'nhs'], ['nhs', 'number']],
+                    allowedTypes: ['text', 'number']
+                },
+                {
+                    key: 'inputFolder',
+                    labelPatterns: [/input\s*folder/i],
+                    hints: [['input', 'folder']],
+                    allowedTypes: ['text']
+                },
+                {
+                    key: 'processingFolder',
+                    labelPatterns: [/processing\s*folder/i],
+                    hints: [['processing', 'folder']],
+                    allowedTypes: ['text']
+                },
+                {
+                    key: 'filingFolder',
+                    labelPatterns: [/filing\s*folder/i],
+                    hints: [['filing', 'folder']],
+                    allowedTypes: ['text']
+                },
+                {
+                    key: 'rejectedFolder',
+                    labelPatterns: [/rejected\s*folder/i],
+                    hints: [['rejected', 'folder']],
+                    allowedTypes: ['text']
+                }
+            ]);
 
-            return (cdbInput?.value || '').trim();
+            return {
+                practiceCdb: getFieldValue(cdbInput),
+                emisApiUsername: emisApi.username,
+                emisApiPassword: emisApi.password,
+                emisWebUsername: emisWeb.username,
+                emisWebPassword: emisWeb.password,
+                emisWebDummyNhsNumber: emisWeb.dummyNhsNumber,
+                docmanUsername: docman.username,
+                docmanPassword: docman.password,
+                docmanDummyNhsNumber: docman.dummyNhsNumber,
+                docmanInputFolder: docman.inputFolder,
+                docmanProcessingFolder: docman.processingFolder,
+                docmanFilingFolder: docman.filingFolder,
+                docmanRejectedFolder: docman.rejectedFolder
+            };
         } catch (e) {
-            return '';
+            return createEmptyDetails();
         }
-    }, [normalizedOds], preferredTabId);
+    }, [normalizedOds], preferredTabId)
+        .then((detailsFromSessionFetch) => {
+            const details = detailsFromSessionFetch && typeof detailsFromSessionFetch === 'object'
+                ? { ...createEmptyPracticeEhrSettings(), ...detailsFromSessionFetch }
+                : createEmptyPracticeEhrSettings();
+            setCachedPracticeEhrSettings(normalizedOds, details, 'session-fetch');
+            return details;
+        })
+        .catch(() => createEmptyPracticeEhrSettings())
+        .finally(() => {
+            practiceEhrSettingsResolveInFlightByOds.delete(normalizedOds);
+        });
 
-    if (typeof cdbFromSessionFetch === 'string' && cdbFromSessionFetch.trim()) {
-        return cdbFromSessionFetch.trim();
-    }
+    practiceEhrSettingsResolveInFlightByOds.set(normalizedOds, promise);
+    return promise;
+}
 
-    return '';
+async function fetchPracticeCdbByOds(odsCode, preferredTabId = null) {
+    const details = await fetchPracticeEhrSettingsByOds(odsCode, preferredTabId);
+    return String(details?.practiceCdb || '').trim();
 }
 
 function normalizeLetterCountValue(rawValue) {
@@ -4775,6 +5307,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'getLinearBotJobsTriggerStatus') {
             return await handleGetLinearBotJobsTriggerStatus();
         }
+        if (message.action === 'runDocmanToolAction') {
+            return await handleRunDocmanToolAction(message.payload);
+        }
+        if (message.action === 'getDocmanToolRunStatus') {
+            return await handleGetDocmanToolRunStatus();
+        }
         if (message.action === 'lookupSuperblocksUuidStatus') {
             return await handleLookupSuperblocksUuidStatus(message.payload);
         }
@@ -4793,6 +5331,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'getPracticeStatus') {
             const normalizedOds = String(message.odsCode || '').trim().toUpperCase();
             let p = Object.values(practiceCache).find(x => x.ods === normalizedOds);
+            const preferredTabId = typeof message?.preferredTabId === 'number' ? message.preferredTabId : null;
 
             // Return fast using cached live counts, and refresh counts in background.
             let liveMailroomCounts = getCachedLiveCounts(normalizedOds, LIVE_COUNTS_CACHE_TTL_MS * 4) || createEmptyLiveCounts();
@@ -4805,19 +5344,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
-            if (p && looksInvalidCdb && /^[A-Z]\d{5}$/.test(normalizedOds)) {
-                fetchPracticeCdbByOds(
-                    normalizedOds,
-                    typeof message?.preferredTabId === 'number' ? message.preferredTabId : null
-                )
-                    .then(async (cdb) => {
-                        if (!cdb) return;
-                        const refreshed = { ...p, cdb, practiceCDB: cdb, timestamp: Date.now() };
-                        const cacheKey = `${refreshed.name} (${refreshed.ods})`;
-                        practiceCache[cacheKey] = refreshed;
-                        await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
-                    })
-                    .catch(() => undefined);
+            const ehrSettings = /^[A-Z]\d{5}$/.test(normalizedOds)
+                ? await fetchPracticeEhrSettingsByOds(normalizedOds, preferredTabId)
+                : createEmptyPracticeEhrSettings();
+
+            const resolvedPracticeCdb = String(ehrSettings.practiceCdb || p?.cdb || '').trim();
+            if (p && looksInvalidCdb && resolvedPracticeCdb) {
+                const refreshed = { ...p, cdb: resolvedPracticeCdb, practiceCDB: resolvedPracticeCdb, timestamp: Date.now() };
+                const cacheKey = `${refreshed.name} (${refreshed.ods})`;
+                practiceCache[cacheKey] = refreshed;
+                p = refreshed;
+                await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
             }
 
             return {
@@ -4825,7 +5362,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 status: {
                     ...p,
                     odsCode: p?.ods || normalizedOds || '',
-                    practiceCDB: p?.cdb || 'N/A',
+                    practiceCDB: resolvedPracticeCdb || p?.cdb || '',
+                    emisApiUsername: ehrSettings.emisApiUsername || '',
+                    emisApiPassword: ehrSettings.emisApiPassword || '',
+                    emisWebUsername: ehrSettings.emisWebUsername || '',
+                    emisWebPassword: ehrSettings.emisWebPassword || '',
+                    emisWebDummyNhsNumber: ehrSettings.emisWebDummyNhsNumber || '',
+                    docmanUsername: ehrSettings.docmanUsername || '',
+                    docmanPassword: ehrSettings.docmanPassword || '',
+                    docmanDummyNhsNumber: ehrSettings.docmanDummyNhsNumber || '',
+                    docmanInputFolder: ehrSettings.docmanInputFolder || '',
+                    docmanProcessingFolder: ehrSettings.docmanProcessingFolder || '',
+                    docmanFilingFolder: ehrSettings.docmanFilingFolder || '',
+                    docmanRejectedFolder: ehrSettings.docmanRejectedFolder || '',
                     liveMailroomCounts
                 }
             };
