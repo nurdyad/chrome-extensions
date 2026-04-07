@@ -561,6 +561,7 @@ function applyExtensionFeatureAccessToUi() {
     }
 
     setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
+    setElementVisible('docmanToolSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
     setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
@@ -751,8 +752,14 @@ function copyUrlsToClipboard(urls, label = 'URLs') {
         return;
     }
 
-    navigator.clipboard.writeText(cleanUrls.join('\n'))
-        .then(() => showToast(`${cleanUrls.length} ${label} copied.`))
+    copyTextToClipboard(cleanUrls.join('\n'))
+        .then((copied) => {
+            if (copied) {
+                showToast(`${cleanUrls.length} ${label} copied.`);
+                return;
+            }
+            showToast('Copy failed.');
+        })
         .catch(() => showToast('Copy failed.'));
 }
 
@@ -1932,6 +1939,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const openBulkActionBtn = document.getElementById('openBulkActionBtn');
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
 
+    const runDocmanLoginBtn = document.getElementById('runDocmanLoginBtn');
+    const runDocmanVerifyBtn = document.getElementById('runDocmanVerifyBtn');
+    const runDocmanCreateGroupBtn = document.getElementById('runDocmanCreateGroupBtn');
+    const runDocmanCleanProcessingBtn = document.getElementById('runDocmanCleanProcessingBtn');
+    const runDocmanCleanFilingBtn = document.getElementById('runDocmanCleanFilingBtn');
+    const runDocmanOnboardingBtn = document.getElementById('runDocmanOnboardingBtn');
+    const docmanToolStatus = document.getElementById('docmanToolStatus');
     const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
     const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
     const runEmailFormatterToolBtn = document.getElementById('runEmailFormatterToolBtn');
@@ -1990,6 +2004,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Keep this aligned with the trigger-server Slack delay so the operator sees the
     // terminal run state in-panel before the summary is pushed to Slack.
     const LINEAR_TRIGGER_STATUS_AUTO_CLEAR_MS = 2000;
+    const DOCMAN_TOOL_STATUS_POLL_INTERVAL_MS = 1500;
+    const DOCMAN_TOOL_STATUS_POLL_WINDOW_MS = 45 * 60 * 1000;
+    let docmanToolStatusPollTimer = null;
+    let docmanToolStatusPollDeadlineMs = 0;
+    let docmanToolRunIsBusy = false;
     let linearTriggerStatusPollTimer = null;
     let linearTriggerStatusPollDeadlineMs = 0;
     let linearTriggerStatusClearTimer = null;
@@ -2319,6 +2338,638 @@ document.addEventListener('DOMContentLoaded', async () => {
             closeBookmarkletToolModal();
         }
     });
+
+    const DOCMAN_ACTION_LABELS = {
+        login: 'Login',
+        verify: 'Verify',
+        'create-group': 'Create Group',
+        'clean-processing': 'Clean Processing',
+        'clean-filing': 'Clean Filing',
+        onboarding: 'Onboarding'
+    };
+    const DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME = 'zz BL Input. Do not touch';
+    const DOCMAN_ONBOARDING_NOT_IN_FOLDER_NAME = 'Not in a folder';
+    const DOCMAN_TOOL_DEFAULT_STATUS_MESSAGES = new Set([
+        'Select a practice to run Docman tools.',
+        'Choose a Docman action for the selected practice.'
+    ]);
+    const trimDocmanField = (value, maxLength = 4096) => String(value || '').trim().slice(0, maxLength);
+    const trimDocmanMultiline = (value, maxLength = 12000) => String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\u0000/g, '')
+        .trim()
+        .slice(0, maxLength);
+    const formatDocmanToolTime = (value) => {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return trimDocmanField(value, 80);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+    const getDocmanActionButtons = () => ([
+        runDocmanLoginBtn,
+        runDocmanVerifyBtn,
+        runDocmanCreateGroupBtn,
+        runDocmanCleanProcessingBtn,
+        runDocmanCleanFilingBtn,
+        runDocmanOnboardingBtn
+    ].filter(Boolean));
+    const getDocmanActionLabel = (action) => DOCMAN_ACTION_LABELS[action] || 'Docman Tool';
+    const isDocmanToolDefaultStatusText = (value) => DOCMAN_TOOL_DEFAULT_STATUS_MESSAGES.has(trimDocmanField(value, 260));
+    const getDocmanToolDefaultStatusMessage = () => {
+        const odsCode = String(state.currentSelectedOdsCode || '').trim().toUpperCase();
+        if (/^[A-Z]\d{5}$/.test(odsCode)) {
+            return 'Choose a Docman action for the selected practice.';
+        }
+        return 'Select a practice to run Docman tools.';
+    };
+    const setDocmanToolStatus = (message, tone = null) => {
+        if (!docmanToolStatus) return;
+        const normalizedMessage = trimDocmanField(message, 4000) || getDocmanToolDefaultStatusMessage();
+        docmanToolStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') docmanToolStatus.classList.add('valid');
+        else if (tone === 'invalid') docmanToolStatus.classList.add('invalid');
+        else docmanToolStatus.classList.add('neutral');
+        docmanToolStatus.textContent = normalizedMessage;
+    };
+    const syncDocmanToolButtons = () => {
+        const hasConcretePractice = /^[A-Z]\d{5}$/.test(String(state.currentSelectedOdsCode || '').trim().toUpperCase());
+        getDocmanActionButtons().forEach((button) => {
+            button.disabled = docmanToolRunIsBusy || !hasConcretePractice;
+        });
+    };
+    const parseDocmanUsernames = (rawValue) => {
+        const seen = new Set();
+        return trimDocmanMultiline(rawValue, 12000)
+            .split(/[\n,;]+/)
+            .map((value) => trimDocmanField(value, 120))
+            .filter(Boolean)
+            .filter((value) => {
+                const key = value.toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .slice(0, 500);
+    };
+    const resolveSelectedPracticeDetails = () => {
+        const odsCode = Navigator.requireSelectedOdsCode();
+        const practiceMatch = Object.values(state.cachedPractices || {}).find((practice) => {
+            return String(practice?.ods || '').trim().toUpperCase() === odsCode;
+        });
+        let practiceName = trimDocmanField(practiceMatch?.name, 240);
+
+        if (!practiceName) {
+            const inputValue = trimDocmanField(document.getElementById('practiceInput')?.value, 240);
+            const strippedInput = trimDocmanField(inputValue.replace(/\(\s*[A-Z]\d{5}\s*\)\s*$/, ''), 240);
+            if (strippedInput && !/^[A-Z]\d{5}$/.test(strippedInput)) {
+                practiceName = strippedInput;
+            }
+        }
+
+        if (!practiceName) {
+            throw new Error('Select the practice from suggestions first so MailroomNavigator can resolve the practice name.');
+        }
+
+        return { odsCode, practiceName };
+    };
+    const buildDocmanToolPayload = (action, extraPayload = {}) => {
+        const practice = resolveSelectedPracticeDetails();
+        return {
+            action,
+            practiceName: practice.practiceName,
+            odsCode: practice.odsCode,
+            ...extraPayload
+        };
+    };
+    const fetchSelectedPracticeStatus = async (odsCode) => {
+        const normalizedOds = trimDocmanField(odsCode, 16).toUpperCase();
+        if (!normalizedOds) {
+            throw new Error('Select a practice first.');
+        }
+
+        const response = await chrome.runtime.sendMessage({
+            action: 'getPracticeStatus',
+            odsCode: normalizedOds,
+            ...getProtectedActionPayload()
+        });
+
+        if (!response?.success || !response?.status) {
+            throw new Error(trimDocmanField(response?.error, 240) || 'Could not load practice Docman settings.');
+        }
+
+        return response.status;
+    };
+    const buildDocmanOnboardingFolderOptions = (practiceStatus = null) => {
+        const configuredInputFolderName = trimDocmanField(practiceStatus?.docmanInputFolder, 240);
+        const primaryValue = configuredInputFolderName || DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME;
+        const rawOptions = [
+            configuredInputFolderName
+                ? {
+                    value: configuredInputFolderName,
+                    label: 'Configured practice input folder',
+                    description: `BetterLetter setting: ${configuredInputFolderName}`
+                }
+                : {
+                    value: DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME,
+                    label: 'Default input folder',
+                    description: `Fallback: ${DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME}`
+                },
+            {
+                value: DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME,
+                label: DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME,
+                description: 'Use the standard BetterLetter Docman onboarding folder.'
+            },
+            {
+                value: DOCMAN_ONBOARDING_NOT_IN_FOLDER_NAME,
+                label: DOCMAN_ONBOARDING_NOT_IN_FOLDER_NAME,
+                description: 'Use the practice-specific no-folder setup.'
+            }
+        ];
+
+        const seen = new Set();
+        const options = rawOptions.filter((option) => {
+            const key = trimDocmanField(option?.value, 240).toLowerCase();
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+
+        return {
+            configuredInputFolderName,
+            primaryValue,
+            options
+        };
+    };
+    const formatDocmanToolRunSummary = (run, isActive = false) => {
+        if (!run || typeof run !== 'object') return '';
+        const actionLabel = getDocmanActionLabel(trimDocmanField(run.action, 40));
+        const practiceLabel = trimDocmanField(run.practiceName, 120) || 'Selected practice';
+        const odsLabel = trimDocmanField(run.odsCode, 16);
+        const practiceSummary = odsLabel ? `${practiceLabel} (${odsLabel})` : practiceLabel;
+        const startedAt = formatDocmanToolTime(run.startedAt);
+        const endedAt = formatDocmanToolTime(run.endedAt);
+        const lines = Array.isArray(run.summaryLines)
+            ? run.summaryLines.map((line) => trimDocmanField(line, 240)).filter(Boolean).slice(0, 8)
+            : [];
+
+        let headline = '';
+        if (isActive || String(run.status || '').toLowerCase() === 'running') {
+            headline = `${actionLabel} for ${practiceSummary} is running${startedAt ? ` since ${startedAt}` : ''}.`;
+        } else if (String(run.status || '').toLowerCase() === 'success') {
+            headline = `${actionLabel} for ${practiceSummary} finished successfully${endedAt ? ` at ${endedAt}` : ''}.`;
+        } else {
+            const reason = trimDocmanField(run.error, 220) || (run.exitCode != null ? `exit code ${run.exitCode}` : 'run failed');
+            headline = `${actionLabel} for ${practiceSummary} failed${endedAt ? ` at ${endedAt}` : ''}: ${reason}`;
+        }
+
+        if (String(run.action || '').trim() == 'onboarding' && trimDocmanField(run.onboardingInputFolderName, 160)) {
+            lines.unshift(`Folder #4: ${trimDocmanField(run.onboardingInputFolderName, 160)}`);
+        }
+        if (String(run.action || '').trim() == 'verify' && Number.isFinite(Number(run.usernamesCount)) && Number(run.usernamesCount) > 0) {
+            lines.unshift(`Checked ${Number(run.usernamesCount)} username${Number(run.usernamesCount) === 1 ? '' : 's'}.`);
+        }
+        if (String(run.action || '').trim() == 'create-group' && trimDocmanField(run.groupName, 120)) {
+            lines.unshift(`Group: ${trimDocmanField(run.groupName, 120)}`);
+        }
+
+        const dedupedLines = [];
+        const seen = new Set();
+        lines.forEach((line) => {
+            const key = line.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            dedupedLines.push(line);
+        });
+
+        return dedupedLines.length ? [headline, ...dedupedLines].join('\n') : headline;
+    };
+    const fetchDocmanToolRunStatus = async () => {
+        const response = await chrome.runtime.sendMessage({
+            action: 'getDocmanToolRunStatus',
+            ...getProtectedActionPayload()
+        });
+        if (!response?.success || !response?.status) {
+            throw new Error(trimDocmanField(response?.error, 240) || 'Could not read Docman tool status.');
+        }
+        return response.status;
+    };
+    const applyDocmanToolStatus = (status) => {
+        if (!status || typeof status !== 'object') {
+            docmanToolRunIsBusy = false;
+            syncDocmanToolButtons();
+            setDocmanToolStatus(getDocmanToolDefaultStatusMessage(), 'neutral');
+            return false;
+        }
+
+        const activeRun = status.activeRun && typeof status.activeRun === 'object' ? status.activeRun : null;
+        const lastRun = status.lastRun && typeof status.lastRun === 'object' ? status.lastRun : null;
+
+        if (Boolean(status.running) && activeRun) {
+            docmanToolRunIsBusy = true;
+            syncDocmanToolButtons();
+            setDocmanToolStatus(formatDocmanToolRunSummary(activeRun, true), 'neutral');
+            return true;
+        }
+
+        docmanToolRunIsBusy = false;
+        syncDocmanToolButtons();
+
+        if (lastRun) {
+            const tone = String(lastRun.status || '').toLowerCase() === 'success' ? 'valid' : 'invalid';
+            setDocmanToolStatus(formatDocmanToolRunSummary(lastRun, false), tone);
+            return false;
+        }
+
+        setDocmanToolStatus(getDocmanToolDefaultStatusMessage(), 'neutral');
+        return false;
+    };
+    const stopDocmanToolStatusPolling = () => {
+        if (!docmanToolStatusPollTimer) return;
+        clearInterval(docmanToolStatusPollTimer);
+        docmanToolStatusPollTimer = null;
+        docmanToolStatusPollDeadlineMs = 0;
+    };
+    const pollDocmanToolStatus = async ({ silent = false } = {}) => {
+        try {
+            const status = await fetchDocmanToolRunStatus();
+            return applyDocmanToolStatus(status);
+        } catch (error) {
+            docmanToolRunIsBusy = false;
+            syncDocmanToolButtons();
+            if (!silent) {
+                const message = trimDocmanField(error?.message, 240) || 'Could not read Docman tool status.';
+                setDocmanToolStatus(message, 'invalid');
+            }
+            return false;
+        }
+    };
+    const startDocmanToolStatusPolling = () => {
+        stopDocmanToolStatusPolling();
+        docmanToolStatusPollDeadlineMs = Date.now() + DOCMAN_TOOL_STATUS_POLL_WINDOW_MS;
+
+        pollDocmanToolStatus({ silent: false }).catch(() => undefined);
+
+        docmanToolStatusPollTimer = window.setInterval(() => {
+            if (Date.now() > docmanToolStatusPollDeadlineMs) {
+                stopDocmanToolStatusPolling();
+                docmanToolRunIsBusy = false;
+                syncDocmanToolButtons();
+                return;
+            }
+
+            pollDocmanToolStatus({ silent: false })
+                .then((isRunning) => {
+                    if (!isRunning) stopDocmanToolStatusPolling();
+                })
+                .catch(() => undefined);
+        }, DOCMAN_TOOL_STATUS_POLL_INTERVAL_MS);
+    };
+    const triggerDocmanToolRun = async (payload) => {
+        try {
+            const actionLabel = getDocmanActionLabel(trimDocmanField(payload?.action, 40));
+            docmanToolRunIsBusy = true;
+            syncDocmanToolButtons();
+            setDocmanToolStatus(`Starting ${actionLabel}…`, 'neutral');
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'runDocmanToolAction',
+                payload,
+                ...getProtectedActionPayload()
+            });
+
+            if (response?.success && response?.run) {
+                setDocmanToolStatus(formatDocmanToolRunSummary(response.run, true), 'neutral');
+                showToast(`${actionLabel} started.`);
+                startDocmanToolStatusPolling();
+                return true;
+            }
+
+            if (response?.running && response?.run) {
+                setDocmanToolStatus(formatDocmanToolRunSummary(response.run, true), 'neutral');
+                showToast('A Docman tool run is already in progress.');
+                startDocmanToolStatusPolling();
+                return false;
+            }
+
+            throw new Error(trimDocmanField(response?.error, 260) || `Could not start ${actionLabel}.`);
+        } catch (error) {
+            docmanToolRunIsBusy = false;
+            syncDocmanToolButtons();
+            const message = trimDocmanField(error?.message, 260) || 'Could not start Docman tool.';
+            setDocmanToolStatus(message, 'invalid');
+            showToast(message);
+            return false;
+        }
+    };
+    const startPracticeScopedDocmanAction = async (action, extraPayload = {}) => {
+        try {
+            return await triggerDocmanToolRun(buildDocmanToolPayload(action, extraPayload));
+        } catch (error) {
+            const message = trimDocmanField(error?.message, 260) || 'Could not start Docman tool.';
+            setDocmanToolStatus(message, 'invalid');
+            showToast(message);
+            return false;
+        }
+    };
+    const openDocmanVerifyModal = () => {
+        let practice = null;
+        try {
+            practice = resolveSelectedPracticeDetails();
+        } catch (error) {
+            showToast(error.message);
+            return;
+        }
+
+        if (!openBookmarkletToolModal('Docman Verify')) return;
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'bookmarklet-tool-btn active';
+        runBtn.textContent = 'Run Verify';
+
+        const countChip = document.createElement('div');
+        countChip.className = 'bookmarklet-tool-chip';
+        countChip.textContent = '0 usernames';
+
+        bookmarkletToolModalActions?.append(runBtn, countChip);
+
+        const layout = document.createElement('div');
+        layout.className = 'bookmarklet-tool-stack';
+
+        const practiceChip = document.createElement('div');
+        practiceChip.className = 'bookmarklet-tool-chip';
+        practiceChip.textContent = `Practice: ${practice.practiceName} (${practice.odsCode})`;
+
+        const label = document.createElement('label');
+        label.className = 'bookmarklet-tool-label';
+        label.textContent = 'Paste Docman usernames';
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'bookmarklet-tool-textarea';
+        textarea.placeholder = 'one username per line';
+
+        layout.append(practiceChip, label, textarea);
+        bookmarkletToolModalBody?.appendChild(layout);
+
+        const updateCount = () => {
+            const usernames = parseDocmanUsernames(textarea.value);
+            countChip.textContent = `${usernames.length} username${usernames.length === 1 ? '' : 's'}`;
+        };
+
+        textarea.addEventListener('input', updateCount);
+        updateCount();
+
+        runBtn.addEventListener('click', async () => {
+            const usernames = parseDocmanUsernames(textarea.value);
+            if (!usernames.length) {
+                showToast('Paste at least one Docman username.');
+                return;
+            }
+
+            runBtn.disabled = true;
+            runBtn.textContent = 'Starting…';
+
+            const started = await startPracticeScopedDocmanAction('verify', { usernames });
+            if (started) {
+                closeBookmarkletToolModal();
+                return;
+            }
+
+            runBtn.disabled = false;
+            runBtn.textContent = 'Run Verify';
+        });
+
+        textarea.focus();
+    };
+    const openDocmanCreateGroupModal = () => {
+        let practice = null;
+        try {
+            practice = resolveSelectedPracticeDetails();
+        } catch (error) {
+            showToast(error.message);
+            return;
+        }
+
+        if (!openBookmarkletToolModal('Docman Create Group')) return;
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'bookmarklet-tool-btn active';
+        runBtn.textContent = 'Create Group';
+
+        const countChip = document.createElement('div');
+        countChip.className = 'bookmarklet-tool-chip';
+        countChip.textContent = '0 usernames';
+
+        bookmarkletToolModalActions?.append(runBtn, countChip);
+
+        const layout = document.createElement('div');
+        layout.className = 'bookmarklet-tool-stack';
+
+        const practiceChip = document.createElement('div');
+        practiceChip.className = 'bookmarklet-tool-chip';
+        practiceChip.textContent = `Practice: ${practice.practiceName} (${practice.odsCode})`;
+
+        const groupLabel = document.createElement('label');
+        groupLabel.className = 'bookmarklet-tool-label';
+        groupLabel.textContent = 'Group name';
+
+        const groupInput = document.createElement('input');
+        groupInput.className = 'bookmarklet-tool-input';
+        groupInput.placeholder = 'e.g. All Doctors';
+
+        const usersLabel = document.createElement('label');
+        usersLabel.className = 'bookmarklet-tool-label';
+        usersLabel.textContent = 'Paste Docman usernames';
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'bookmarklet-tool-textarea';
+        textarea.placeholder = 'one username per line';
+
+        layout.append(practiceChip, groupLabel, groupInput, usersLabel, textarea);
+        bookmarkletToolModalBody?.appendChild(layout);
+
+        const updateCount = () => {
+            const usernames = parseDocmanUsernames(textarea.value);
+            countChip.textContent = `${usernames.length} username${usernames.length === 1 ? '' : 's'}`;
+        };
+
+        textarea.addEventListener('input', updateCount);
+        updateCount();
+
+        runBtn.addEventListener('click', async () => {
+            const groupName = trimDocmanField(groupInput.value, 240);
+            const usernames = parseDocmanUsernames(textarea.value);
+
+            if (!groupName) {
+                showToast('Enter a Docman group name.');
+                return;
+            }
+            if (!usernames.length) {
+                showToast('Paste at least one Docman username.');
+                return;
+            }
+
+            runBtn.disabled = true;
+            runBtn.textContent = 'Starting…';
+
+            const started = await startPracticeScopedDocmanAction('create-group', {
+                groupName,
+                usernames
+            });
+            if (started) {
+                closeBookmarkletToolModal();
+                return;
+            }
+
+            runBtn.disabled = false;
+            runBtn.textContent = 'Create Group';
+        });
+
+        groupInput.focus();
+    };
+    const openDocmanOnboardingModal = async () => {
+        let practice = null;
+        try {
+            practice = resolveSelectedPracticeDetails();
+        } catch (error) {
+            showToast(error.message);
+            return;
+        }
+
+        let practiceStatus = null;
+        let settingsLoadError = '';
+        try {
+            practiceStatus = await fetchSelectedPracticeStatus(practice.odsCode);
+        } catch (error) {
+            settingsLoadError = trimDocmanField(error?.message, 240);
+            console.warn('Docman onboarding settings load failed:', error);
+        }
+
+        const {
+            configuredInputFolderName,
+            primaryValue,
+            options
+        } = buildDocmanOnboardingFolderOptions(practiceStatus);
+
+        if (!openBookmarkletToolModal('Docman Onboarding')) return;
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'bookmarklet-tool-btn active';
+        runBtn.textContent = 'Start Onboarding';
+
+        bookmarkletToolModalActions?.append(runBtn);
+
+        const layout = document.createElement('div');
+        layout.className = 'bookmarklet-tool-stack';
+
+        const practiceChip = document.createElement('div');
+        practiceChip.className = 'bookmarklet-tool-chip';
+        practiceChip.textContent = `Practice: ${practice.practiceName} (${practice.odsCode})`;
+        layout.appendChild(practiceChip);
+
+        const selectedFolderChip = document.createElement('div');
+        selectedFolderChip.className = 'bookmarklet-tool-chip';
+        selectedFolderChip.textContent = configuredInputFolderName
+            ? `Configured input folder: ${configuredInputFolderName}`
+            : `Configured input folder not found. Using ${DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME}.`;
+        layout.appendChild(selectedFolderChip);
+
+        const folderLabel = document.createElement('label');
+        folderLabel.className = 'bookmarklet-tool-label';
+        folderLabel.textContent = 'Folder #4 choice';
+        layout.appendChild(folderLabel);
+
+        const optionsList = document.createElement('div');
+        optionsList.className = 'job-checklist';
+        optionsList.style.maxHeight = 'none';
+
+        const selectionHint = document.createElement('div');
+        selectionHint.className = 'validation-badge neutral';
+        selectionHint.style.whiteSpace = 'pre-wrap';
+
+        const folderInputs = [];
+        const updateSelectionHint = () => {
+            const selectedInput = folderInputs.find((input) => input.checked) || folderInputs[0] || null;
+            const selectedOption = options.find((option) => option.value === selectedInput?.value) || null;
+            if (!selectedOption) {
+                selectionHint.textContent = 'Choose the onboarding folder that should be created as Folder #4.';
+                return;
+            }
+
+            const hintLines = [
+                selectedOption.description || '',
+                `Folder #4 will be: ${selectedOption.value}`
+            ].filter(Boolean);
+            selectionHint.textContent = hintLines.join('\n');
+        };
+
+        options.forEach((option, index) => {
+            const item = document.createElement('label');
+            item.className = 'job-check-item';
+            item.title = option.description || option.value;
+
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'docmanOnboardingFolderChoice';
+            input.value = option.value;
+            input.checked = trimDocmanField(option.value, 240) === trimDocmanField(primaryValue, 240);
+            input.addEventListener('change', updateSelectionHint);
+            folderInputs.push(input);
+
+            const text = document.createElement('span');
+            text.className = 'job-check-text';
+            text.textContent = option.label;
+
+            item.append(input, text);
+            optionsList.appendChild(item);
+        });
+
+        layout.append(optionsList, selectionHint);
+
+        if (settingsLoadError) {
+            const fallbackNotice = document.createElement('div');
+            fallbackNotice.className = 'validation-badge neutral';
+            fallbackNotice.style.whiteSpace = 'pre-wrap';
+            fallbackNotice.textContent = `${settingsLoadError}\nUsing default onboarding options instead.`;
+            layout.appendChild(fallbackNotice);
+        }
+
+        bookmarkletToolModalBody?.appendChild(layout);
+        updateSelectionHint();
+
+        runBtn.addEventListener('click', async () => {
+            const selectedInput = folderInputs.find((input) => input.checked) || folderInputs[0] || null;
+            const onboardingInputFolderName = trimDocmanField(selectedInput?.value, 240) || DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME;
+
+            runBtn.disabled = true;
+            runBtn.textContent = 'Starting…';
+
+            const started = await startPracticeScopedDocmanAction('onboarding', {
+                onboardingInputFolderName
+            });
+            if (started) {
+                closeBookmarkletToolModal();
+                return;
+            }
+
+            runBtn.disabled = false;
+            runBtn.textContent = 'Start Onboarding';
+        });
+    };
+
+    document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
+        syncDocmanToolButtons();
+        if (!docmanToolRunIsBusy && isDocmanToolDefaultStatusText(docmanToolStatus?.textContent)) {
+            setDocmanToolStatus(getDocmanToolDefaultStatusMessage(), 'neutral');
+        }
+    });
+
+    syncDocmanToolButtons();
+    if (isDocmanToolDefaultStatusText(docmanToolStatus?.textContent)) {
+        setDocmanToolStatus(getDocmanToolDefaultStatusMessage(), 'neutral');
+    }
 
     const normalizeSuggestionMetaMap = (rawMap = {}) => {
         if (!rawMap || typeof rawMap !== 'object') return {};
@@ -3222,12 +3873,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             bookmarkletToolModalBody?.appendChild(textarea);
 
             copyBtn.addEventListener('click', async () => {
-                try {
-                    await navigator.clipboard.writeText(textarea.value);
-                    showToast(`Copied ${groups.length} group names.`);
-                } catch (e) {
-                    showToast('Copy failed.');
-                }
+                const copied = await copyTextToClipboard(textarea.value);
+                showToast(copied ? `Copied ${groups.length} group names.` : 'Copy failed.');
             });
 
             textarea.focus();
@@ -4814,6 +5461,23 @@ ${error?.message || String(error)}`, 'invalid');
         copyUrlsToClipboard(urls, 'URLs');
     });
 
+    runDocmanLoginBtn?.addEventListener('click', () => {
+        startPracticeScopedDocmanAction('login').catch(() => undefined);
+    });
+    runDocmanVerifyBtn?.addEventListener('click', openDocmanVerifyModal);
+    runDocmanCreateGroupBtn?.addEventListener('click', openDocmanCreateGroupModal);
+    runDocmanCleanProcessingBtn?.addEventListener('click', () => {
+        startPracticeScopedDocmanAction('clean-processing').catch(() => undefined);
+    });
+    runDocmanCleanFilingBtn?.addEventListener('click', () => {
+        startPracticeScopedDocmanAction('clean-filing').catch(() => undefined);
+    });
+    runDocmanOnboardingBtn?.addEventListener('click', () => {
+        openDocmanOnboardingModal().catch((error) => {
+            console.error('Docman onboarding modal failed:', error);
+            showToast('Docman onboarding failed to open.');
+        });
+    });
     runUuidPickerToolBtn?.addEventListener('click', openUuidPickerModal);
     runListDocmanGroupsToolBtn?.addEventListener('click', openDocmanGroupsModal);
     runEmailFormatterToolBtn?.addEventListener('click', openEmailFormatterModal);
@@ -4823,6 +5487,8 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Workflow Groups failed to open.');
         });
     });
+
+    pollDocmanToolStatus({ silent: true }).catch(() => undefined);
 
     updateDocValidation();
     updateJobValidation();
@@ -4893,8 +5559,9 @@ setInterval(async () => {
   
   // 🛡️ NEW SAFETY: Don't scan if the user is currently typing in the search box
   const isTyping = document.activeElement === document.getElementById('practiceInput');
+  const isInteractingWithStatus = Navigator.shouldPauseStatusAutoRefresh();
   
-  if (isVisible && !isPanelScrapingBusy && state.currentSelectedOdsCode && !isTyping) {
+  if (isVisible && !isPanelScrapingBusy && state.currentSelectedOdsCode && !isTyping && !isInteractingWithStatus) {
     isPanelScrapingBusy = true;
 
     try {

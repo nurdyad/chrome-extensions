@@ -35,6 +35,7 @@
     const PRACTICE_SUPPORT_TITLE_PREFIX = 'Practice Support Ticket:';
     const BOT_JOB_DEFAULT_PRIORITY = 3;
     const BOT_JOB_LABELS_ALWAYS = ['bot-jobs', 'automation'];
+    const REJECTED_QUEUE_LABELS = ['Rejection', 'Monitoring / Reporting'];
     const HIDDEN_DEDUPE_PREFIX = 'BOT_JOBS_DEDUPE:';
     const GROUP_DEDUPE_PREFIX = 'BOT_JOBS_GROUP:';
     const REJECTED_PRACTICE_ISSUE_HOST_ID = 'bl-rejected-practice-issue-host';
@@ -339,7 +340,10 @@ ${hiddenBlock}
         const documentId = extractNumericId(rowData?.document || fallbackDocId);
         if (!documentId) return null;
 
+        const dedupeKey = `mailroom_rejected|${documentId}`;
+        const hiddenBlock = buildHiddenDedupeBlock([dedupeKey]);
         const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '');
+        const rejectedQueue = getRejectedQueueMeta().label;
         const originalName = collapseText(rowData?.originalName || '');
         const reason = collapseText(rowData?.reason || '');
         const rejectedBy = collapseText(rowData?.rejectedBy || '');
@@ -356,6 +360,7 @@ ${hiddenBlock}
 - Document ID: ${documentId}
 - Original Name: ${originalName}
 - Practice: ${practiceName}
+- Queue: ${rejectedQueue}
 - Reason: ${reason}
 - Rejected By: ${rejectedBy}
 - On: ${rejectedOn}
@@ -363,6 +368,7 @@ ${hiddenBlock}
 - Letter Admin: ${buildLetterAdminUrl(documentId)}
 - Letter Bots link: ${buildLetterBotsDocumentUrl(documentId)}
 - Oban Jobs Link: ${buildObanJobsDocumentUrl(documentId)}
+${hiddenBlock}
 `.trim();
 
         return {
@@ -374,7 +380,9 @@ ${hiddenBlock}
             failedJobLink: '',
             title,
             description,
-            priority: 2
+            priority: 2,
+            labels: [...REJECTED_QUEUE_LABELS],
+            dedupeKey
         };
     }
 
@@ -405,18 +413,27 @@ ${hiddenBlock}
         const practiceName = collapseText(context?.practiceName);
         const practiceCode = collapseText(context?.practiceCode || '').toUpperCase();
         const rejectedCount = Number(context?.rejectedCount || 0);
+        const queueLabel = collapseText(context?.queueLabel) || 'BetterLetter';
+        const queueKey = collapseText(context?.queueKey) || 'betterletter';
         if (!practiceName || rejectedCount <= 0) return null;
 
-        const issueTitle = `${PRACTICE_SUPPORT_TITLE_PREFIX} ${practiceName}`;
+        const dedupeKey = `practice_support_ticket|${practiceCode || normalizeGroupKeyPart(practiceName)}|${queueKey}`;
+        const hiddenBlock = buildHiddenDedupeBlock([dedupeKey]);
+        const issueTitle = `${PRACTICE_SUPPORT_TITLE_PREFIX} ${practiceName} | ${queueLabel} rejected queue`;
+        const summaryLine = queueKey === 'practice'
+            ? `${rejectedCount} rejected letters need to be processed by Practice.`
+            : `${rejectedCount} rejected letters are in BetterLetter's rejected queue and need monitoring / reporting.`;
         const description = `
 ## Summary
-- ${rejectedCount} rejected letters need to be processed by Practice.
+- ${summaryLine}
 
 ## Practice details
 - Practice: ${practiceName}
 - Practice Code: ${practiceCode || 'N/A'}
+- Queue: ${queueLabel}
 - Rejected letters needing processing: ${rejectedCount}
 - Rejected queue: ${window.location.href}
+${hiddenBlock}
 `.trim();
 
         return {
@@ -429,8 +446,9 @@ ${hiddenBlock}
             title: issueTitle,
             description,
             priority: 2,
+            labels: [...REJECTED_QUEUE_LABELS],
             stateName: 'Todo',
-            dedupeKey: `practice_support_ticket|${practiceCode || normalizeGroupKeyPart(practiceName)}`
+            dedupeKey
         };
     }
 
@@ -505,12 +523,64 @@ ${hiddenBlock}
         return Boolean(restrictedToolsAccess?.features?.[featureKey]);
     }
 
+    function canUseNavigatorClipboardApi() {
+        try {
+            const protocol = String(globalThis?.location?.protocol || '').toLowerCase();
+            return protocol === 'chrome-extension:' || protocol === 'moz-extension:';
+        } catch (error) {
+            return false;
+        }
+    }
+
     function copyToClipboard(text, onSuccess) {
-        navigator.clipboard.writeText(text).then(() => {
+        const value = String(text ?? '');
+        if (!value) return;
+
+        const runSuccess = () => {
             if (typeof onSuccess === 'function') onSuccess();
-        }).catch(() => {
-            console.warn('[BL Navigator] Clipboard copy failed.');
-        });
+        };
+
+        const fallbackCopy = () => {
+            try {
+                if (!document?.body) return false;
+                const textarea = document.createElement('textarea');
+                textarea.value = value;
+                textarea.setAttribute('readonly', 'true');
+                textarea.style.position = 'fixed';
+                textarea.style.top = '-9999px';
+                textarea.style.left = '-9999px';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                textarea.setSelectionRange(0, textarea.value.length);
+                const copied = document.execCommand('copy');
+                textarea.remove();
+                return Boolean(copied);
+            } catch (error) {
+                return false;
+            }
+        };
+
+        if (canUseNavigatorClipboardApi() && navigator?.clipboard?.writeText) {
+            navigator.clipboard.writeText(value).then(() => {
+                runSuccess();
+            }).catch(() => {
+                if (fallbackCopy()) {
+                    runSuccess();
+                    return;
+                }
+                console.warn('[BL Navigator] Clipboard copy failed.');
+            });
+            return;
+        }
+
+        if (fallbackCopy()) {
+            runSuccess();
+            return;
+        }
+
+        console.warn('[BL Navigator] Clipboard copy failed.');
     }
 
     function showNavigatorToast(message, tone = 'neutral') {
@@ -646,7 +716,12 @@ ${hiddenBlock}
             }
             btn.textContent = String(response.issue.identifier || 'Created');
             btn.style.background = '#16a34a';
-            showNavigatorToast(`Created ${String(response.issue.identifier || 'issue')}.`, 'valid');
+            showNavigatorToast(
+                response?.duplicate
+                    ? `Using existing ${String(response.issue.identifier || 'issue')}.`
+                    : `Created ${String(response.issue.identifier || 'issue')}.`,
+                'valid'
+            );
             setTimeout(() => {
                 btn.textContent = originalLabel;
                 btn.style.background = originalBg;
@@ -1182,6 +1257,14 @@ ${hiddenBlock}
         return window.location.pathname.includes('/mailroom/rejected');
     }
 
+    function getRejectedQueueMeta() {
+        const service = collapseText(new URLSearchParams(window.location.search).get('service')).toLowerCase();
+        if (service === 'self') {
+            return { key: 'practice', label: 'Practice', queryValue: 'self' };
+        }
+        return { key: 'betterletter', label: 'BetterLetter', queryValue: 'full' };
+    }
+
     function getElementDisplayText(element) {
         if (!(element instanceof Element)) return '';
         if (element instanceof HTMLSelectElement) {
@@ -1194,13 +1277,17 @@ ${hiddenBlock}
         return collapseText(element.textContent || '');
     }
 
-    function findRejectedPracticeToggleElement() {
+    function findRejectedPracticeToggleElement(queueKey = getRejectedQueueMeta().key) {
+        const pattern = queueKey === 'practice'
+            ? /^Practice\s*\(\d+\)$/i
+            : /^BetterLetter\s*\(\d+\)$/i;
+
         return Array.from(document.querySelectorAll('button, [role="button"], a, label, span, div'))
-            .find((element) => /^Practice\s*\(\d+\)$/i.test(getElementDisplayText(element))) || null;
+            .find((element) => pattern.test(getElementDisplayText(element))) || null;
     }
 
-    function resolveRejectedPracticeCount() {
-        const toggleText = getElementDisplayText(findRejectedPracticeToggleElement());
+    function resolveRejectedPracticeCount(queueKey = getRejectedQueueMeta().key) {
+        const toggleText = getElementDisplayText(findRejectedPracticeToggleElement(queueKey));
         const toggleMatch = toggleText.match(/\((\d+)\)/);
         if (toggleMatch?.[1]) {
             const parsed = Number.parseInt(toggleMatch[1], 10);
@@ -1220,11 +1307,14 @@ ${hiddenBlock}
         const practiceName = collapseText(rowData?.practiceName || rowData?.practice || '');
         const practiceCodeFromUrl = collapseText(new URLSearchParams(window.location.search).get('practice') || '').toUpperCase();
         const practiceCode = collapseText(rowData?.odsCode || practiceCodeFromUrl).toUpperCase();
+        const queueMeta = getRejectedQueueMeta();
 
         return {
             practiceName,
             practiceCode,
-            rejectedCount: resolveRejectedPracticeCount()
+            queueKey: queueMeta.key,
+            queueLabel: queueMeta.label,
+            rejectedCount: resolveRejectedPracticeCount(queueMeta.key)
         };
     }
 
@@ -1257,7 +1347,7 @@ ${hiddenBlock}
         }
 
         const practiceNameAnchor = findRejectedPracticeNameAnchor(context.practiceName);
-        const practiceToggleElement = findRejectedPracticeToggleElement();
+        const practiceToggleElement = findRejectedPracticeToggleElement(context.queueKey);
         const anchorElement = practiceNameAnchor || practiceToggleElement;
         const anchorParent = anchorElement?.parentElement || null;
         if (!anchorElement || !anchorParent) {
@@ -1296,9 +1386,10 @@ ${hiddenBlock}
             host.appendChild(button);
         }
 
-        button.title = `Create practice support ticket for ${context.practiceName} (${context.rejectedCount} rejected letters)`;
+        button.title = `Create ${context.queueLabel} rejected-queue ticket for ${context.practiceName} (${context.rejectedCount} rejected letters)`;
         host.dataset.practiceName = context.practiceName;
         host.dataset.practiceCount = String(context.rejectedCount);
+        host.dataset.queueKey = context.queueKey;
 
         if (practiceNameAnchor && practiceNameAnchor.nextElementSibling !== host) {
             practiceNameAnchor.insertAdjacentElement('afterend', host);

@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 ENV_FILE="${LINEAR_TRIGGER_ENV_FILE:-$REPO_ROOT/.env}"
 SERVER_SCRIPT="${LINEAR_TRIGGER_SERVER_SCRIPT:-$SCRIPT_DIR/linear-trigger-server.mjs}"

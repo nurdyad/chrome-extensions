@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -49,6 +49,29 @@ const BOT_JOBS_RECONCILE_ENTRY = String(
 const BOT_JOBS_ENV_FILE = String(
   process.env.LINEAR_TRIGGER_BOT_JOBS_ENV_FILE || join(BOT_JOBS_DIR, ".env"),
 );
+function resolveDefaultDocmanToolDir() {
+  const candidates = [
+    resolve(REPO_ROOT, "..", "..", "tools", "docman-tool"),
+    resolve(process.env.HOME || "", "tools", "docman-tool"),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+const DOCMAN_TOOL_DIR = String(
+  process.env.LINEAR_TRIGGER_DOCMAN_TOOL_DIR
+    || process.env.MAILROOMNAV_DOCMAN_TOOL_DIR
+    || resolveDefaultDocmanToolDir(),
+);
+const DOCMAN_EXTENSION_RUNNER_ENTRY = resolve(REPO_ROOT, "automation", "docman-extension-runner.cjs");
+const DOCMAN_TOOL_TIMEOUT_MINUTES = (() => {
+  const parsed = Number.parseInt(String(process.env.LINEAR_TRIGGER_DOCMAN_TOOL_TIMEOUT_MINUTES || "45"), 10);
+  if (!Number.isFinite(parsed)) return 45;
+  return Math.min(180, Math.max(5, parsed));
+})();
+const DOCMAN_TOOL_TIMEOUT_MS = DOCMAN_TOOL_TIMEOUT_MINUTES * 60 * 1000;
 const BOT_JOBS_TIMEOUT_MINUTES = (() => {
   const parsed = Number.parseInt(String(process.env.LINEAR_TRIGGER_BOT_JOBS_TIMEOUT_MINUTES || "20"), 10);
   if (!Number.isFinite(parsed)) return 20;
@@ -152,6 +175,7 @@ const ACCESS_CONTROL_STATE_PATH = String(
 const SLACK_TARGETS_CACHE_PATH = join(STATE_DIR, "slack-workspace-targets.json");
 const SERVER_LOG_PATH = join(LOG_DIR, "linear-trigger-server.log");
 const LAST_RUN_STATE_PATH = join(STATE_DIR, "linear-trigger-last-run.json");
+const DOCMAN_LAST_RUN_STATE_PATH = join(STATE_DIR, "docman-tool-last-run.json");
 const BOT_JOBS_REPORTS_DIR = join(STATE_DIR, "reports");
 const SLACK_TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -167,6 +191,8 @@ const allowNoOrigin = String(process.env.LINEAR_TRIGGER_ALLOW_NO_ORIGIN || "1")
 
 let activeRun = null;
 let lastRun = null;
+let docmanActiveRun = null;
+let lastDocmanRun = null;
 let resolvedLinearTeam = null;
 let resolvedLinearWorkflowStateCatalog = null;
 let resolvedLinearIssueLabelCatalog = null;
@@ -723,6 +749,7 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
     priority: clampLinearPriority(rawPayload.priority),
     labels: sanitizeLinearIssueLabelList(rawPayload.labels),
     stateName: sanitizeSingleLine(rawPayload.stateName, 120),
+    dedupeKey: sanitizeSingleLine(rawPayload.dedupeKey, 160),
     slack: sanitizeLinearSlackPayload(rawPayload?.slack),
   };
 }
@@ -1014,8 +1041,224 @@ async function resolveLinearLabelIds(labelNames = []) {
   return resolvedIds;
 }
 
+const LINEAR_ISSUE_DEDUPE_MARKER_PREFIX = "BOT_JOBS_DEDUPE:";
+const PRACTICE_SUPPORT_TITLE_PREFIX = "Practice Support Ticket:";
+const MAILROOM_REJECTED_TITLE_PREFIX = "Mailroom Rejected:";
+
+function normalizeIssueText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeIssueLookupKey(value) {
+  return sanitizeSingleLine(value, 240).toLowerCase();
+}
+
+function normalizeIssueDocumentId(value) {
+  const match = String(value || "").match(/\d+/);
+  return match?.[0] || "";
+}
+
+function escapeRegex(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractIssueStructuredField(text, label) {
+  const pattern = new RegExp(`(?:^|\\n)\\s*[-*]?\\s*${escapeRegex(label)}\\s*:\\s*([^\\n]+)`, "i");
+  const match = String(text || "").match(pattern);
+  return normalizeIssueText(match?.[1] || "");
+}
+
+function inferRejectedQueueKey(text) {
+  const normalized = normalizeIssueText(text).toLowerCase();
+  if (!normalized) return "";
+  if (normalized.includes("service=self") || normalized.includes("queue: practice") || normalized.includes("processed by practice")) {
+    return "practice";
+  }
+  if (
+    normalized.includes("service=full")
+    || normalized.includes("queue: betterletter")
+    || normalized.includes("betterletter's rejected queue")
+    || normalized.includes("betterletter rejected queue")
+  ) {
+    return "betterletter";
+  }
+  return "";
+}
+
+function buildLinearIssueDedupeMarker(dedupeKey) {
+  const normalized = sanitizeSingleLine(dedupeKey, 160);
+  return normalized ? `${LINEAR_ISSUE_DEDUPE_MARKER_PREFIX}${normalized}` : "";
+}
+
+function extractPracticeSupportSignatureFromPayload(payload = {}) {
+  const dedupeKey = sanitizeSingleLine(payload?.dedupeKey, 160);
+  const dedupeMatch = dedupeKey.match(/^practice_support_ticket\|([^|]+)\|(practice|betterletter)$/i);
+  if (dedupeMatch?.[1] && dedupeMatch?.[2]) {
+    return {
+      practiceKey: normalizeIssueLookupKey(dedupeMatch[1]),
+      queueKey: dedupeMatch[2].toLowerCase(),
+    };
+  }
+
+  const description = String(payload?.description || "");
+  const title = sanitizeSingleLine(payload?.title, 240);
+  const practiceCode = extractIssueStructuredField(description, "Practice Code");
+  const practiceName = normalizeIssueText(title.replace(/^Practice Support Ticket:/i, "").split("|")[0] || payload?.practiceName || "");
+  const queueKey = inferRejectedQueueKey(`${title}\n${description}`);
+  const practiceKey = normalizeIssueLookupKey(practiceCode || practiceName);
+  if (!practiceKey || !queueKey) return null;
+  return { practiceKey, queueKey };
+}
+
+function extractPracticeSupportSignatureFromIssue(issue = {}) {
+  const title = sanitizeSingleLine(issue?.title, 240);
+  const description = String(issue?.description || "");
+  const combined = `${title}\n${description}`;
+  if (!/^Practice Support Ticket:/i.test(title) && !/Rejected letters needing processing:/i.test(combined)) {
+    return null;
+  }
+
+  const practiceCode = extractIssueStructuredField(description, "Practice Code");
+  const practiceName = normalizeIssueText(title.replace(/^Practice Support Ticket:/i, "").split("|")[0]);
+  const queueKey = inferRejectedQueueKey(combined);
+  const practiceKey = normalizeIssueLookupKey(practiceCode || practiceName);
+  if (!practiceKey || !queueKey) return null;
+  return { practiceKey, queueKey };
+}
+
+function extractMailroomRejectedDocumentIdFromIssue(issue = {}) {
+  const title = sanitizeSingleLine(issue?.title, 240);
+  const description = String(issue?.description || "");
+  if (!/^Mailroom Rejected:/i.test(title) && !/Document ID:/i.test(description)) {
+    return "";
+  }
+  return normalizeIssueDocumentId(
+    extractIssueStructuredField(description, "Document ID")
+    || title.replace(/^Mailroom Rejected:/i, "")
+  );
+}
+
+function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId) {
+  if (!candidate?.id) return false;
+
+  const candidateTitle = sanitizeSingleLine(candidate.title, 240);
+  const candidateDescription = String(candidate.description || "");
+  const normalizedCandidateTitle = candidateTitle.toLowerCase();
+  const normalizedPayloadTitle = sanitizeSingleLine(payload?.title, 240).toLowerCase();
+  const payloadIsMailroomRejected = normalizedPayloadTitle.startsWith(MAILROOM_REJECTED_TITLE_PREFIX.toLowerCase());
+
+  if (dedupeMarker && candidateDescription.includes(dedupeMarker)) {
+    return true;
+  }
+
+  if (normalizedPayloadTitle && normalizedCandidateTitle === normalizedPayloadTitle) {
+    return true;
+  }
+
+  if (payloadIsMailroomRejected && payloadDocumentId) {
+    const candidateDocumentId = extractMailroomRejectedDocumentIdFromIssue(candidate)
+      || normalizeIssueDocumentId(extractIssueStructuredField(candidateDescription, "Document ID"));
+    if (candidateDocumentId && candidateDocumentId === payloadDocumentId) {
+      return true;
+    }
+  }
+
+  if (practiceSupportSignature) {
+    const candidateSignature = extractPracticeSupportSignatureFromIssue(candidate);
+    if (
+      candidateSignature
+      && candidateSignature.practiceKey === practiceSupportSignature.practiceKey
+      && candidateSignature.queueKey === practiceSupportSignature.queueKey
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function findExistingLinearIssue(payload, team) {
+  const dedupeMarker = buildLinearIssueDedupeMarker(payload?.dedupeKey);
+  const practiceSupportSignature = extractPracticeSupportSignatureFromPayload(payload);
+  const payloadDocumentId = normalizeIssueDocumentId(payload?.documentId);
+  const normalizedTitle = sanitizeSingleLine(payload?.title, 240);
+
+  if (!dedupeMarker && !practiceSupportSignature && !payloadDocumentId && !normalizedTitle) {
+    return null;
+  }
+
+  const query = `
+    query FindPotentialDuplicateIssues($teamKey: String!, $first: Int!, $after: String) {
+      issues(
+        first: $first
+        after: $after
+        filter: {
+          team: { key: { eq: $teamKey } }
+          state: { type: { nin: ["completed", "canceled"] } }
+        }
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          url
+          description
+          createdAt
+          updatedAt
+          state {
+            type
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `;
+
+  let after = null;
+  for (let page = 0; page < 8; page += 1) {
+    const data = await runLinearGraphqlRequest(query, {
+      teamKey: team.key,
+      first: 100,
+      after,
+    });
+    const issuesRoot = data?.issues;
+    const nodes = Array.isArray(issuesRoot?.nodes) ? issuesRoot.nodes : [];
+    const match = nodes.find((candidate) =>
+      isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId)
+    );
+    if (match?.id) {
+      return {
+        identifier: sanitizeSingleLine(match.identifier, 64),
+        title: sanitizeSingleLine(match.title, 240),
+        url: sanitizeSingleLine(match.url, 1200),
+        priority: 0,
+      };
+    }
+
+    const pageInfo = issuesRoot?.pageInfo;
+    if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 240)) {
+      break;
+    }
+    after = sanitizeSingleLine(pageInfo.endCursor, 240);
+  }
+
+  return null;
+}
+
 async function createLinearIssue(payload) {
   const team = await resolveLinearTeam();
+  const duplicateIssue = await findExistingLinearIssue(payload, team);
+  if (duplicateIssue?.identifier && duplicateIssue?.url) {
+    return {
+      team,
+      issue: duplicateIssue,
+      duplicate: true,
+    };
+  }
+
   const effectivePriority = payload.priority > 0 ? payload.priority : getLinearDefaultPriority();
 
   const issueInput = {
@@ -1063,6 +1306,7 @@ async function createLinearIssue(payload) {
       url: sanitizeSingleLine(issue.url, 1200),
       priority: clampLinearPriority(issue.priority),
     },
+    duplicate: false,
   };
 }
 
@@ -2426,6 +2670,28 @@ async function loadLastRunState() {
   }
 }
 
+async function writeDocmanRunState() {
+  await mkdir(STATE_DIR, { recursive: true });
+  const payload = {
+    updatedAt: nowIso(),
+    activeRun: toDocmanRunPublic(docmanActiveRun),
+    lastRun: toDocmanRunPublic(lastDocmanRun),
+  };
+  await writeFile(DOCMAN_LAST_RUN_STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+async function loadDocmanRunState() {
+  try {
+    const raw = await readFile(DOCMAN_LAST_RUN_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed?.lastRun && typeof parsed.lastRun === "object") {
+      lastDocmanRun = parsed.lastRun;
+    }
+  } catch {
+    // No prior state on first boot is expected.
+  }
+}
+
 async function parseJsonBody(req, maxBytes = 64 * 1024) {
   const chunks = [];
   let total = 0;
@@ -2455,7 +2721,7 @@ function sendJson(res, statusCode, origin, payload) {
 
 function buildBotJobsEnv({ dryRun, reportPath = "" }) {
   const env = {
-    ...process.env,
+    ...buildChildProcessEnv(),
     DOTENV_CONFIG_PATH: BOT_JOBS_ENV_FILE,
     AUTH_HEADLESS: process.env.AUTH_HEADLESS || "1",
     AUTO_2FA_FROM_EMAIL: process.env.AUTO_2FA_FROM_EMAIL || "1",
@@ -2473,6 +2739,212 @@ function createRunId() {
 
 function normalizeRunType(value) {
   return String(value || "").toLowerCase().trim() === "reconcile" ? "reconcile" : "trigger";
+}
+
+function normalizeDocmanAction(value) {
+  const normalized = sanitizeSingleLine(value, 40).toLowerCase();
+  if (normalized === "login") return "login";
+  if (normalized === "verify") return "verify";
+  if (["create-group", "create_group", "creategroup", "group"].includes(normalized)) return "create-group";
+  if (["clean-processing", "clean_processing", "processing"].includes(normalized)) return "clean-processing";
+  if (["clean-filing", "clean_filing", "filing"].includes(normalized)) return "clean-filing";
+  if (normalized === "onboarding") return "onboarding";
+  return "";
+}
+
+function getDocmanActionLabel(action) {
+  const normalized = normalizeDocmanAction(action);
+  if (normalized === "login") return "Login";
+  if (normalized === "verify") return "Verify";
+  if (normalized === "create-group") return "Create Group";
+  if (normalized === "clean-processing") return "Clean Processing";
+  if (normalized === "clean-filing") return "Clean Filing";
+  if (normalized === "onboarding") return "Onboarding";
+  return "Docman Tool";
+}
+
+const DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME = "zz BL Input. Do not touch";
+
+function sanitizeDocmanFolderName(value) {
+  return sanitizeSingleLine(value, 240);
+}
+
+function sanitizeDocmanCredential(value, maxLength = 240) {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function resolveDocmanOnboardingInputFolderName(payload = {}) {
+  return sanitizeDocmanFolderName(payload?.onboardingInputFolderName) || DOCMAN_ONBOARDING_DEFAULT_INPUT_FOLDER_NAME;
+}
+
+function sanitizeDocmanUsernames(rawUsernames = []) {
+  if (!Array.isArray(rawUsernames)) return [];
+  const seen = new Set();
+  const usernames = [];
+  rawUsernames.forEach((value) => {
+    const username = sanitizeSingleLine(value, 120);
+    if (!username) return;
+    const key = username.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    usernames.push(username);
+  });
+  return usernames.slice(0, 500);
+}
+
+function sanitizeDocmanRunPayload(rawPayload = {}) {
+  return {
+    action: normalizeDocmanAction(rawPayload?.action),
+    practiceName: sanitizeSingleLine(rawPayload?.practiceName, 240),
+    odsCode: sanitizeSingleLine(rawPayload?.odsCode, 16).toUpperCase(),
+    groupName: sanitizeSingleLine(rawPayload?.groupName, 240),
+    usernames: sanitizeDocmanUsernames(rawPayload?.usernames),
+    onboardingInputFolderName: sanitizeDocmanFolderName(rawPayload?.onboardingInputFolderName),
+    docmanUsername: sanitizeSingleLine(rawPayload?.docmanUsername, 240),
+    docmanPassword: sanitizeDocmanCredential(rawPayload?.docmanPassword),
+  };
+}
+
+function validateDocmanRunPayload(payload) {
+  if (!payload?.action) {
+    throw new Error("Invalid or missing Docman action.");
+  }
+  if (!payload.practiceName) {
+    throw new Error("Missing practice name.");
+  }
+  if (!payload.odsCode) {
+    throw new Error("Missing ODS code.");
+  }
+  if (!sanitizeSingleLine(payload?.docmanUsername, 240) || !sanitizeDocmanCredential(payload?.docmanPassword)) {
+    throw new Error("Missing Docman username/password for direct extension login.");
+  }
+  if (payload.action === "verify" && payload.usernames.length === 0) {
+    throw new Error("Verify requires at least one username.");
+  }
+  if (payload.action === "create-group") {
+    if (!payload.groupName) {
+      throw new Error("Create Group requires a group name.");
+    }
+    if (payload.usernames.length === 0) {
+      throw new Error("Create Group requires at least one username.");
+    }
+  }
+}
+
+function buildDocmanToolLaunch(payload) {
+  if (!existsSync(DOCMAN_EXTENSION_RUNNER_ENTRY)) {
+    throw new Error(`docman extension runner not found: ${DOCMAN_EXTENSION_RUNNER_ENTRY}`);
+  }
+
+  const args = [
+    DOCMAN_EXTENSION_RUNNER_ENTRY,
+    "--docman-tool-dir",
+    DOCMAN_TOOL_DIR,
+    "--action",
+    payload.action,
+    "--practice",
+    payload.practiceName,
+    "--ods-code",
+    payload.odsCode,
+  ];
+
+  if (payload.action === "verify" && payload.usernames.length) {
+    args.push("--usernames", payload.usernames.join("\n"));
+  }
+  if (payload.action === "create-group") {
+    args.push("--group-name", payload.groupName);
+    if (payload.usernames.length) {
+      args.push("--usernames", payload.usernames.join("\n"));
+    }
+  }
+  if (payload.action === "onboarding") {
+    args.push("--input-folder-name", resolveDocmanOnboardingInputFolderName(payload));
+  }
+
+  return {
+    cwd: REPO_ROOT,
+    args,
+    env: {
+      MAILROOM_DOCMAN_USERNAME: payload.docmanUsername,
+      MAILROOM_DOCMAN_PASSWORD: payload.docmanPassword,
+    },
+  };
+}
+
+function buildDocmanToolEnv() {
+  return {
+    ...buildChildProcessEnv(),
+    FORCE_COLOR: "0",
+  };
+}
+
+function buildChildProcessEnv(extraEnv = {}) {
+  return {
+    ...process.env,
+    PATH: buildExecutablePath(process.env.PATH),
+    ...extraEnv,
+  };
+}
+
+function buildExecutablePath(currentPath = "") {
+  const requiredEntries = process.platform === "win32"
+    ? []
+    : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+  const parts = String(currentPath || "")
+    .split(delimiter)
+    .map((part) => String(part || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const ordered = [];
+
+  [...requiredEntries, ...parts].forEach((part) => {
+    const key = process.platform === "win32" ? part.toLowerCase() : part;
+    if (!part || seen.has(key)) return;
+    seen.add(key);
+    ordered.push(part);
+  });
+
+  return ordered.join(delimiter);
+}
+
+function appendDocmanRunTail(run, rawText, channel = "stdout") {
+  if (!run || typeof run !== "object") return;
+  const prefix = channel === "stderr" ? "[stderr] " : "";
+  const lines = String(rawText || "").replace(/\r/g, "\n").split("\n");
+  if (!Array.isArray(run.summaryTail)) {
+    run.summaryTail = [];
+  }
+  for (const line of lines) {
+    const normalized = sanitizeSingleLine(line, 240);
+    if (!normalized) continue;
+    run.summaryTail.push(`${prefix}${normalized}`);
+    if (run.summaryTail.length > 12) {
+      run.summaryTail = run.summaryTail.slice(-12);
+    }
+  }
+}
+
+function toDocmanRunPublic(run) {
+  if (!run || typeof run !== "object") return null;
+  const exitCode = typeof run.exitCode === "number" && Number.isFinite(run.exitCode)
+    ? run.exitCode
+    : null;
+  return {
+    runId: String(run.runId || ""),
+    startedAt: String(run.startedAt || ""),
+    endedAt: run.endedAt ? String(run.endedAt) : "",
+    status: String(run.status || ""),
+    action: normalizeDocmanAction(run.action),
+    practiceName: sanitizeSingleLine(run.practiceName, 240),
+    odsCode: sanitizeSingleLine(run.odsCode, 16).toUpperCase(),
+    groupName: sanitizeSingleLine(run.groupName, 240),
+    usernamesCount: Number.isFinite(Number(run.usernamesCount)) ? Number(run.usernamesCount) : 0,
+    onboardingInputFolderName: sanitizeDocmanFolderName(run.onboardingInputFolderName),
+    exitCode,
+    signal: run.signal ? String(run.signal) : "",
+    error: run.error ? String(run.error) : "",
+    summaryLines: sanitizeStringList(run.summaryLines || run.summaryTail, 10, 240),
+  };
 }
 
 async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType = "trigger", slack = null }) {
@@ -2663,10 +3135,179 @@ async function startBotJobsRun({ dryRun, entryScript = BOT_JOBS_ENTRY, runType =
   return { accepted: true, run: toRunPublic(activeRun) };
 }
 
+async function startDocmanToolRun(rawPayload) {
+  if (docmanActiveRun) {
+    return { accepted: false, reason: "already_running", run: toDocmanRunPublic(docmanActiveRun) };
+  }
+
+  const payload = sanitizeDocmanRunPayload(rawPayload);
+  validateDocmanRunPayload(payload);
+
+  if (!existsSync(DOCMAN_TOOL_DIR)) {
+    throw new Error(`docman-tool directory not found: ${DOCMAN_TOOL_DIR}`);
+  }
+  const launch = buildDocmanToolLaunch(payload);
+  const onboardingInputFolderName = payload.action === "onboarding"
+    ? resolveDocmanOnboardingInputFolderName(payload)
+    : "";
+  const runId = createRunId();
+  const startedAt = nowIso();
+  const child = spawn(process.execPath, launch.args, {
+    cwd: launch.cwd,
+    env: {
+      ...buildDocmanToolEnv(),
+      ...(launch.env || {}),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  docmanActiveRun = {
+    runId,
+    startedAt,
+    endedAt: "",
+    status: "running",
+    action: payload.action,
+    practiceName: payload.practiceName,
+    odsCode: payload.odsCode,
+    groupName: payload.groupName,
+    usernamesCount: payload.usernames.length,
+    onboardingInputFolderName,
+    exitCode: null,
+    signal: "",
+    error: "",
+    pid: child.pid || null,
+    summaryTail: [],
+  };
+  await appendServerLog(
+    `[${nowIso()}] [docman:${runId}] started action=${payload.action} practice=${payload.practiceName} ods=${payload.odsCode || "n/a"}${onboardingInputFolderName ? ` inputFolder=${onboardingInputFolderName}` : ""}`,
+  );
+  await writeDocmanRunState();
+
+  let runFinalized = false;
+  const finalizeRun = async (result, logMessage) => {
+    if (runFinalized) return;
+    runFinalized = true;
+
+    const endedAt = nowIso();
+    const baseRun = docmanActiveRun?.runId === runId
+      ? docmanActiveRun
+      : {
+          runId,
+          startedAt,
+          endedAt: "",
+          status: "running",
+          action: payload.action,
+          practiceName: payload.practiceName,
+          odsCode: payload.odsCode,
+          groupName: payload.groupName,
+          usernamesCount: payload.usernames.length,
+          onboardingInputFolderName,
+          exitCode: null,
+          signal: "",
+          error: "",
+          pid: child.pid || null,
+          summaryTail: [],
+        };
+    const summaryLines = sanitizeStringList(baseRun.summaryTail, 10, 240);
+    const fallbackSummary = result.status === "success"
+      ? `${getDocmanActionLabel(payload.action)} completed.`
+      : `${getDocmanActionLabel(payload.action)} failed.`;
+
+    lastDocmanRun = {
+      ...baseRun,
+      endedAt,
+      ...result,
+      summaryLines: summaryLines.length ? summaryLines : [fallbackSummary],
+    };
+    docmanActiveRun = null;
+    if (logMessage) {
+      appendServerLog(`[${nowIso()}] [docman:${runId}] ${logMessage}`).catch(() => undefined);
+    }
+    writeDocmanRunState().catch(() => undefined);
+  };
+
+  const killTimer = setTimeout(() => {
+    void finalizeRun(
+      {
+        status: "failed",
+        exitCode: null,
+        signal: "SIGTERM",
+        error: `docman-tool exceeded timeout (${DOCMAN_TOOL_TIMEOUT_MINUTES}m) and was terminated.`,
+      },
+      `timed out after ${DOCMAN_TOOL_TIMEOUT_MINUTES}m; sent SIGTERM`,
+    );
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Ignore kill errors.
+    }
+  }, DOCMAN_TOOL_TIMEOUT_MS);
+  if (typeof killTimer.unref === "function") {
+    killTimer.unref();
+  }
+
+  child.stdout?.on("data", (chunk) => {
+    const rawText = String(chunk || "");
+    if (docmanActiveRun?.runId === runId) {
+      appendDocmanRunTail(docmanActiveRun, rawText, "stdout");
+    }
+    const text = rawText.replace(/\r?\n$/, "");
+    appendServerLog(`[${nowIso()}] [docman:${runId}] [stdout] ${text}`).catch(() => undefined);
+  });
+
+  child.stderr?.on("data", (chunk) => {
+    const rawText = String(chunk || "");
+    if (docmanActiveRun?.runId === runId) {
+      appendDocmanRunTail(docmanActiveRun, rawText, "stderr");
+    }
+    const text = rawText.replace(/\r?\n$/, "");
+    appendServerLog(`[${nowIso()}] [docman:${runId}] [stderr] ${text}`).catch(() => undefined);
+  });
+
+  child.on("error", (error) => {
+    clearTimeout(killTimer);
+    const errMessage = String(error?.message || "Unknown process error");
+    void finalizeRun(
+      {
+        status: "failed",
+        error: errMessage,
+      },
+      `process error: ${errMessage}`,
+    );
+  });
+
+  child.on("exit", (code, signal) => {
+    clearTimeout(killTimer);
+    const status = Number(code) === 0 ? "success" : "failed";
+    const numericCode = Number(code);
+    const safeCode = Number.isFinite(numericCode) ? numericCode : null;
+    const safeSignal = signal ? String(signal) : "";
+    const errorMessage = status === "success"
+      ? ""
+      : safeCode !== null
+        ? `docman-tool exited with code ${safeCode}.`
+        : safeSignal
+          ? `docman-tool exited via signal ${safeSignal}.`
+          : "docman-tool exited unexpectedly.";
+    void finalizeRun(
+      {
+        status,
+        exitCode: safeCode,
+        signal: safeSignal,
+        error: errorMessage,
+      },
+      `finished status=${status} code=${String(code)} signal=${String(signal || "")}`,
+    );
+  });
+
+  return { accepted: true, run: toDocmanRunPublic(docmanActiveRun) };
+}
+
 await mkdir(LOG_DIR, { recursive: true });
 await mkdir(STATE_DIR, { recursive: true });
 await mkdir(BOT_JOBS_REPORTS_DIR, { recursive: true });
 await loadLastRunState();
+await loadDocmanRunState();
 await appendServerLog(`[${nowIso()}] linear-trigger server booting on ${HOST}:${PORT}`);
 
 const server = createServer(async (req, res) => {
@@ -2711,6 +3352,13 @@ const server = createServer(async (req, res) => {
         linear: {
           configured: Boolean(LINEAR_API_KEY && LINEAR_TEAM_KEY),
           teamKey: LINEAR_TEAM_KEY || "",
+        },
+        docman: {
+          configured: Boolean(DOCMAN_TOOL_DIR),
+          toolDir: DOCMAN_TOOL_DIR,
+          running: Boolean(docmanActiveRun),
+          activeRun: toDocmanRunPublic(docmanActiveRun),
+          lastRun: toDocmanRunPublic(lastDocmanRun),
         },
         slack: {
           configured: Boolean(SLACK_BOT_TOKEN),
@@ -3031,12 +3679,63 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (method === "POST" && path === "/docman/run") {
+      let payload = null;
+      try {
+        payload = sanitizeDocmanRunPayload(await parseJsonBody(req).catch(() => ({})));
+        validateDocmanRunPayload(payload);
+      } catch (error) {
+        sendJson(res, 400, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Invalid Docman run payload.",
+        });
+        return;
+      }
+
+      try {
+        const result = await startDocmanToolRun(payload);
+        if (!result.accepted) {
+          sendJson(res, 409, origin, {
+            ok: false,
+            running: true,
+            error: "A Docman tool run is already in progress.",
+            run: result.run,
+          });
+          return;
+        }
+
+        sendJson(res, 202, origin, {
+          ok: true,
+          accepted: true,
+          run: result.run,
+        });
+      } catch (error) {
+        await appendServerLog(`[${nowIso()}] docman run failed: ${String(error?.message || error)}`);
+        sendJson(res, 502, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 260) || "Could not start docman-tool.",
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/docman/status") {
+      sendJson(res, 200, origin, {
+        ok: true,
+        running: Boolean(docmanActiveRun),
+        activeRun: toDocmanRunPublic(docmanActiveRun),
+        lastRun: toDocmanRunPublic(lastDocmanRun),
+        serverTime: nowIso(),
+      });
+      return;
+    }
+
     if (method === "POST" && path === "/service/restart") {
-      if (activeRun) {
+      if (activeRun || docmanActiveRun) {
         sendJson(res, 409, origin, {
           ok: false,
           running: true,
-          error: "A Linear run is in progress. Wait for it to finish before restarting the trigger service.",
+          error: "A background run is in progress. Wait for it to finish before restarting the trigger service.",
         });
         return;
       }
@@ -3074,9 +3773,13 @@ const server = createServer(async (req, res) => {
 
       try {
         const created = await createLinearIssue(payload);
-        const slack = await sendSlackIssueNotification(payload, created);
+        const slack = created?.duplicate
+          ? { attempted: false, success: false, skipped: true }
+          : await sendSlackIssueNotification(payload, created);
         await appendServerLog(
-          `[${nowIso()}] linear issue created ${created.issue.identifier} doc=${payload.documentId} job=${payload.failedJobId || "n/a"}`,
+          created?.duplicate
+            ? `[${nowIso()}] linear issue duplicate reused ${created.issue.identifier} doc=${payload.documentId || "n/a"} job=${payload.failedJobId || "n/a"} dedupe=${payload.dedupeKey || "n/a"}`
+            : `[${nowIso()}] linear issue created ${created.issue.identifier} doc=${payload.documentId} job=${payload.failedJobId || "n/a"}`,
         );
         if (slack?.attempted) {
           if (slack.success) {
@@ -3090,8 +3793,9 @@ const server = createServer(async (req, res) => {
           }
         }
 
-        sendJson(res, 201, origin, {
+        sendJson(res, created?.duplicate ? 200 : 201, origin, {
           ok: true,
+          duplicate: Boolean(created?.duplicate),
           issue: created.issue,
           team: {
             key: created.team.key,

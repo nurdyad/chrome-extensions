@@ -40,7 +40,7 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     padding-bottom: 8px;
 }
 
@@ -63,7 +63,8 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
+    flex: 1;
 }
 
 .practice-status-title {
@@ -80,11 +81,18 @@
 }
 
 .practice-status-summary-strip {
-    flex-shrink: 0;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 5px;
-    min-width: 174px;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.practice-status-meta-grid {
+    flex-shrink: 0;
+    width: 146px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
 }
 
 .practice-status-summary-label {
@@ -120,89 +128,100 @@
     border-color: #bfd8f3;
 }
 
-.practice-status-chip-row {
+.practice-status-meta-item {
     display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    width: 100%;
+    min-height: 22px;
+    padding: 3px 5px;
+    border-radius: 8px;
+    border: 1px solid #d6e3f0;
+    background: rgba(255, 255, 255, 0.88);
+    text-align: left;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
-.practice-status-chip {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 20px;
-    padding: 3px 7px;
-    border-radius: 999px;
-    border: 1px solid #d6e3f0;
-    background: rgba(255, 255, 255, 0.86);
-    font-size: 9px;
+.practice-status-meta-label {
+    font-size: 7px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    text-transform: uppercase;
+    color: #6a8198;
+}
+
+.practice-status-meta-value {
+    font-size: 10px;
     font-weight: 600;
     line-height: 1;
-    color: #3d5f7d;
+    color: #183b5b;
+    word-break: break-word;
 }
 
-.practice-status-chip.is-primary {
-    background: linear-gradient(180deg, #eaf4ff 0%, #dcecff 100%);
-    border-color: #b8d4ee;
-    color: #16548b;
-}
-
-.practice-status-chip.is-cdb {
-    background: linear-gradient(180deg, #eefbf4 0%, #dff4e7 100%);
-    border-color: #bfe2cc;
-    color: #1d6b45;
-}
-
-.practice-status-chip.is-ehr-docman-emis {
-    background: linear-gradient(180deg, #f4f2ff 0%, #e9e5ff 100%);
-    border-color: #d3cbf5;
-    color: #5b4fa5;
-}
-
-.practice-status-chip.is-ehr-emis {
-    background: linear-gradient(180deg, #fff4e8 0%, #ffe7c8 100%);
-    border-color: #f0cf9b;
-    color: #9a5f13;
-}
-
-.practice-status-chip.is-service-full {
-    background: linear-gradient(180deg, #eef6ff 0%, #e0eeff 100%);
-    border-color: #bfd8f3;
-    color: #245b90;
-}
-
-.practice-status-chip.is-service-self {
-    background: linear-gradient(180deg, #fff7e9 0%, #ffecce 100%);
-    border-color: #f0d39c;
-    color: #99621a;
-}
-
-.practice-status-chip.is-service-hybrid {
-    background: linear-gradient(180deg, #eefbf8 0%, #ddf5ee 100%);
-    border-color: #b7e4d5;
-    color: #1f7a60;
-}
-
-.practice-status-chip.is-neutral {
-    background: linear-gradient(180deg, #f7f9fc 0%, #edf2f7 100%);
-    border-color: #d7e0ea;
-    color: #53687c;
-}
-
-.practice-status-chip-button {
+.practice-status-meta-item-button {
     appearance: none;
     cursor: pointer;
     transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
 }
 
-.practice-status-chip-button:hover {
+.practice-status-meta-item-button:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(20, 40, 70, 0.08);
 }
 
-.practice-status-chip-button:focus-visible {
+.practice-status-meta-item-button:focus-visible {
     outline: 2px solid rgba(59, 130, 246, 0.32);
     outline-offset: 2px;
+}
+
+.practice-status-meta-item.is-primary {
+    background: linear-gradient(180deg, #eaf4ff 0%, #dcecff 100%);
+    border-color: #b8d4ee;
+    color: #16548b;
+}
+
+.practice-status-meta-item.is-cdb {
+    background: linear-gradient(180deg, #eefbf4 0%, #dff4e7 100%);
+    border-color: #bfe2cc;
+    color: #1d6b45;
+}
+
+.practice-status-meta-item.is-ehr-docman-emis {
+    background: linear-gradient(180deg, #f4f2ff 0%, #e9e5ff 100%);
+    border-color: #d3cbf5;
+    color: #5b4fa5;
+}
+
+.practice-status-meta-item.is-ehr-emis {
+    background: linear-gradient(180deg, #fff4e8 0%, #ffe7c8 100%);
+    border-color: #f0cf9b;
+    color: #9a5f13;
+}
+
+.practice-status-meta-item.is-service-full {
+    background: linear-gradient(180deg, #eef6ff 0%, #e0eeff 100%);
+    border-color: #bfd8f3;
+    color: #245b90;
+}
+
+.practice-status-meta-item.is-service-self {
+    background: linear-gradient(180deg, #fff7e9 0%, #ffecce 100%);
+    border-color: #f0d39c;
+    color: #99621a;
+}
+
+.practice-status-meta-item.is-service-hybrid {
+    background: linear-gradient(180deg, #eefbf8 0%, #ddf5ee 100%);
+    border-color: #b7e4d5;
+    color: #1f7a60;
+}
+
+.practice-status-meta-item.is-neutral {
+    background: linear-gradient(180deg, #f7f9fc 0%, #edf2f7 100%);
+    border-color: #d7e0ea;
+    color: #53687c;
 }
 
 .practice-status-section-head {
@@ -220,6 +239,138 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+}
+
+.practice-status-section-head-details {
+    margin-top: 10px;
+}
+
+.practice-status-credentials-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+}
+
+.practice-status-credential-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid #e1ebf5;
+    border-radius: 11px;
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.practice-status-credential-card-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #365b7d;
+}
+
+.practice-status-credential-card-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.practice-status-credential-field {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.practice-status-credential-label {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6d8398;
+}
+
+.practice-status-credential-value-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 5px 6px;
+    border: 1px solid #d9e6f2;
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(248, 251, 255, 0.98) 0%, rgba(241, 247, 253, 0.98) 100%);
+}
+
+.practice-status-credential-value {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.25;
+    color: #173b5b;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    word-break: break-word;
+}
+
+.practice-status-credential-value.is-secret {
+    letter-spacing: 0.08em;
+}
+
+.practice-status-credential-value.is-empty {
+    min-height: 14px;
+}
+
+.practice-status-inline-actions {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.practice-status-inline-action {
+    appearance: none;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #cfdceb;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.96);
+    cursor: pointer;
+    color: #40637f;
+    transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.practice-status-inline-action svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.practice-status-inline-action:hover {
+    transform: translateY(-1px);
+    border-color: #9fc2e5;
+    box-shadow: 0 4px 8px rgba(20, 40, 70, 0.08);
+    color: #0f5da8;
+}
+
+.practice-status-inline-action.is-active {
+    border-color: #9fc2e5;
+    color: #0f5da8;
+    background: #edf5ff;
+}
+
+.practice-status-inline-action:focus-visible {
+    outline: 2px solid rgba(59, 130, 246, 0.32);
+    outline-offset: 2px;
+    border-radius: 4px;
 }
 
 .practice-status-metric {
@@ -449,7 +600,7 @@
     cursor: pointer;
 }
 
-@media (max-width: 380px) {
+@media (max-width: 300px) {
     .practice-status-hero-row {
         flex-direction: column;
         align-items: stretch;
@@ -466,6 +617,12 @@
 
     .practice-status-metrics {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .practice-status-meta-grid,
+    .practice-status-credential-card-body {
+        grid-template-columns: minmax(0, 1fr);
+        width: 100%;
     }
 }
 

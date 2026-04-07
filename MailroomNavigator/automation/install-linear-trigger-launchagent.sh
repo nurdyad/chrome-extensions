@@ -91,7 +91,7 @@ cat >"$PLIST_PATH" <<PLIST
     <key>EnvironmentVariables</key>
     <dict>
       <key>PATH</key>
-      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
       <key>LINEAR_TRIGGER_ENV_FILE</key>
       <string>${ENV_FILE}</string>
       <key>LINEAR_TRIGGER_BOT_JOBS_DIR</key>

@@ -16,12 +16,86 @@ const PANEL_HOST_TAB_ID = (() => {
 const LIVE_COUNT_KEYS = ['preparing', 'edit', 'review', 'coding', 'rejected'];
 const statusFetchInFlightByOds = new Map();
 const lastKnownLiveCountsByOds = new Map();
+const lastKnownDetailedStatusByOds = new Map();
+const revealedSecretFieldsByOds = new Map();
+const lastRenderedStatusSignatureByOds = new Map();
 let statusDisplayInteractionsBound = false;
+let lastStatusDisplayInteractionAt = 0;
+const STATUS_DISPLAY_INTERACTION_COOLDOWN_MS = 15000;
 
 function withPreferredTabId(message = {}) {
     return typeof PANEL_HOST_TAB_ID === 'number'
         ? { ...message, preferredTabId: PANEL_HOST_TAB_ID }
         : { ...message };
+}
+
+function rememberStatusDisplayInteraction() {
+    lastStatusDisplayInteractionAt = Date.now();
+}
+
+export function shouldPauseStatusAutoRefresh() {
+    return Date.now() - lastStatusDisplayInteractionAt < STATUS_DISPLAY_INTERACTION_COOLDOWN_MS;
+}
+
+function emitPracticeSelectionChanged(detail = {}) {
+    document.dispatchEvent(new CustomEvent('mailroomNavigator:practiceSelectionChanged', {
+        detail: {
+            odsCode: String(detail.odsCode || '').trim().toUpperCase(),
+            practiceName: String(detail.practiceName || '').trim(),
+            hasConcretePractice: Boolean(detail.hasConcretePractice),
+            isAllPractices: Boolean(detail.isAllPractices)
+        }
+    }));
+}
+
+function getSecretFieldKey(secretLabel) {
+    return String(secretLabel || '').trim();
+}
+
+function isSecretFieldVisible(odsCode, secretLabel) {
+    const normalizedOds = String(odsCode || '').toUpperCase();
+    const key = getSecretFieldKey(secretLabel);
+    if (!normalizedOds || !key) return false;
+    return Boolean(revealedSecretFieldsByOds.get(normalizedOds)?.has(key));
+}
+
+function setSecretFieldVisibility(odsCode, secretLabel, isVisible) {
+    const normalizedOds = String(odsCode || '').toUpperCase();
+    const key = getSecretFieldKey(secretLabel);
+    if (!normalizedOds || !key) return;
+
+    const next = new Set(revealedSecretFieldsByOds.get(normalizedOds) || []);
+    if (isVisible) next.add(key);
+    else next.delete(key);
+
+    if (next.size > 0) {
+        revealedSecretFieldsByOds.set(normalizedOds, next);
+    } else {
+        revealedSecretFieldsByOds.delete(normalizedOds);
+    }
+}
+
+function buildStatusDetailSignature(status) {
+    return JSON.stringify({
+        odsCode: String(status?.odsCode || '').trim().toUpperCase(),
+        practiceCDB: String(status?.practiceCDB || '').trim(),
+        ehrType: String(status?.ehrType || '').trim(),
+        serviceLevel: String(status?.serviceLevel || '').trim(),
+        collectionQuota: String(status?.collectionQuota || '').trim(),
+        collectedToday: String(status?.collectedToday || '').trim(),
+        emisApiUsername: String(status?.emisApiUsername || '').trim(),
+        emisApiPassword: String(status?.emisApiPassword || '').trim(),
+        emisWebUsername: String(status?.emisWebUsername || '').trim(),
+        emisWebPassword: String(status?.emisWebPassword || '').trim(),
+        emisWebDummyNhsNumber: String(status?.emisWebDummyNhsNumber || '').trim(),
+        docmanUsername: String(status?.docmanUsername || '').trim(),
+        docmanPassword: String(status?.docmanPassword || '').trim(),
+        docmanDummyNhsNumber: String(status?.docmanDummyNhsNumber || '').trim(),
+        docmanInputFolder: String(status?.docmanInputFolder || '').trim(),
+        docmanProcessingFolder: String(status?.docmanProcessingFolder || '').trim(),
+        docmanFilingFolder: String(status?.docmanFilingFolder || '').trim(),
+        docmanRejectedFolder: String(status?.docmanRejectedFolder || '').trim()
+    });
 }
 
 // navigator.js - Safety check to prevent duplicate buttons
@@ -113,6 +187,13 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
     }
   }
 
+  emitPracticeSelectionChanged({
+      odsCode: normalized.ods,
+      practiceName: normalized.name,
+      hasConcretePractice,
+      isAllPractices
+  });
+
   return normalized;
 }
 
@@ -123,6 +204,12 @@ export function clearSelectedPractice() {
   const statusDisplayEl = document.getElementById('statusDisplay');
   if (statusDisplayEl) statusDisplayEl.style.display = 'none';
   hidePracticeSuggestions();
+  emitPracticeSelectionChanged({
+      odsCode: '',
+      practiceName: '',
+      hasConcretePractice: false,
+      isAllPractices: false
+  });
 }
 
 export function hidePracticeSuggestions() {
@@ -154,7 +241,13 @@ export function setNavigatorButtonsState(stateOrEnabled) {
         ['rejectedBtn', allowBroadActions],
         ['usersBtn', hasConcretePractice],
         ['openEhrSettingsBtn', hasConcretePractice],
-        ['taskRecipientsBtn', hasConcretePractice]
+        ['taskRecipientsBtn', hasConcretePractice],
+        ['runDocmanLoginBtn', hasConcretePractice],
+        ['runDocmanVerifyBtn', hasConcretePractice],
+        ['runDocmanCreateGroupBtn', hasConcretePractice],
+        ['runDocmanCleanProcessingBtn', hasConcretePractice],
+        ['runDocmanCleanFilingBtn', hasConcretePractice],
+        ['runDocmanOnboardingBtn', hasConcretePractice]
     ].forEach(([id, enabled]) => {
         const el = document.getElementById(id);
         if (el) el.disabled = !enabled;
@@ -245,12 +338,15 @@ function findCachedPracticeByOds(odsCode) {
 }
 
 function buildCachedStatusSnapshot(odsCode) {
+    const normalizedOds = String(odsCode || '').toUpperCase();
     const cached = findCachedPracticeByOds(odsCode);
-    if (!cached) return null;
+    const detailed = lastKnownDetailedStatusByOds.get(normalizedOds);
+    if (!cached && !detailed) return null;
     return {
-        ...cached,
-        odsCode: cached.ods || String(odsCode || '').toUpperCase(),
-        practiceCDB: cached.cdb || cached.practiceCDB || 'N/A'
+        ...(cached || {}),
+        ...(detailed || {}),
+        odsCode: detailed?.odsCode || cached?.ods || normalizedOds,
+        practiceCDB: detailed?.practiceCDB || cached?.cdb || cached?.practiceCDB || 'N/A'
     };
 }
 
@@ -266,6 +362,104 @@ function escapeHtml(value) {
 function formatStatusValue(value, fallback = 'N/A') {
     const text = String(value ?? '').trim();
     return text || fallback;
+}
+
+function formatOptionalStatusValue(value) {
+    return String(value ?? '').trim();
+}
+
+function maskSecretValue(value) {
+    const normalizedValue = formatOptionalStatusValue(value);
+    if (!normalizedValue) return '';
+    return '*'.repeat(Math.min(Math.max(normalizedValue.length, 6), 14));
+}
+
+function buildStatusActionIcon(type) {
+    if (type === 'eye') {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"></path>
+                <circle cx="12" cy="12" r="3.2"></circle>
+            </svg>
+        `;
+    }
+
+    return `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"></path>
+        </svg>
+    `;
+}
+
+function buildMetaItemHtml(label, value, toneClass, options = {}) {
+    const safeLabel = escapeHtml(label);
+    const displayValue = formatStatusValue(value);
+    const copyValue = formatOptionalStatusValue(options.copyValue);
+    const copyLabel = escapeHtml(options.copyLabel || label);
+    const tagName = copyValue ? 'button' : 'div';
+    const interactiveClass = copyValue ? ' practice-status-meta-item-button' : '';
+    const actionAttrs = copyValue
+        ? ` type="button" data-copy-value="${escapeHtml(copyValue)}" data-copy-label="${copyLabel}" title="Copy ${copyLabel}"`
+        : '';
+
+    return `
+        <${tagName} class="practice-status-meta-item ${toneClass}${interactiveClass}"${actionAttrs}>
+            <span class="practice-status-meta-label">${safeLabel}</span>
+            <span class="practice-status-meta-value">${escapeHtml(displayValue)}</span>
+        </${tagName}>
+    `;
+}
+
+function buildCredentialFieldHtml(groupLabel, label, value, options = {}) {
+    const normalizedValue = formatOptionalStatusValue(value);
+    const safeLabel = escapeHtml(label);
+    const fullLabel = `${groupLabel} ${label}`.trim();
+    const safeFullLabel = escapeHtml(fullLabel);
+    const isSecret = options.secret === true;
+    const isVisible = isSecret && isSecretFieldVisible(options.odsCode, fullLabel);
+    const valueMarkup = normalizedValue
+        ? (isSecret
+            ? `<span class="practice-status-credential-value is-secret" data-secret-value="${escapeHtml(normalizedValue)}" data-secret-mask="${escapeHtml(maskSecretValue(normalizedValue))}" data-secret-label="${safeFullLabel}" data-secret-visible="${isVisible ? 'true' : 'false'}">${escapeHtml(isVisible ? normalizedValue : maskSecretValue(normalizedValue))}</span>`
+            : `<span class="practice-status-credential-value">${escapeHtml(normalizedValue)}</span>`)
+        : '<span class="practice-status-credential-value is-empty">&nbsp;</span>';
+    const actionsMarkup = normalizedValue
+        ? `
+            <div class="practice-status-inline-actions">
+                ${isSecret
+                    ? `<button class="practice-status-inline-action${isVisible ? ' is-active' : ''}" type="button" data-secret-toggle="true" aria-pressed="${isVisible ? 'true' : 'false'}" aria-label="${isVisible ? 'Hide' : 'Show'} ${safeFullLabel}" title="${isVisible ? 'Hide' : 'Show'} ${safeFullLabel}">
+                        ${buildStatusActionIcon('eye')}
+                    </button>`
+                    : ''}
+                <button class="practice-status-inline-action" type="button" data-copy-value="${escapeHtml(normalizedValue)}" data-copy-label="${safeFullLabel}" title="Copy ${safeFullLabel}">
+                    ${buildStatusActionIcon('copy')}
+                </button>
+            </div>
+        `
+        : '';
+    const fieldAttributes = isSecret && normalizedValue ? ' data-secret-field="true"' : '';
+
+    return `
+        <div class="practice-status-credential-field"${fieldAttributes}>
+            <span class="practice-status-credential-label">${safeLabel}</span>
+            <div class="practice-status-credential-value-row">
+                ${valueMarkup}
+                ${actionsMarkup}
+            </div>
+        </div>
+    `;
+}
+
+function buildCredentialGroupHtml(groupLabel, fields) {
+    const body = fields.map((field) => buildCredentialFieldHtml(groupLabel, field.label, field.value, field)).join('');
+    return `
+        <div class="practice-status-credential-card">
+            <div class="practice-status-credential-card-title">${escapeHtml(groupLabel)}</div>
+            <div class="practice-status-credential-card-body">
+                ${body}
+            </div>
+        </div>
+    `;
 }
 
 function getMetricToneClass(key, rawValue) {
@@ -311,10 +505,39 @@ function ensureStatusDisplayInteractions() {
     if (!statusDisplayEl) return;
 
     statusDisplayEl.addEventListener('click', async (event) => {
+        const toggleTarget = event.target instanceof Element
+            ? event.target.closest('[data-secret-toggle]')
+            : null;
+        if (toggleTarget) {
+            rememberStatusDisplayInteraction();
+            const fieldEl = toggleTarget.closest('[data-secret-field]');
+            const valueEl = fieldEl?.querySelector('[data-secret-value]');
+            if (!valueEl) return;
+
+            const currentVisible = String(valueEl.getAttribute('data-secret-visible') || '').toLowerCase() === 'true';
+            const rawValue = String(valueEl.getAttribute('data-secret-value') || '');
+            const maskedValue = String(valueEl.getAttribute('data-secret-mask') || '');
+            const secretLabel = String(valueEl.getAttribute('data-secret-label') || 'secret').trim();
+            const nextVisible = !currentVisible;
+            const odsCode = String(
+                valueEl.closest('.status-info-box')?.getAttribute('data-status-ods') || state.currentSelectedOdsCode || ''
+            ).toUpperCase();
+
+            valueEl.textContent = nextVisible ? rawValue : maskedValue;
+            valueEl.setAttribute('data-secret-visible', nextVisible ? 'true' : 'false');
+            toggleTarget.setAttribute('aria-pressed', nextVisible ? 'true' : 'false');
+            toggleTarget.setAttribute('aria-label', `${nextVisible ? 'Hide' : 'Show'} ${secretLabel}`);
+            toggleTarget.setAttribute('title', `${nextVisible ? 'Hide' : 'Show'} ${secretLabel}`);
+            toggleTarget.classList.toggle('is-active', nextVisible);
+            setSecretFieldVisibility(odsCode, secretLabel, nextVisible);
+            return;
+        }
+
         const copyTarget = event.target instanceof Element
             ? event.target.closest('[data-copy-value]')
             : null;
         if (!copyTarget) return;
+        rememberStatusDisplayInteraction();
 
         const copyValue = String(copyTarget.getAttribute('data-copy-value') || '').trim();
         const copyLabel = String(copyTarget.getAttribute('data-copy-label') || 'Value').trim();
@@ -340,10 +563,17 @@ function buildPracticeStatusHtml(status, counts) {
     const odsCode = formatStatusValue(status?.odsCode);
     const ehrType = formatStatusValue(status?.ehrType);
     const serviceLevel = formatStatusValue(status?.serviceLevel);
-    const practiceCdb = formatStatusValue(status?.practiceCDB);
+    const practiceCdbRaw = formatOptionalStatusValue(status?.practiceCDB);
+    const practiceCdb = practiceCdbRaw || 'N/A';
     const collectionQuota = formatStatusValue(status?.collectionQuota);
     const collectedToday = formatStatusValue(status?.collectedToday);
     const totalLive = getLiveTotal(counts);
+    const metaItems = [
+        buildMetaItemHtml('ODS', odsCode, 'is-primary', { copyValue: status?.odsCode, copyLabel: 'ODS' }),
+        buildMetaItemHtml('CDB', practiceCdb, practiceCdbRaw ? 'is-cdb' : 'is-neutral', { copyValue: practiceCdbRaw, copyLabel: 'CDB' }),
+        buildMetaItemHtml('EHR Type', ehrType, getEhrChipClass(ehrType)),
+        buildMetaItemHtml('Service', serviceLevel, getServiceChipClass(serviceLevel))
+    ].join('');
 
     const summaryCards = [
         ['Active', totalLive, 'is-primary'],
@@ -369,28 +599,42 @@ function buildPracticeStatusHtml(status, counts) {
         </div>
     `).join('');
 
+    const ehrGroups = [
+        buildCredentialGroupHtml('EMIS API', [
+            { label: 'Username', value: status?.emisApiUsername, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.emisApiPassword, secret: true, odsCode: status?.odsCode }
+        ]),
+        buildCredentialGroupHtml('EMIS Web', [
+            { label: 'Username', value: status?.emisWebUsername, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.emisWebPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Dummy NHS Number', value: status?.emisWebDummyNhsNumber, odsCode: status?.odsCode }
+        ]),
+        buildCredentialGroupHtml('Docman', [
+            { label: 'Username', value: status?.docmanUsername, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.docmanPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Dummy NHS Number', value: status?.docmanDummyNhsNumber, odsCode: status?.odsCode },
+            { label: 'Input Folder', value: status?.docmanInputFolder, odsCode: status?.odsCode },
+            { label: 'Processing Folder', value: status?.docmanProcessingFolder, odsCode: status?.odsCode },
+            { label: 'Filing Folder', value: status?.docmanFilingFolder, odsCode: status?.odsCode },
+            { label: 'Rejected Folder', value: status?.docmanRejectedFolder, odsCode: status?.odsCode }
+        ])
+    ].join('');
+
     return `
         <div class="status-info-box practice-status-card" data-status-ods="${escapeHtml(status.odsCode || '')}">
             <div class="practice-status-hero">
-                <div class="practice-status-kicker">Practice Status</div>
                 <div class="practice-status-hero-row">
                     <div class="practice-status-heading">
+                        <div class="practice-status-kicker">Practice Status</div>
                         <div class="practice-status-title">${escapeHtml(displayName)}</div>
                         <div class="practice-status-subtitle">Live BetterLetter summary</div>
                     </div>
-                    <div class="practice-status-summary-strip">
-                        ${summaryCards}
+                    <div class="practice-status-meta-grid">
+                        ${metaItems}
                     </div>
                 </div>
-                <div class="practice-status-chip-row">
-                    <button class="practice-status-chip practice-status-chip-button is-primary" type="button" data-copy-value="${escapeHtml(odsCode)}" data-copy-label="ODS" title="Copy ODS code">
-                        ${escapeHtml(`ODS: ${odsCode}`)}
-                    </button>
-                    <span class="practice-status-chip ${getEhrChipClass(ehrType)}">${escapeHtml(ehrType)}</span>
-                    <span class="practice-status-chip ${getServiceChipClass(serviceLevel)}">${escapeHtml(serviceLevel)}</span>
-                    <button class="practice-status-chip practice-status-chip-button is-cdb" type="button" data-copy-value="${escapeHtml(practiceCdb)}" data-copy-label="CDB" title="Copy CDB">
-                        ${escapeHtml(`CDB: ${practiceCdb}`)}
-                    </button>
+                <div class="practice-status-summary-strip">
+                    ${summaryCards}
                 </div>
             </div>
             <div class="practice-status-section-head">
@@ -398,6 +642,12 @@ function buildPracticeStatusHtml(status, counts) {
             </div>
             <div class="practice-status-metrics">
                 ${metricCards}
+            </div>
+            <div class="practice-status-section-head practice-status-section-head-details">
+                <span class="practice-status-section-caption">EHR settings</span>
+            </div>
+            <div class="practice-status-credentials-list">
+                ${ehrGroups}
             </div>
         </div>
     `;
@@ -461,7 +711,8 @@ export async function displayPracticeStatus(options = {}) {
     const hasVisibleStatusCard = Boolean(document.querySelector('#statusDisplay .status-info-box'));
 
     if (preferCached) {
-        const cachedStatus = buildCachedStatusSnapshot(selectedOds);
+        const shouldRenderImmediateSnapshot = !keepExisting || !hasVisibleStatusCard || displayedOdsBeforeFetch !== selectedOds;
+        const cachedStatus = shouldRenderImmediateSnapshot ? buildCachedStatusSnapshot(selectedOds) : null;
         if (cachedStatus) {
             const fallbackCounts = displayedOdsBeforeFetch === selectedOds
                 ? readDisplayedLiveCounts()
@@ -472,7 +723,7 @@ export async function displayPracticeStatus(options = {}) {
             );
             statusDisplayEl.innerHTML = buildPracticeStatusHtml(cachedStatus, immediateCounts);
             statusDisplayEl.style.display = 'block';
-        } else if (!keepExisting) {
+        } else if (!keepExisting && shouldRenderImmediateSnapshot) {
             statusDisplayEl.style.display = 'none';
         }
     } else if (!keepExisting) {
@@ -504,15 +755,28 @@ export async function displayPracticeStatus(options = {}) {
 
         if (response && response.success && response.status) {
             const counts = normalizeLiveCounts(response.status.liveMailroomCounts);
+            const statusSignature = buildStatusDetailSignature(response.status);
+            lastKnownDetailedStatusByOds.set(selectedOds, { ...response.status });
             const displayedOds = String(
                 document.querySelector('#statusDisplay .status-info-box')?.getAttribute('data-status-ods') || ''
             ).toUpperCase();
             const countsForRender = displayedOds === selectedOds
                 ? mergeDisplayCounts(counts, readDisplayedLiveCounts())
                 : mergeDisplayCounts(counts, normalizeLiveCounts(lastKnownLiveCountsByOds.get(selectedOds)));
+            const previousSignature = lastRenderedStatusSignatureByOds.get(selectedOds);
+            const canPatchCountsOnly = hasVisibleStatusCard && displayedOds === selectedOds && previousSignature === statusSignature;
 
-            statusDisplayEl.innerHTML = buildPracticeStatusHtml(response.status, countsForRender);
-            statusDisplayEl.style.display = 'block';
+            if (canPatchCountsOnly) {
+                applyLiveCountsToStatusDisplay(countsForRender);
+            } else {
+                statusDisplayEl.innerHTML = buildPracticeStatusHtml(response.status, countsForRender);
+                statusDisplayEl.style.display = 'block';
+                rememberLiveCountsForOds(selectedOds, countsForRender);
+                lastRenderedStatusSignatureByOds.set(selectedOds, statusSignature);
+            }
+            if (!canPatchCountsOnly) {
+                statusDisplayEl.style.display = 'block';
+            }
             rememberLiveCountsForOds(selectedOds, countsForRender);
             if (!silent) {
                 showStatus('Practice details loaded.', 'success');
