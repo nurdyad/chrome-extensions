@@ -75,12 +75,21 @@ export function showStatus(message, type) {
   }
 }
 
+function canUseNavigatorClipboardApi() {
+    try {
+        const protocol = String(globalThis?.location?.protocol || '').toLowerCase();
+        return protocol === 'chrome-extension:' || protocol === 'moz-extension:';
+    } catch (error) {
+        return false;
+    }
+}
+
 export async function copyTextToClipboard(text) {
     const value = String(text ?? '');
     if (!value) return false;
 
     try {
-        if (navigator?.clipboard?.writeText) {
+        if (canUseNavigatorClipboardApi() && navigator?.clipboard?.writeText) {
             await navigator.clipboard.writeText(value);
             return true;
         }
