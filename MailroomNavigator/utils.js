@@ -135,6 +135,22 @@ export function openTabWithTimeout(url) {
     };
 
     try {
+        if (chrome?.runtime?.sendMessage) {
+            chrome.runtime.sendMessage(
+                { action: 'openUrlInNewTab', url: targetUrl },
+                (response) => {
+                    if (chrome.runtime.lastError) {
+                        handleError(chrome.runtime.lastError);
+                        return;
+                    }
+                    if (!response?.success) {
+                        handleError(new Error(response?.error || 'Failed to open page.'));
+                    }
+                }
+            );
+            return;
+        }
+
         if (!chrome?.tabs?.create) {
             throw new Error('chrome.tabs API unavailable.');
         }

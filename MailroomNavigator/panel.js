@@ -792,7 +792,12 @@ function hideSuggestions() {
 }
 
 // --- 3. Main Initialization ---
-document.addEventListener('DOMContentLoaded', async () => {
+let panelInitializationStarted = false;
+
+async function initializePanel() {
+    if (panelInitializationStarted) return;
+    panelInitializationStarted = true;
+    try {
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
 
@@ -2385,11 +2390,195 @@ document.addEventListener('DOMContentLoaded', async () => {
     const setDocmanToolStatus = (message, tone = null) => {
         if (!docmanToolStatus) return;
         const normalizedMessage = trimDocmanField(message, 4000) || getDocmanToolDefaultStatusMessage();
-        docmanToolStatus.classList.remove('neutral', 'valid', 'invalid');
+        docmanToolStatus.classList.remove('neutral', 'valid', 'invalid', 'docman-tool-status-host');
         if (tone === 'valid') docmanToolStatus.classList.add('valid');
         else if (tone === 'invalid') docmanToolStatus.classList.add('invalid');
         else docmanToolStatus.classList.add('neutral');
+        docmanToolStatus.classList.add('validation-badge', 'docman-tool-status-host');
         docmanToolStatus.textContent = normalizedMessage;
+    };
+    const getDocmanRunStatusTone = (run, isActive = false) => {
+        if (isActive || String(run?.status || '').toLowerCase() === 'running') return 'running';
+        const action = trimDocmanField(run?.action, 40);
+        const resultData = run?.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+        if (action === 'verify' && String(run?.status || '').toLowerCase() === 'success') {
+            const checked = Number(resultData?.checked) || Number(run?.usernamesCount) || 0;
+            const matched = Number(resultData?.matched) || 0;
+            if (checked > 0 && matched <= 0) return 'warning';
+            if (checked > 0 && matched < checked) return 'warning';
+        }
+        return String(run?.status || '').toLowerCase() === 'success' ? 'success' : 'failed';
+    };
+    const getDocmanRunStatusLabel = (run, isActive = false) => {
+        const tone = getDocmanRunStatusTone(run, isActive);
+        if (tone === 'running') return 'Running';
+        if (tone === 'warning') {
+            const action = trimDocmanField(run?.action, 40);
+            const resultData = run?.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+            if (action === 'verify') {
+                const checked = Number(resultData?.checked) || Number(run?.usernamesCount) || 0;
+                const matched = Number(resultData?.matched) || 0;
+                if (checked > 0 && matched <= 0) return 'No Matches';
+                return 'Partial';
+            }
+            return 'Attention';
+        }
+        if (tone === 'success') return 'Success';
+        return 'Failed';
+    };
+    const formatDocmanToolCount = (value, singular, plural = `${singular}s`) => {
+        const count = Number(value) || 0;
+        return `${count} ${count === 1 ? singular : plural}`;
+    };
+    const getDocmanRunHeadline = (run, isActive = false) => {
+        if (!run || typeof run !== 'object') return '';
+        const actionLabel = getDocmanActionLabel(trimDocmanField(run.action, 40));
+        const practiceLabel = trimDocmanField(run.practiceName, 120) || 'Selected practice';
+        const endedAt = formatDocmanToolTime(run.endedAt);
+        const startedAt = formatDocmanToolTime(run.startedAt);
+        const tone = getDocmanRunStatusTone(run, isActive);
+        const resultData = run.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+        if (isActive || String(run.status || '').toLowerCase() === 'running') {
+            return `${actionLabel} is running for ${practiceLabel}${startedAt ? ` since ${startedAt}` : ''}.`;
+        }
+        if (trimDocmanField(run.action, 40) === 'verify' && tone === 'warning') {
+            const checked = Number(resultData?.checked) || Number(run.usernamesCount) || 0;
+            const matched = Number(resultData?.matched) || 0;
+            const missing = Number.isFinite(Number(resultData?.missing)) ? Number(resultData.missing) : Math.max(0, checked - matched);
+            if (matched <= 0 && checked > 0) {
+                return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}, but no exact Docman matches were found.`;
+            }
+            return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''} with partial matches (${matched} matched, ${missing} missing).`;
+        }
+        if (String(run.status || '').toLowerCase() === 'success') {
+            return `${actionLabel} finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}.`;
+        }
+        const reason = trimDocmanField(run.error, 180) || (run.exitCode != null ? `Exit code ${run.exitCode}` : 'Run failed');
+        return `${actionLabel} failed for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}. ${reason}`;
+    };
+    const buildDocmanSummaryCards = (run, isActive = false) => {
+        if (!run || typeof run !== 'object') return [];
+        const resultData = run.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+        const action = trimDocmanField(run.action, 40);
+        if (action === 'verify') {
+            const checked = Number(resultData?.checked) || Number(run.usernamesCount) || 0;
+            const matched = Number(resultData?.matched) || 0;
+            const missing = Number(resultData?.missing);
+            return [
+                { label: 'Checked', value: String(checked || 0), tone: 'is-primary' },
+                { label: 'Matched', value: String(matched), tone: matched > 0 ? 'is-success' : 'is-info' },
+                { label: 'Missing', value: String(Number.isFinite(missing) ? missing : Math.max(0, checked - matched)), tone: (Number.isFinite(missing) ? missing : Math.max(0, checked - matched)) > 0 ? 'is-warning' : 'is-neutral' }
+            ];
+        }
+        if (action === 'create-group') {
+            const membersCount = Number(resultData?.membersCount) || Number(run.usernamesCount) || 0;
+            return [
+                { label: 'Members', value: String(membersCount), tone: 'is-primary' },
+                { label: 'Status', value: getDocmanRunStatusLabel(run, isActive), tone: getDocmanRunStatusTone(run, isActive) === 'success' ? 'is-success' : 'is-info' }
+            ];
+        }
+        if (action === 'onboarding') {
+            const folderCount = Number(resultData?.folderCount) || 0;
+            const existingCount = Number(resultData?.existingCount) || 0;
+            return [
+                { label: 'Folder #4', value: trimDocmanField(resultData?.inputFolderName || run.onboardingInputFolderName, 48) || 'Default', tone: 'is-primary' },
+                { label: 'Folders', value: String(folderCount || 0), tone: 'is-info' },
+                { label: 'Already There', value: String(existingCount || 0), tone: existingCount > 0 ? 'is-warning' : 'is-neutral' }
+            ];
+        }
+        return [
+            { label: 'Action', value: getDocmanActionLabel(action), tone: 'is-primary' },
+            { label: 'Status', value: getDocmanRunStatusLabel(run, isActive), tone: getDocmanRunStatusTone(run, isActive) === 'success' ? 'is-success' : getDocmanRunStatusTone(run, isActive) === 'failed' ? 'is-danger' : 'is-info' }
+        ];
+    };
+    const buildDocmanVerifyResultsHtml = (run) => {
+        const resultData = run?.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+        const results = Array.isArray(resultData?.results) ? resultData.results.slice(0, 24) : [];
+        if (!results.length) return '';
+        return `
+            <div class="docman-tool-verify-list">
+                ${results.map((entry) => {
+                    const requested = trimDocmanField(entry?.requestedUsername, 120) || 'Username';
+                    const found = trimDocmanField(entry?.docmanUsername, 120);
+                    const detail = trimDocmanField(entry?.detail, 180);
+                    const isFound = Boolean(entry?.exists && found);
+                    return `
+                        <div class="docman-tool-verify-item ${isFound ? 'is-found' : 'is-missing'}">
+                            <div class="docman-tool-verify-main">
+                                <div class="docman-tool-verify-requested">${escapeHtml(requested)}</div>
+                                <div class="docman-tool-verify-found">${escapeHtml(isFound ? `Matched: ${found}` : 'No exact Docman match')}</div>
+                                ${detail ? `<div class="docman-tool-verify-detail">${escapeHtml(detail)}</div>` : ''}
+                            </div>
+                            <div class="docman-tool-verify-state">${isFound ? 'Found' : 'Missing'}</div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    };
+    const renderDocmanToolRunStatus = (run, { isActive = false } = {}) => {
+        if (!docmanToolStatus || !run || typeof run !== 'object') return;
+        const tone = getDocmanRunStatusTone(run, isActive);
+        const startedAt = formatDocmanToolTime(run.startedAt);
+        const endedAt = formatDocmanToolTime(run.endedAt);
+        const resultData = run.resultData && typeof run.resultData === 'object' ? run.resultData : null;
+        const summaryCards = buildDocmanSummaryCards(run, isActive);
+        const logLines = Array.isArray(run.logLines) ? run.logLines.map((line) => trimDocmanField(line, 240)).filter(Boolean).slice(-80) : [];
+        const exactMatches = Array.isArray(resultData?.exactMatches) ? resultData.exactMatches.map((value) => trimDocmanField(value, 120)).filter(Boolean).slice(0, 40) : [];
+        const chips = [];
+        const odsCode = trimDocmanField(run.odsCode, 16);
+        if (odsCode) chips.push(`ODS ${odsCode}`);
+        if (startedAt) chips.push(`Started ${startedAt}`);
+        if (!isActive && endedAt) chips.push(`Finished ${endedAt}`);
+        if (trimDocmanField(run.groupName, 120)) chips.push(`Group ${trimDocmanField(run.groupName, 120)}`);
+        if (trimDocmanField(run.onboardingInputFolderName, 120)) chips.push(`Folder #4 ${trimDocmanField(run.onboardingInputFolderName, 120)}`);
+
+        docmanToolStatus.classList.remove('validation-badge', 'neutral', 'valid', 'invalid');
+        docmanToolStatus.classList.add('docman-tool-status-host');
+        docmanToolStatus.innerHTML = `
+            <div class="docman-tool-status-card is-${tone}">
+                <div class="docman-tool-status-header">
+                    <div class="docman-tool-status-kicker">Docman ${escapeHtml(getDocmanActionLabel(trimDocmanField(run.action, 40)))}</div>
+                    <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
+                </div>
+                <div class="docman-tool-status-title">${escapeHtml(getDocmanRunHeadline(run, isActive))}</div>
+                <div class="docman-tool-status-subtitle">${escapeHtml(trimDocmanField(run.practiceName, 160) || 'Selected practice')}</div>
+                ${summaryCards.length ? `
+                    <div class="docman-tool-summary-grid">
+                        ${summaryCards.map((item) => `
+                            <div class="docman-tool-summary-card ${escapeHtml(item.tone || 'is-primary')}">
+                                <span class="docman-tool-summary-label">${escapeHtml(item.label || '')}</span>
+                                <span class="docman-tool-summary-value">${escapeHtml(item.value || '')}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
+                <div class="docman-tool-content">
+                    ${chips.length ? `<div class="docman-tool-meta-row">${chips.map((chip) => `<span class="docman-tool-chip">${escapeHtml(chip)}</span>`).join('')}</div>` : ''}
+                    ${exactMatches.length ? `
+                        <div>
+                            <div class="docman-tool-section-caption">Exact matches</div>
+                            <div class="docman-tool-meta-row">
+                                ${exactMatches.map((match) => `<span class="docman-tool-chip">${escapeHtml(match)}</span>`).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${exactMatches.length ? `
+                        <div class="docman-tool-actions">
+                            <button type="button" class="docman-tool-action-btn" data-docman-copy-matches="${escapeHtml(exactMatches.join('\n'))}">Copy matches</button>
+                            ${resultData?.clipboardCopied ? '<span class="docman-tool-chip">Copied to clipboard during run</span>' : ''}
+                        </div>
+                    ` : ''}
+                    ${buildDocmanVerifyResultsHtml(run)}
+                    ${logLines.length ? `
+                        <details class="docman-tool-log-details">
+                            <summary>Captured activity (${logLines.length} line${logLines.length === 1 ? '' : 's'})</summary>
+                            <pre class="docman-tool-log">${escapeHtml(logLines.join('\n'))}</pre>
+                        </details>
+                    ` : ''}
+                </div>
+            </div>
+        `;
     };
     const syncDocmanToolButtons = () => {
         const hasConcretePractice = /^[A-Z]\d{5}$/.test(String(state.currentSelectedOdsCode || '').trim().toUpperCase());
@@ -2567,7 +2756,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (Boolean(status.running) && activeRun) {
             docmanToolRunIsBusy = true;
             syncDocmanToolButtons();
-            setDocmanToolStatus(formatDocmanToolRunSummary(activeRun, true), 'neutral');
+            renderDocmanToolRunStatus(activeRun, { isActive: true });
             return true;
         }
 
@@ -2575,8 +2764,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncDocmanToolButtons();
 
         if (lastRun) {
-            const tone = String(lastRun.status || '').toLowerCase() === 'success' ? 'valid' : 'invalid';
-            setDocmanToolStatus(formatDocmanToolRunSummary(lastRun, false), tone);
+            renderDocmanToolRunStatus(lastRun, { isActive: false });
             return false;
         }
 
@@ -2638,14 +2826,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             if (response?.success && response?.run) {
-                setDocmanToolStatus(formatDocmanToolRunSummary(response.run, true), 'neutral');
+                renderDocmanToolRunStatus(response.run, { isActive: true });
                 showToast(`${actionLabel} started.`);
                 startDocmanToolStatusPolling();
                 return true;
             }
 
             if (response?.running && response?.run) {
-                setDocmanToolStatus(formatDocmanToolRunSummary(response.run, true), 'neutral');
+                renderDocmanToolRunStatus(response.run, { isActive: true });
                 showToast('A Docman tool run is already in progress.');
                 startDocmanToolStatusPolling();
                 return false;
@@ -4509,7 +4697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         clearLinearTriggerStatusAutoClearTimer();
-        setLinearTriggerStatus('Local trigger idle.', 'neutral');
+        setLinearTriggerStatus('Local trigger ready.', 'neutral');
         return false;
     };
 
@@ -4977,12 +5165,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateWorkflowStatus(uiContext, `Creating ${current} / ${workflowRunState.total}… · ETA ${formatEta(remaining)}`);
     };
 
-    chrome.runtime.onMessage.addListener((message) => {
-        if (!workflowRunState.running) return;
-        if (message?.type === 'BL_WORKFLOW_PROGRESS') {
-            updateWorkflowProgress(workflowRunState.uiContext, message.current, message.total);
+    try {
+        const runtimeOnMessage = chrome?.runtime?.onMessage;
+        if (runtimeOnMessage?.addListener) {
+            runtimeOnMessage.addListener((message) => {
+                if (!workflowRunState.running) return;
+                if (message?.type === 'BL_WORKFLOW_PROGRESS') {
+                    updateWorkflowProgress(workflowRunState.uiContext, message.current, message.total);
+                }
+            });
+        } else {
+            console.warn('[Panel] chrome.runtime.onMessage unavailable; live workflow progress listener not attached.');
         }
-    });
+    } catch (error) {
+        console.warn('[Panel] Unable to attach workflow progress listener:', error);
+    }
 
     const runBulkWorkflowCreation = async (uiContext) => {
         const names = parseWorkflowNames(uiContext?.namesInput?.value);
@@ -5391,6 +5588,16 @@ ${error?.message || String(error)}`, 'invalid');
         if (!url) return;
         openTabWithTimeout(url);
     });
+    docmanToolStatus?.addEventListener('click', async (event) => {
+        const target = event.target instanceof Element
+            ? event.target.closest('[data-docman-copy-matches]')
+            : null;
+        if (!target) return;
+        event.preventDefault();
+        const rawValue = String(target.getAttribute('data-docman-copy-matches') || '');
+        const copied = await copyTextToClipboard(rawValue);
+        showToast(copied ? 'Docman matches copied.' : 'Could not copy Docman matches.');
+    });
 
     bulkIdsInput?.addEventListener('input', updateBulkValidation);
 
@@ -5547,7 +5754,24 @@ ${error?.message || String(error)}`, 'invalid');
             await tryAutoSelectPracticeFromActiveTab();
         } catch (e) { console.error("Cache load error:", e); }
     }
-});
+    } catch (error) {
+        panelInitializationStarted = false;
+        console.error('Panel initialization failed:', error);
+        showToast('Extension runtime refreshed. Close and reopen the panel.');
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        initializePanel().catch((error) => {
+            console.error('Panel startup failure:', error);
+        });
+    }, { once: true });
+} else {
+    initializePanel().catch((error) => {
+        console.error('Panel startup failure:', error);
+    });
+}
 
 // --- G. SILENT AUTO-SCAN LOGIC ---
 let isPanelScrapingBusy = false;
