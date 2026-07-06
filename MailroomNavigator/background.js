@@ -328,8 +328,25 @@ function isScriptableUrl(url) {
 // - We sanitize and validate all incoming fields before using them.
 // - We never store tokens in background global state.
 // - We never include secrets in response payloads back to the UI.
+function stringifySingleLineValue(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (value instanceof Error) return value.message || String(value);
+    if (typeof value === 'object') {
+        const directMessage = value.message || value.error || value.reason || value.detail;
+        if (directMessage && directMessage !== value) return stringifySingleLineValue(directMessage);
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+    return String(value);
+}
+
 function sanitizeSingleLine(value, maxLength = 1024) {
-    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+    return stringifySingleLineValue(value).replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
 function sanitizeMultiline(value, maxLength = 12000) {
@@ -588,6 +605,8 @@ function isDocumentOptionalLinearIssuePayload(payload) {
     const failedJobId = sanitizeSingleLine(payload?.failedJobId, 120);
     return Boolean(
         /^Bot Job Error:/i.test(normalizedTitle)
+        || /^Bot Job Spike:/i.test(normalizedTitle)
+        || /^Preparing stuck letters:/i.test(normalizedTitle)
         || /^Practice Support Ticket:/i.test(normalizedTitle)
         || failedJobId
     );
@@ -615,7 +634,10 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
     try {
         const payload = sanitizeLinearIssuePayload(rawPayload);
         if (!payload.slack) {
-            const accessResult = await handleGetExtensionAccessState({}, sender);
+            const accessResult = await withTimeout(
+                handleGetExtensionAccessState({ allowStale: true }, sender),
+                1800
+            );
             if (accessResult?.success && hasAccessToAnyRequiredFeature(accessResult.access, ['slack_sync'])) {
                 const storedSlackPrefs = await getStoredLinearSlackPrefs();
                 if (storedSlackPrefs?.enabled) {
@@ -790,6 +812,8 @@ function sanitizeDocmanToolRun(rawRun = null) {
     const exitCode = typeof rawRun.exitCode === 'number' && Number.isFinite(rawRun.exitCode)
         ? rawRun.exitCode
         : null;
+    const rawResultData = rawRun.resultData && typeof rawRun.resultData === 'object' ? rawRun.resultData : null;
+    const resultType = normalizeDocmanToolAction(rawResultData?.type);
     return {
         runId: sanitizeSingleLine(rawRun.runId, 80),
         startedAt: sanitizeSingleLine(rawRun.startedAt, 80),
@@ -804,7 +828,32 @@ function sanitizeDocmanToolRun(rawRun = null) {
         exitCode,
         signal: sanitizeSingleLine(rawRun.signal, 32),
         error: sanitizeSingleLine(rawRun.error, 260),
-        summaryLines: sanitizeLinearTriggerRunLines(rawRun.summaryLines, 10, 240)
+        summaryLines: sanitizeLinearTriggerRunLines(rawRun.summaryLines, 10, 240),
+        logLines: sanitizeLinearTriggerRunLines(rawRun.logLines, 120, 240),
+        resultData: rawResultData ? {
+            type: resultType,
+            checked: Number.isFinite(Number(rawResultData.checked)) ? Number(rawResultData.checked) : 0,
+            matched: Number.isFinite(Number(rawResultData.matched)) ? Number(rawResultData.matched) : 0,
+            missing: Number.isFinite(Number(rawResultData.missing)) ? Number(rawResultData.missing) : 0,
+            clipboardCopied: Boolean(rawResultData.clipboardCopied),
+            exactMatches: sanitizeDocmanToolUsernames(rawResultData.exactMatches),
+            results: Array.isArray(rawResultData.results)
+                ? rawResultData.results.map((entry, index) => ({
+                    index: Number.isFinite(Number(entry?.index)) ? Number(entry.index) : index,
+                    requestedUsername: sanitizeSingleLine(entry?.requestedUsername, 120),
+                    docmanUsername: sanitizeSingleLine(entry?.docmanUsername, 120),
+                    exists: Boolean(entry?.exists),
+                    detail: sanitizeSingleLine(entry?.detail, 180)
+                })).slice(0, 500)
+                : [],
+            groupName: sanitizeSingleLine(rawResultData.groupName, 240),
+            members: sanitizeDocmanToolUsernames(rawResultData.members),
+            membersCount: Number.isFinite(Number(rawResultData.membersCount)) ? Number(rawResultData.membersCount) : 0,
+            inputFolderName: sanitizeSingleLine(rawResultData.inputFolderName, 240),
+            folderCount: Number.isFinite(Number(rawResultData.folderCount)) ? Number(rawResultData.folderCount) : 0,
+            existingCount: Number.isFinite(Number(rawResultData.existingCount)) ? Number(rawResultData.existingCount) : 0,
+            cleanType: sanitizeSingleLine(rawResultData.cleanType, 80)
+        } : null
     };
 }
 
@@ -4994,15 +5043,21 @@ function openPanelPopup(hostTabId = null) {
     });
 }
 
-async function ensureSidebarPanelMounted(tabId) {
+async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) {
     await chrome.scripting.executeScript({
         target: { tabId },
-        func: (panelUrl, hostTabId) => {
+        func: (panelUrl, hostTabId, shouldForceCollapsed) => {
             const ROOT_ID = 'bl-allinone-sidebar-panel';
             const STYLE_ID = 'bl-allinone-sidebar-style';
             const PANEL_WIDTH = 360;
             const HANDLE_WIDTH = 24;
             const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
+            const syncToggleUi = (panelEl, toggleButton) => {
+                if (!panelEl || !toggleButton) return;
+                const isCollapsed = panelEl.classList.contains('collapsed');
+                toggleButton.textContent = isCollapsed ? '◀' : '▶';
+                toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+            };
 
             const mountSidebar = () => {
                 if (!document.documentElement) return;
@@ -5017,18 +5072,16 @@ async function ensureSidebarPanelMounted(tabId) {
                             existingIframe.src = expectedSrc;
                         }
                     }
+                    if (shouldForceCollapsed) {
+                        existingPanel.classList.add('collapsed');
+                    }
                     if (toggleButton) {
-                        const isCollapsed = existingPanel.classList.contains('collapsed');
-                        toggleButton.textContent = isCollapsed ? '◀' : '▶';
-                        toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+                        syncToggleUi(existingPanel, toggleButton);
                     }
                     return;
                 }
 
-                if (!document.getElementById(STYLE_ID)) {
-                    const styleEl = document.createElement('style');
-                    styleEl.id = STYLE_ID;
-                    styleEl.textContent = `
+                const sidebarCss = `
                         #${ROOT_ID} {
                             position: fixed;
                             top: 0;
@@ -5041,6 +5094,9 @@ async function ensureSidebarPanelMounted(tabId) {
                             box-shadow: -10px 0 28px rgba(15, 23, 42, 0.18);
                             transform: translateX(0);
                             transition: transform 0.22s ease;
+                            visibility: visible !important;
+                            opacity: 1 !important;
+                            pointer-events: auto;
                         }
 
                         #${ROOT_ID}.collapsed {
@@ -5078,19 +5134,26 @@ async function ensureSidebarPanelMounted(tabId) {
                             background: #f7f8fb;
                         }
                     `;
+                const existingStyleEl = document.getElementById(STYLE_ID);
+                if (existingStyleEl) {
+                    existingStyleEl.textContent = sidebarCss;
+                } else {
+                    const styleEl = document.createElement('style');
+                    styleEl.id = STYLE_ID;
+                    styleEl.textContent = sidebarCss;
                     document.documentElement.appendChild(styleEl);
                 }
 
                 const panelEl = document.createElement('div');
                 panelEl.id = ROOT_ID;
-                panelEl.classList.add('collapsed');
+                if (shouldForceCollapsed) {
+                    panelEl.classList.add('collapsed');
+                }
 
                 const toggleButton = document.createElement('button');
                 toggleButton.type = 'button';
                 toggleButton.className = 'bl-sidebar-toggle';
                 toggleButton.dataset.role = 'toggle';
-                toggleButton.textContent = '◀';
-                toggleButton.setAttribute('aria-label', 'Expand panel');
 
                 const iframe = document.createElement('iframe');
                 iframe.src = `${panelUrl}${panelUrl.includes('?') ? '&' : '?'}hostTabId=${encodeURIComponent(String(hostTabId || ''))}`;
@@ -5099,11 +5162,11 @@ async function ensureSidebarPanelMounted(tabId) {
                 toggleButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    const isCollapsed = panelEl.classList.toggle('collapsed');
-                    toggleButton.textContent = isCollapsed ? '◀' : '▶';
-                    toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+                    panelEl.classList.toggle('collapsed');
+                    syncToggleUi(panelEl, toggleButton);
                 });
 
+                syncToggleUi(panelEl, toggleButton);
                 panelEl.append(toggleButton, iframe);
                 (document.body || document.documentElement).appendChild(panelEl);
             };
@@ -5120,18 +5183,56 @@ async function ensureSidebarPanelMounted(tabId) {
 
             mountSidebar();
         },
-        args: [chrome.runtime.getURL('panel.html'), tabId]
+        args: [chrome.runtime.getURL('panel.html'), tabId, Boolean(forceCollapsed)]
     });
 }
 
-async function ensureSidebarHandleForTab(tabId) {
+async function ensureSidebarHandleForTab(tabId, { forceCollapsed = true } = {}) {
     if (typeof tabId !== 'number') return;
     try {
         const tab = await chrome.tabs.get(tabId);
         if (!isScriptableUrl(getTabUrl(tab))) return;
-        await ensureSidebarPanelMounted(tabId);
+        await ensureSidebarPanelMounted(tabId, { forceCollapsed });
     } catch (e) {
         // Ignore tabs that are gone/restricted or not scriptable yet.
+    }
+}
+
+async function removeSidebarPanelFromTab(tabId) {
+    if (typeof tabId !== 'number') return;
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                const root = document.getElementById('bl-allinone-sidebar-panel');
+                if (root) root.remove();
+                const style = document.getElementById('bl-allinone-sidebar-style');
+                if (style) style.remove();
+            }
+        });
+    } catch (e) {
+        // Ignore tabs where scripting is not available.
+    }
+}
+
+async function showSidebarPanelForTab(tabId) {
+    if (typeof tabId !== 'number') return;
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                const root = document.getElementById('bl-allinone-sidebar-panel');
+                if (!root) return;
+                root.classList.remove('collapsed');
+                const toggleButton = root.querySelector('[data-role="toggle"]');
+                if (toggleButton) {
+                    toggleButton.textContent = '▶';
+                    toggleButton.setAttribute('aria-label', 'Collapse panel');
+                }
+            }
+        });
+    } catch (e) {
+        // Ignore tabs where scripting is not available.
     }
 }
 
@@ -5139,17 +5240,22 @@ async function ensureSidebarHandleForTab(tabId) {
 
 chrome.action.onClicked.addListener(async (tab) => {
     await setTargetTabId(tab?.id);
-    await ensureSidebarHandleForTab(tab?.id);
+    await ensureSidebarHandleForTab(tab?.id, { forceCollapsed: false });
+    await showSidebarPanelForTab(tab?.id);
     maybeTriggerMorningDashboardAlert(tab?.id, getTabUrl(tab), 'action_click').catch(() => undefined);
-    openPanelPopup(tab?.id);
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
     const tabId = activeInfo?.tabId;
     setTargetTabId(tabId).catch(() => undefined);
-    ensureSidebarHandleForTab(tabId).catch(() => undefined);
     chrome.tabs.get(tabId)
-        .then((tab) => maybeTriggerMorningDashboardAlert(tabId, getTabUrl(tab), 'tab_activated'))
+        .then((tab) => {
+            const tabUrl = getTabUrl(tab);
+            if (isScriptableUrl(tabUrl)) {
+                ensureSidebarHandleForTab(tabId, { forceCollapsed: true }).catch(() => undefined);
+            }
+            return maybeTriggerMorningDashboardAlert(tabId, tabUrl, 'tab_activated');
+        })
         .catch(() => undefined);
 });
 
@@ -5160,7 +5266,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (isBetterLetterUrl(maybeUrl)) {
         chrome.storage.local.set({ targetTabId: tabId }).catch(() => undefined);
     }
-    ensureSidebarHandleForTab(tabId).catch(() => undefined);
+    if (changeInfo?.status === 'complete') {
+        ensureSidebarHandleForTab(tabId, { forceCollapsed: true }).catch(() => undefined);
+    }
     if (changeInfo?.status === 'complete') {
         maybeTriggerMorningDashboardAlert(tabId, maybeUrl, 'tab_updated').catch(() => undefined);
     }
