@@ -291,6 +291,95 @@ function sanitizeStringList(values, maxItems = 8, maxLength = 220) {
     .slice(0, maxItems);
 }
 
+function sanitizeDocmanVerifyResultEntry(rawEntry = {}, index = 0) {
+  const requestedUsername = sanitizeSingleLine(
+    rawEntry?.requestedUsername
+      || rawEntry?.input
+      || rawEntry?.query
+      || rawEntry?.username
+      || "",
+    120,
+  );
+  const docmanUsername = sanitizeSingleLine(
+    rawEntry?.docmanUsername
+      || rawEntry?.match
+      || rawEntry?.matchedUsername
+      || "",
+    120,
+  );
+  const exists = Boolean(rawEntry?.exists);
+  return {
+    index: Number.isFinite(Number(rawEntry?.index)) ? Number(rawEntry.index) : index,
+    requestedUsername,
+    docmanUsername,
+    exists,
+    detail: sanitizeSingleLine(
+      rawEntry?.detail
+        || rawEntry?.message
+        || rawEntry?.status
+        || rawEntry?.reason
+        || "",
+      180,
+    ),
+  };
+}
+
+function sanitizeDocmanResultData(rawResult = null) {
+  if (!rawResult || typeof rawResult !== "object") return null;
+  const type = normalizeDocmanAction(rawResult.type || rawResult.action || rawResult.kind);
+  if (type === "verify") {
+    const results = Array.isArray(rawResult.results)
+      ? rawResult.results.map((entry, index) => sanitizeDocmanVerifyResultEntry(entry, index)).slice(0, 500)
+      : [];
+    const exactMatches = sanitizeDocmanUsernames(
+      rawResult.exactMatches
+        || results.filter((entry) => entry.exists && entry.docmanUsername).map((entry) => entry.docmanUsername),
+    );
+    const checked = Number.isFinite(Number(rawResult.checked)) ? Number(rawResult.checked) : results.length;
+    const matched = Number.isFinite(Number(rawResult.matched)) ? Number(rawResult.matched) : exactMatches.length;
+    const missing = Number.isFinite(Number(rawResult.missing))
+      ? Number(rawResult.missing)
+      : Math.max(0, checked - matched);
+    return {
+      type,
+      checked,
+      matched,
+      missing,
+      clipboardCopied: Boolean(rawResult.clipboardCopied),
+      exactMatches,
+      results,
+    };
+  }
+
+  if (type === "create-group") {
+    const members = sanitizeDocmanUsernames(rawResult.members);
+    return {
+      type,
+      groupName: sanitizeSingleLine(rawResult.groupName, 240),
+      members,
+      membersCount: members.length,
+    };
+  }
+
+  if (type === "onboarding") {
+    return {
+      type,
+      inputFolderName: sanitizeDocmanFolderName(rawResult.inputFolderName),
+      folderCount: Number.isFinite(Number(rawResult.folderCount)) ? Number(rawResult.folderCount) : 0,
+      existingCount: Number.isFinite(Number(rawResult.existingCount)) ? Number(rawResult.existingCount) : 0,
+    };
+  }
+
+  if (type === "clean-processing" || type === "clean-filing") {
+    return {
+      type,
+      cleanType: sanitizeSingleLine(rawResult.cleanType, 80),
+    };
+  }
+
+  return null;
+}
+
 function normalizeEmail(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalized)) return "";
@@ -759,6 +848,8 @@ function isDocumentOptionalLinearIssuePayload(payload) {
   const failedJobId = sanitizeSingleLine(payload?.failedJobId, 120);
   return Boolean(
     /^Bot Job Error:/i.test(normalizedTitle)
+    || /^Bot Job Spike:/i.test(normalizedTitle)
+    || /^Preparing stuck letters:/i.test(normalizedTitle)
     || /^Practice Support Ticket:/i.test(normalizedTitle)
     || failedJobId
   );
@@ -2911,12 +3002,31 @@ function appendDocmanRunTail(run, rawText, channel = "stdout") {
   if (!run || typeof run !== "object") return;
   const prefix = channel === "stderr" ? "[stderr] " : "";
   const lines = String(rawText || "").replace(/\r/g, "\n").split("\n");
+  if (!Array.isArray(run.logLines)) {
+    run.logLines = [];
+  }
   if (!Array.isArray(run.summaryTail)) {
     run.summaryTail = [];
   }
   for (const line of lines) {
     const normalized = sanitizeSingleLine(line, 240);
     if (!normalized) continue;
+    if (normalized.startsWith("__DOCMAN_RESULT__")) {
+      try {
+        const parsed = JSON.parse(normalized.slice("__DOCMAN_RESULT__".length));
+        const resultData = sanitizeDocmanResultData(parsed);
+        if (resultData) {
+          run.resultData = resultData;
+        }
+      } catch {
+        // Ignore malformed structured markers and keep the human-readable log instead.
+      }
+      continue;
+    }
+    run.logLines.push(`${prefix}${normalized}`);
+    if (run.logLines.length > 160) {
+      run.logLines = run.logLines.slice(-160);
+    }
     run.summaryTail.push(`${prefix}${normalized}`);
     if (run.summaryTail.length > 12) {
       run.summaryTail = run.summaryTail.slice(-12);
@@ -2944,6 +3054,8 @@ function toDocmanRunPublic(run) {
     signal: run.signal ? String(run.signal) : "",
     error: run.error ? String(run.error) : "",
     summaryLines: sanitizeStringList(run.summaryLines || run.summaryTail, 10, 240),
+    logLines: sanitizeStringList(run.logLines || run.summaryTail, 120, 240),
+    resultData: sanitizeDocmanResultData(run.resultData),
   };
 }
 
@@ -3177,6 +3289,8 @@ async function startDocmanToolRun(rawPayload) {
     error: "",
     pid: child.pid || null,
     summaryTail: [],
+    logLines: [],
+    resultData: null,
   };
   await appendServerLog(
     `[${nowIso()}] [docman:${runId}] started action=${payload.action} practice=${payload.practiceName} ods=${payload.odsCode || "n/a"}${onboardingInputFolderName ? ` inputFolder=${onboardingInputFolderName}` : ""}`,
@@ -3207,6 +3321,8 @@ async function startDocmanToolRun(rawPayload) {
           error: "",
           pid: child.pid || null,
           summaryTail: [],
+          logLines: [],
+          resultData: null,
         };
     const summaryLines = sanitizeStringList(baseRun.summaryTail, 10, 240);
     const fallbackSummary = result.status === "success"
@@ -3218,6 +3334,8 @@ async function startDocmanToolRun(rawPayload) {
       endedAt,
       ...result,
       summaryLines: summaryLines.length ? summaryLines : [fallbackSummary],
+      logLines: sanitizeStringList(baseRun.logLines || baseRun.summaryTail, 120, 240),
+      resultData: sanitizeDocmanResultData(baseRun.resultData),
     };
     docmanActiveRun = null;
     if (logMessage) {

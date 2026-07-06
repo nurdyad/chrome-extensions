@@ -608,6 +608,12 @@ label {
 .validation-badge.valid { background: #e8f7ef; color: #1f8f4e; }
 .validation-badge.invalid { background: #fdecec; color: #bd3a3a; }
 
+.docman-tool-status-host {
+    width: 100%;
+    display: block;
+    border-radius: 14px;
+}
+
 .copy-row {
     display: grid;
     grid-template-columns: 1fr 1fr;

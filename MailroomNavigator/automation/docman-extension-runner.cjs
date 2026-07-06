@@ -27,6 +27,16 @@ function sanitizeSingleLine(value, maxLength = 240) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function emitStructuredResult(type, payload = {}) {
+  const normalizedType = sanitizeSingleLine(type, 40).toLowerCase();
+  if (!normalizedType) return;
+  try {
+    console.log(`__DOCMAN_RESULT__${JSON.stringify({ type: normalizedType, ...payload })}`);
+  } catch (error) {
+    console.warn("Could not serialize structured Docman result:", error);
+  }
+}
+
 function sanitizeSecret(value, maxLength = 240) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
@@ -925,6 +935,43 @@ async function main() {
         console.log("Copied exact Docman matches to clipboard ✔");
       }
 
+      emitStructuredResult("verify", {
+        checked: usernames.length,
+        matched: valid.length,
+        missing: Math.max(0, usernames.length - valid.length),
+        clipboardCopied: Boolean(valid.length && clipboardy && typeof clipboardy.write === "function"),
+        exactMatches: valid,
+        results: Array.isArray(results)
+          ? results.map((entry, index) => ({
+            index,
+            requestedUsername: sanitizeSingleLine(
+              entry?.requestedUsername
+                || entry?.input
+                || entry?.query
+                || usernames[index]
+                || "",
+              120,
+            ),
+            docmanUsername: sanitizeSingleLine(
+              entry?.docmanUsername
+                || entry?.match
+                || entry?.matchedUsername
+                || "",
+              120,
+            ),
+            exists: Boolean(entry?.exists),
+            detail: sanitizeSingleLine(
+              entry?.detail
+                || entry?.message
+                || entry?.status
+                || entry?.reason
+                || "",
+              180,
+            ),
+          }))
+          : [],
+      });
+
       console.log("✅ VERIFY workflow finished.");
       return;
     }
@@ -954,6 +1001,12 @@ async function main() {
         console.log("Members added:");
         result.members.forEach((member) => console.log(` - ${member}`));
       }
+      emitStructuredResult("create-group", {
+        groupName: sanitizeSingleLine(result?.groupName || groupName, 240),
+        members: Array.isArray(result?.members)
+          ? result.members.map((member) => sanitizeSingleLine(member, 120)).filter(Boolean).slice(0, 200)
+          : [],
+      });
       console.log("✅ CREATE GROUP workflow finished.");
       return;
     }
@@ -988,6 +1041,11 @@ async function main() {
       if (folderCount > 0 && Number(onboardingResult.existing) === folderCount) {
         console.log("ℹ All onboarding folders already exist for this practice. No changes made.");
       }
+      emitStructuredResult("onboarding", {
+        inputFolderName,
+        folderCount,
+        existingCount: Number.isFinite(Number(onboardingResult?.existing)) ? Number(onboardingResult.existing) : 0,
+      });
       console.log("✅ ONBOARDING workflow finished.");
       return;
     }
@@ -1038,6 +1096,9 @@ async function main() {
           }),
       });
 
+      emitStructuredResult(action, {
+        cleanType,
+      });
       console.log("✅ CLEAN workflow finished.");
       return;
     }
