@@ -5052,6 +5052,14 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             const PANEL_WIDTH = 360;
             const HANDLE_WIDTH = 24;
             const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
+            const buildExpectedSrc = () => `${panelUrl}${panelUrl.includes('?') ? '&' : '?'}hostTabId=${encodeURIComponent(String(hostTabId || ''))}`;
+            const ensureIframeLoaded = (iframeEl) => {
+                if (!iframeEl) return;
+                const expectedSrc = buildExpectedSrc();
+                if (iframeEl.dataset.loadedSrc === expectedSrc && iframeEl.src === expectedSrc) return;
+                iframeEl.src = expectedSrc;
+                iframeEl.dataset.loadedSrc = expectedSrc;
+            };
             const syncToggleUi = (panelEl, toggleButton) => {
                 if (!panelEl || !toggleButton) return;
                 const isCollapsed = panelEl.classList.contains('collapsed');
@@ -5066,14 +5074,11 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 if (existingPanel) {
                     const toggleButton = existingPanel.querySelector('[data-role="toggle"]');
                     const existingIframe = existingPanel.querySelector('iframe');
-                    if (existingIframe) {
-                        const expectedSrc = `${panelUrl}${panelUrl.includes('?') ? '&' : '?'}hostTabId=${encodeURIComponent(String(hostTabId || ''))}`;
-                        if (existingIframe.src !== expectedSrc) {
-                            existingIframe.src = expectedSrc;
-                        }
-                    }
                     if (shouldForceCollapsed) {
                         existingPanel.classList.add('collapsed');
+                    } else {
+                        existingPanel.classList.remove('collapsed');
+                        ensureIframeLoaded(existingIframe);
                     }
                     if (toggleButton) {
                         syncToggleUi(existingPanel, toggleButton);
@@ -5156,13 +5161,19 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 toggleButton.dataset.role = 'toggle';
 
                 const iframe = document.createElement('iframe');
-                iframe.src = `${panelUrl}${panelUrl.includes('?') ? '&' : '?'}hostTabId=${encodeURIComponent(String(hostTabId || ''))}`;
                 iframe.title = 'BetterLetter Panel';
+                iframe.dataset.pendingSrc = buildExpectedSrc();
+                if (!shouldForceCollapsed) {
+                    ensureIframeLoaded(iframe);
+                }
 
                 toggleButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     event.stopPropagation();
                     panelEl.classList.toggle('collapsed');
+                    if (!panelEl.classList.contains('collapsed')) {
+                        ensureIframeLoaded(iframe);
+                    }
                     syncToggleUi(panelEl, toggleButton);
                 });
 

@@ -1,10 +1,11 @@
 import { config as loadDotenv } from "dotenv";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 /**
  * Local trigger server used by the extension "Trigger Linear" button.
@@ -17,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 const DEFAULT_ENV_PATH = resolve(REPO_ROOT, ".env");
+const execFileAsync = promisify(execFile);
 loadDotenv({ path: process.env.DOTENV_CONFIG_PATH || DEFAULT_ENV_PATH });
 
 function normalizeTriggerServerHost(rawHost) {
@@ -2998,6 +3000,189 @@ function buildExecutablePath(currentPath = "") {
   return ordered.join(delimiter);
 }
 
+const GIT_PUBLISH_MAX_BUFFER = 4 * 1024 * 1024;
+const GIT_PUBLISH_TIMEOUT_MS = 5 * 60 * 1000;
+
+function sanitizeGitBranchName(value) {
+  return sanitizeSingleLine(value, 180)
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, "-")
+    .replace(/^[-/.]+/, "")
+    .replace(/[-/.]+$/, "")
+    .slice(0, 120);
+}
+
+function parseGitStatusFiles(rawStatus) {
+  return String(rawStatus || "")
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .map((line) => line.replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
+
+async function runGit(args, { timeout = GIT_PUBLISH_TIMEOUT_MS, allowFailure = false } = {}) {
+  try {
+    const result = await execFileAsync("git", args, {
+      cwd: REPO_ROOT,
+      env: buildChildProcessEnv({ GIT_TERMINAL_PROMPT: "0" }),
+      maxBuffer: GIT_PUBLISH_MAX_BUFFER,
+      timeout,
+    });
+    return {
+      ok: true,
+      stdout: String(result.stdout || ""),
+      stderr: String(result.stderr || ""),
+      code: 0,
+    };
+  } catch (error) {
+    if (allowFailure) {
+      return {
+        ok: false,
+        stdout: String(error?.stdout || ""),
+        stderr: String(error?.stderr || ""),
+        code: Number(error?.code) || 1,
+        error,
+      };
+    }
+    const detail = sanitizeSingleLine(error?.stderr || error?.stdout || error?.message, 600);
+    throw new Error(detail || `git ${args.join(" ")} failed.`);
+  }
+}
+
+async function getGitChangedFiles() {
+  const status = await runGit(["status", "--porcelain"]);
+  return parseGitStatusFiles(status.stdout);
+}
+
+async function getGitCurrentBranch() {
+  const branch = await runGit(["branch", "--show-current"]);
+  return sanitizeSingleLine(branch.stdout, 120) || "unknown";
+}
+
+async function suggestGitPublishDetails() {
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13).replace("T", "-");
+  const changedFiles = await getGitChangedFiles();
+  let branchName = `mailroomnavigator-updates-${timestamp}`;
+  let commitMessage = "Update Mailroom Navigator";
+  const changedSet = new Set(changedFiles.map((file) => file.toLowerCase()));
+  const hasBotDashboard = changedSet.has("bot_dashboard_navigator.js")
+    || changedSet.has("mailroomnavigator/bot_dashboard_navigator.js");
+  const hasInstallGuide = changedSet.has("colleague_install_guide.md")
+    || changedSet.has("mailroomnavigator/colleague_install_guide.md");
+  const hasPublishHelper = changedSet.has("automation/publish-git-change.command")
+    || changedSet.has("mailroomnavigator/automation/publish-git-change.command");
+
+  if (hasBotDashboard) {
+    const diff = await runGit(["diff", "--", "bot_dashboard_navigator.js"], { allowFailure: true });
+    if (/dashboard filters|selectedPractices|selectedJobTypes|selectedStatuses|filterGrid/i.test(diff.stdout)) {
+      branchName = `bot-dashboard-filter-ux-${timestamp}`;
+      commitMessage = "Improve bot dashboard filter UX";
+    } else {
+      branchName = `bot-dashboard-navigator-updates-${timestamp}`;
+      commitMessage = "Update bot dashboard navigator";
+    }
+  }
+
+  if (hasInstallGuide) {
+    if (branchName === `mailroomnavigator-updates-${timestamp}`) {
+      branchName = `colleague-install-guide-${timestamp}`;
+      commitMessage = "Add colleague install guide";
+    } else {
+      commitMessage = `${commitMessage} and install guide`;
+    }
+  }
+
+  if (hasPublishHelper) {
+    if (branchName === `mailroomnavigator-updates-${timestamp}`) {
+      branchName = `git-publish-helper-${timestamp}`;
+      commitMessage = "Add git publish helper";
+    } else if (!/git publish/i.test(commitMessage)) {
+      commitMessage = `${commitMessage} and git publish helper`;
+    }
+  }
+
+  return {
+    currentBranch: await getGitCurrentBranch(),
+    changedFiles,
+    changedCount: changedFiles.length,
+    suggestion: {
+      branchName: sanitizeGitBranchName(branchName),
+      commitMessage: sanitizeSingleLine(commitMessage, 180),
+    },
+  };
+}
+
+async function gitRefExists(refName) {
+  const result = await runGit(["show-ref", "--verify", "--quiet", refName], { allowFailure: true, timeout: 30000 });
+  return result.ok;
+}
+
+async function publishGitChanges({ branchName, commitMessage }) {
+  const cleanBranchName = sanitizeGitBranchName(branchName);
+  const cleanCommitMessage = sanitizeSingleLine(commitMessage, 180);
+  if (!cleanBranchName || cleanBranchName === "main") {
+    throw new Error("Branch name must not be empty or main.");
+  }
+  if (!cleanCommitMessage) {
+    throw new Error("Commit message is required.");
+  }
+
+  const changedFiles = await getGitChangedFiles();
+  if (!changedFiles.length) {
+    throw new Error("No local changes found to publish.");
+  }
+  if (await gitRefExists(`refs/heads/${cleanBranchName}`)) {
+    throw new Error(`Local branch already exists: ${cleanBranchName}`);
+  }
+
+  const timestamp = Date.now();
+  const stashName = `mailroom-publish-helper-${timestamp}`;
+  const originalBranch = await getGitCurrentBranch();
+  const steps = [];
+  let createdBranch = false;
+
+  const record = async (label, args, options = {}) => {
+    const result = await runGit(args, options);
+    steps.push(label);
+    return result;
+  };
+
+  try {
+    await record("Saved local changes", ["stash", "push", "-u", "-m", stashName]);
+    await record("Switched to main", ["switch", "main"]);
+    await record("Created publish branch", ["switch", "-c", cleanBranchName]);
+    createdBranch = true;
+    await record("Restored local changes", ["stash", "pop"]);
+    await record("Staged changes", ["add", "-A"]);
+    const diffCheck = await runGit(["diff", "--cached", "--quiet"], { allowFailure: true, timeout: 30000 });
+    if (diffCheck.ok) {
+      throw new Error("No staged changes to commit.");
+    }
+    await record("Committed changes", ["commit", "-m", cleanCommitMessage]);
+    const commitHash = sanitizeSingleLine((await runGit(["rev-parse", "--short", "HEAD"])).stdout, 40);
+    await record("Pushed branch to origin", ["push", "-u", "origin", cleanBranchName]);
+    await record("Returned to main", ["switch", "main"]);
+    await appendServerLog(
+      `[${nowIso()}] git publish branch=${cleanBranchName} commit=${commitHash || "unknown"} files=${changedFiles.length}`,
+    );
+    return {
+      branchName: cleanBranchName,
+      commitMessage: cleanCommitMessage,
+      commitHash,
+      changedFiles,
+      changedCount: changedFiles.length,
+      originalBranch,
+      steps,
+    };
+  } catch (error) {
+    await appendServerLog(`[${nowIso()}] git publish failed branch=${cleanBranchName}: ${String(error?.message || error)}`);
+    if (createdBranch) {
+      await runGit(["switch", "main"], { allowFailure: true, timeout: 30000 });
+    }
+    throw error;
+  }
+}
+
 function appendDocmanRunTail(run, rawText, channel = "stdout") {
   if (!run || typeof run !== "object") return;
   const prefix = channel === "stderr" ? "[stderr] " : "";
@@ -3697,6 +3882,45 @@ const server = createServer(async (req, res) => {
         sendJson(res, 403, origin, {
           ok: false,
           error: sanitizeSingleLine(error?.message, 260) || "Could not delete MailroomNavigator user.",
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/git/status") {
+      try {
+        const details = await suggestGitPublishDetails();
+        sendJson(res, 200, origin, {
+          ok: true,
+          ...details,
+          serverTime: nowIso(),
+        });
+      } catch (error) {
+        sendJson(res, 502, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 500) || "Could not inspect git status.",
+        });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/git/publish") {
+      try {
+        const body = await parseJsonBody(req).catch(() => ({}));
+        const fallback = await suggestGitPublishDetails();
+        const result = await publishGitChanges({
+          branchName: body?.branchName || fallback?.suggestion?.branchName,
+          commitMessage: body?.commitMessage || fallback?.suggestion?.commitMessage,
+        });
+        sendJson(res, 200, origin, {
+          ok: true,
+          result,
+          serverTime: nowIso(),
+        });
+      } catch (error) {
+        sendJson(res, 502, origin, {
+          ok: false,
+          error: sanitizeSingleLine(error?.message, 700) || "Could not publish git changes.",
         });
       }
       return;

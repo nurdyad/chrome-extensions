@@ -55,13 +55,12 @@
     },
     {
       "matches": [
-        "https://app.betterletter.ai/admin_panel*",
         "https://app.betterletter.ai/mailroom/rejected*",
         "https://app.betterletter.ai/mailroom/preparing*"
       ],
       "js": ["mailroom_page_integrator.js"],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     },
     {
       "matches": ["https://app.betterletter.ai/admin_panel/practices*"],
@@ -80,7 +79,7 @@
       ],
       "js": ["bot_dashboard_navigator.js"],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     }
   ],
   "icons": {

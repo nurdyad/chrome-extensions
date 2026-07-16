@@ -16,6 +16,15 @@
     let metaReanchorTimer = null;
     let navigatorToastEl = null;
     let navigatorToastTimer = null;
+    let botDashboardRowCache = null;
+    let attachListenersTimer = null;
+    let botDashboardSelectionPruneTimer = null;
+    let botDashboardReapplyFrame = null;
+    let botDashboardReapplyTimer = null;
+    let botDashboardBulkSelecting = false;
+    let botDashboardBulkRefreshPending = false;
+    let botDashboardBulkStatusEl = null;
+    let botDashboardBulkOverlayEl = null;
     const createdIssueByDedupeKey = new Map();
     let restrictedToolsAccess = {
         enabled: true,
@@ -34,10 +43,11 @@
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
     const CREATE_ISSUE_TIMEOUT_MS = 30000;
+    const BOT_DASHBOARD_ROW_CACHE_TTL_MS = 900;
     const BOT_JOB_TITLE_PREFIX = 'Bot Job Error:';
     const PRACTICE_SUPPORT_TITLE_PREFIX = 'Practice Support Ticket:';
     const BOT_JOB_DEFAULT_PRIORITY = 3;
-    const BOT_JOB_ISSUE_TYPE_LABEL = 'Stuck Letters';
+    const BOT_JOB_ISSUE_TYPE_LABEL = 'Stuck letters / Manual intervention';
     const BOT_JOB_LETTER_STAGE_LABELS = {
         docman_rejection: 'Bot Job/ docman_rejection',
         docman_import: 'Bot Job/docman_import',
@@ -45,6 +55,7 @@
         generate_output: 'Bot job/generate_output',
         docman_review: 'Bot job/ docman_review',
         docman_delete_original: 'Bot Job/docman_delete_originals',
+        docman_delete_originals: 'Bot Job/docman_delete_originals',
         docman_file: 'Bot job/ docman_file'
     };
     const STUCK_LETTERS_PREPARING_LABEL = 'Stuck letters - Preparing';
@@ -55,6 +66,7 @@
     const REJECTED_PRACTICE_ISSUE_HOST_ID = 'bl-rejected-practice-issue-host';
     const BOT_DASHBOARD_PAGE_ISSUE_HOST_ID = 'bl-bot-dashboard-page-issue-host';
     const BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID = 'bl-bot-dashboard-practice-filter-host';
+    const BOT_DASHBOARD_FILTER_STYLE_ID = 'bl-bot-dashboard-filter-style';
     const PREPARING_OVER_3H_ISSUE_HOST_ID = 'bl-preparing-over-3h-issue-host';
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     const LINK_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path></svg>';
@@ -163,6 +175,21 @@
             .trim();
     }
 
+    function normalizeSpikeFingerprint(row) {
+        const jobType = String(row?.job_type || '').toLowerCase();
+        const normalized = normalizeFingerprint(row?.status_text);
+        if (!normalized) return '';
+
+        if (jobType === 'docman_file') {
+            if (normalized.includes('document not found')) return 'document not found';
+            if (normalized.includes('save filing action failed')) return 'save filing action failed';
+            if (normalized.includes('could not find document')) return 'could not find document';
+            if (normalized.includes('no documents')) return 'no documents found';
+        }
+
+        return normalized;
+    }
+
     function normalizeGroupKeyPart(value) {
         return collapseText(value).toLowerCase();
     }
@@ -182,7 +209,7 @@
     function computePracticeGroupKey(row, dedupeKey = null) {
         const practice = normalizeGroupKeyPart(row?.practice_name);
         const jobType = normalizeGroupKeyPart(row?.job_type);
-        const fingerprint = normalizeGroupKeyPart(dedupeKey?.fingerprint || normalizeFingerprint(row?.status_text));
+        const fingerprint = normalizeGroupKeyPart(normalizeSpikeFingerprint(row) || dedupeKey?.fingerprint || normalizeFingerprint(row?.status_text));
         if (!practice || !jobType || !fingerprint) return '';
         return `${practice}|${jobType}|${fingerprint}`;
     }
@@ -512,9 +539,44 @@ ${hiddenBlock}
         return `blBotDashboardHiddenPractices:${pageKey}`;
     }
 
+    function getBotDashboardSelectedPracticeStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardSelectedPractices:${pageKey}`;
+    }
+
+    function getBotDashboardPracticeModeStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardPracticeMode:${pageKey}`;
+    }
+
     function getBotDashboardStatusFilterStorageKey() {
         const pageKey = `${window.location.pathname}${window.location.search}`;
         return `blBotDashboardStatusFilter:${pageKey}`;
+    }
+
+    function getBotDashboardSelectedStatusStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardSelectedStatuses:${pageKey}`;
+    }
+
+    function getBotDashboardStatusModeStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardStatusMode:${pageKey}`;
+    }
+
+    function getBotDashboardJobTypeFilterStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardJobTypeFilter:${pageKey}`;
+    }
+
+    function getBotDashboardSelectedJobTypeStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardSelectedJobTypes:${pageKey}`;
+    }
+
+    function getBotDashboardJobTypeModeStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardJobTypeMode:${pageKey}`;
     }
 
     function loadHiddenBotDashboardPractices() {
@@ -535,11 +597,99 @@ ${hiddenBlock}
         }
     }
 
+    function loadSelectedBotDashboardPractices() {
+        try {
+            const parsed = JSON.parse(window.sessionStorage.getItem(getBotDashboardSelectedPracticeStorageKey()) || '[]');
+            return new Set(Array.isArray(parsed) ? parsed.map(normalizePracticeFilterName).filter(Boolean) : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    function saveSelectedBotDashboardPractices(selectedPractices) {
+        const values = [...(selectedPractices || [])].map(normalizePracticeFilterName).filter(Boolean);
+        try {
+            if (values.length) {
+                window.sessionStorage.setItem(getBotDashboardSelectedPracticeStorageKey(), JSON.stringify(values));
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardSelectedPracticeStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
+        }
+    }
+
+    function loadBotDashboardPracticeMode() {
+        try {
+            const mode = collapseText(window.sessionStorage.getItem(getBotDashboardPracticeModeStorageKey()) || '').toLowerCase();
+            return mode === 'exclude' ? 'exclude' : 'include';
+        } catch {
+            return 'include';
+        }
+    }
+
+    function saveBotDashboardPracticeMode(mode) {
+        const normalized = collapseText(mode).toLowerCase() === 'exclude' ? 'exclude' : 'include';
+        try {
+            if (normalized === 'exclude') {
+                window.sessionStorage.setItem(getBotDashboardPracticeModeStorageKey(), normalized);
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardPracticeModeStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
+        }
+    }
+
     function loadBotDashboardStatusFilterTerm() {
         try {
             return collapseText(window.sessionStorage.getItem(getBotDashboardStatusFilterStorageKey()) || '');
         } catch {
             return '';
+        }
+    }
+
+    function loadSelectedBotDashboardStatuses() {
+        try {
+            const parsed = JSON.parse(window.sessionStorage.getItem(getBotDashboardSelectedStatusStorageKey()) || '[]');
+            return new Set(Array.isArray(parsed) ? parsed.map((value) => collapseText(value).toLowerCase()).filter(Boolean) : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    function saveSelectedBotDashboardStatuses(selectedStatuses) {
+        const values = [...(selectedStatuses || [])].map((value) => collapseText(value).toLowerCase()).filter(Boolean);
+        try {
+            if (values.length) {
+                window.sessionStorage.setItem(getBotDashboardSelectedStatusStorageKey(), JSON.stringify(values));
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardSelectedStatusStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
+        }
+    }
+
+    function loadBotDashboardStatusMode() {
+        try {
+            const mode = collapseText(window.sessionStorage.getItem(getBotDashboardStatusModeStorageKey()) || '').toLowerCase();
+            return mode === 'exclude' ? 'exclude' : 'include';
+        } catch {
+            return 'include';
+        }
+    }
+
+    function saveBotDashboardStatusMode(mode) {
+        const normalized = collapseText(mode).toLowerCase() === 'exclude' ? 'exclude' : 'include';
+        try {
+            if (normalized === 'exclude') {
+                window.sessionStorage.setItem(getBotDashboardStatusModeStorageKey(), normalized);
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardStatusModeStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
         }
     }
 
@@ -556,33 +706,162 @@ ${hiddenBlock}
         }
     }
 
+    function loadBotDashboardJobTypeFilterTerm() {
+        try {
+            return collapseText(window.sessionStorage.getItem(getBotDashboardJobTypeFilterStorageKey()) || '');
+        } catch {
+            return '';
+        }
+    }
+
+    function loadSelectedBotDashboardJobTypes() {
+        try {
+            const parsed = JSON.parse(window.sessionStorage.getItem(getBotDashboardSelectedJobTypeStorageKey()) || '[]');
+            return new Set(Array.isArray(parsed) ? parsed.map((value) => collapseText(value).toLowerCase()).filter(Boolean) : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    function saveSelectedBotDashboardJobTypes(selectedJobTypes) {
+        const values = [...(selectedJobTypes || [])].map((value) => collapseText(value).toLowerCase()).filter(Boolean);
+        try {
+            if (values.length) {
+                window.sessionStorage.setItem(getBotDashboardSelectedJobTypeStorageKey(), JSON.stringify(values));
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardSelectedJobTypeStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
+        }
+    }
+
+    function loadBotDashboardJobTypeMode() {
+        try {
+            const mode = collapseText(window.sessionStorage.getItem(getBotDashboardJobTypeModeStorageKey()) || '').toLowerCase();
+            return mode === 'exclude' ? 'exclude' : 'include';
+        } catch {
+            return 'include';
+        }
+    }
+
+    function saveBotDashboardJobTypeMode(mode) {
+        const normalized = collapseText(mode).toLowerCase() === 'exclude' ? 'exclude' : 'include';
+        try {
+            if (normalized === 'exclude') {
+                window.sessionStorage.setItem(getBotDashboardJobTypeModeStorageKey(), normalized);
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardJobTypeModeStorageKey());
+            }
+        } catch {
+            // Keep filtering usable for the current render even if storage is unavailable.
+        }
+    }
+
+    function saveBotDashboardJobTypeFilterTerm(term) {
+        try {
+            const normalized = collapseText(term || '');
+            if (normalized) {
+                window.sessionStorage.setItem(getBotDashboardJobTypeFilterStorageKey(), normalized);
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardJobTypeFilterStorageKey());
+            }
+        } catch {
+            // Keep the current render usable even if storage is unavailable.
+        }
+    }
+
     function getBotDashboardStatusHaystack(entry) {
+        if (entry?.statusHaystack) return entry.statusHaystack;
         return collapseText([
             entry?.botJobRow?.status_text,
             entry?.botJobRow?.attempts_count ? `${entry.botJobRow.attempts_count} attempts` : '',
-            entry?.rowData?.status,
-            entry?.rowData?.row?.innerText
+            entry?.rowData?.status
         ].filter(Boolean).join(' ')).toLowerCase();
     }
 
-    function getBotDashboardRowEntries({ visibleOnly = false } = {}) {
+    function botDashboardEntryMatchesStatusTerm(entry, rawTerm) {
+        const term = collapseText(rawTerm).toLowerCase();
+        if (!term) return true;
+
+        const attemptsMatch = term.match(/^(\d+)\s+attempts?$/i);
+        if (attemptsMatch?.[1]) {
+            return Number(entry?.botJobRow?.attempts_count || 0) === Number.parseInt(attemptsMatch[1], 10);
+        }
+
+        return getBotDashboardStatusHaystack(entry).includes(term);
+    }
+
+    function getBotDashboardJobTypeHaystack(entry) {
+        if (entry?.jobTypeHaystack) return entry.jobTypeHaystack;
+        return collapseText([
+            entry?.botJobRow?.job_type,
+            entry?.rowData?.jobType
+        ].filter(Boolean).join(' ')).toLowerCase();
+    }
+
+    function invalidateBotDashboardRowCache() {
+        botDashboardRowCache = null;
+    }
+
+    function getBotDashboardRowEntries({ visibleOnly = false, forceFresh = false } = {}) {
         if (!isBotDashboardPage()) return [];
-        return Array.from(document.querySelectorAll('table tbody tr'))
+        const rows = Array.from(document.querySelectorAll('table tbody tr')).filter((row) => row instanceof HTMLElement);
+        const now = Date.now();
+        const firstRowKey = collapseText(rows[0]?.textContent || '').slice(0, 80);
+        const lastRowKey = collapseText(rows[rows.length - 1]?.textContent || '').slice(0, 80);
+        const cacheKey = `${window.location.pathname}${window.location.search}|${rows.length}|${firstRowKey}|${lastRowKey}`;
+        const cachedEntries = !forceFresh
+            && botDashboardRowCache
+            && botDashboardRowCache.key === cacheKey
+            && botDashboardRowCache.firstRow === rows[0]
+            && botDashboardRowCache.lastRow === rows[rows.length - 1]
+            && now - botDashboardRowCache.createdAt < BOT_DASHBOARD_ROW_CACHE_TTL_MS
+            ? botDashboardRowCache.entries
+            : null;
+        const entries = cachedEntries || rows
             .filter((row) => row instanceof HTMLElement)
-            .filter((row) => !visibleOnly || row.offsetParent !== null)
             .map((row) => {
                 const rowData = getRowDataFromElement(row.querySelector('td') || row);
                 const botJobRow = buildBotJobRowFromRowData(rowData);
                 const practiceName = collapseText(botJobRow?.practice_name || rowData?.practiceName || rowData?.practice || '');
+                const statusHaystack = collapseText([
+                    botJobRow?.status_text,
+                    botJobRow?.attempts_count ? `${botJobRow.attempts_count} attempts` : '',
+                    rowData?.status
+                ].filter(Boolean).join(' ')).toLowerCase();
+                const jobTypeHaystack = collapseText([
+                    botJobRow?.job_type,
+                    rowData?.jobType
+                ].filter(Boolean).join(' ')).toLowerCase();
                 return {
                     row,
                     rowData,
                     botJobRow,
                     practiceName,
-                    normalizedPracticeName: normalizePracticeFilterName(practiceName)
+                    normalizedPracticeName: normalizePracticeFilterName(practiceName),
+                    statusHaystack,
+                    jobTypeHaystack
                 };
             })
             .filter((entry) => entry.botJobRow && entry.practiceName);
+        if (!cachedEntries) {
+            botDashboardRowCache = {
+                key: cacheKey,
+                createdAt: now,
+                firstRow: rows[0],
+                lastRow: rows[rows.length - 1],
+                entries
+            };
+        }
+        return entries
+            .filter((entry) => {
+                if (!visibleOnly) return true;
+                if (hasActiveBotDashboardFilters()) {
+                    return entry.row.dataset.blFilterVisible === 'true' && entry.row.style.display !== 'none';
+                }
+                return entry.row.offsetParent !== null;
+            });
     }
 
     function getBotDashboardPracticeCounts() {
@@ -590,13 +869,31 @@ ${hiddenBlock}
         getBotDashboardRowEntries({ visibleOnly: false }).forEach((entry) => {
             const key = entry.normalizedPracticeName;
             if (!key) return;
-            const existing = counts.get(key) || { name: entry.practiceName, count: 0 };
+            const odsCode = collapseText(entry.botJobRow?.practice_code || entry.rowData?.odsCode || '').toUpperCase();
+            const existing = counts.get(key) || { name: entry.practiceName, odsCode, count: 0 };
+            if (!existing.odsCode && odsCode) existing.odsCode = odsCode;
             existing.count += 1;
             counts.set(key, existing);
         });
         return [...counts.entries()]
             .map(([key, value]) => ({ key, ...value }))
             .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    }
+
+    function getEffectiveHiddenBotDashboardPractices(
+        selectedPractices = loadSelectedBotDashboardPractices(),
+        hiddenPractices = loadHiddenBotDashboardPractices(),
+        practiceMode = loadBotDashboardPracticeMode()
+    ) {
+        if (!selectedPractices.size) return hiddenPractices;
+        if (practiceMode === 'exclude') {
+            return new Set([...hiddenPractices, ...selectedPractices]);
+        }
+        const effectiveHidden = new Set();
+        getBotDashboardPracticeCounts().forEach((item) => {
+            if (!selectedPractices.has(item.key)) effectiveHidden.add(item.key);
+        });
+        return effectiveHidden;
     }
 
     function getBotDashboardStatusCounts(hiddenPractices = loadHiddenBotDashboardPractices()) {
@@ -625,22 +922,574 @@ ${hiddenBlock}
             .slice(0, 18);
     }
 
+    function getBotDashboardJobTypeCounts(hiddenPractices = loadHiddenBotDashboardPractices()) {
+        const counts = new Map();
+        getBotDashboardRowEntries({ visibleOnly: false })
+            .filter((entry) => !hiddenPractices.has(entry.normalizedPracticeName))
+            .forEach((entry) => {
+                const jobType = collapseText(entry.botJobRow?.job_type || entry.rowData?.jobType || 'unknown-job');
+                if (!jobType) return;
+                const key = jobType.toLowerCase();
+                const existing = counts.get(key) || { label: jobType, term: jobType, count: 0 };
+                existing.count += 1;
+                counts.set(key, existing);
+            });
+
+        return [...counts.values()]
+            .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+            .slice(0, 18);
+    }
+
+    function ensureBotDashboardFilterStyle() {
+        if (document.getElementById(BOT_DASHBOARD_FILTER_STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = BOT_DASHBOARD_FILTER_STYLE_ID;
+        style.textContent = `
+body[data-bl-dashboard-filter-lock="true"] table tbody tr:not([data-bl-filter-visible="true"]) {
+    display: none !important;
+}
+body[data-bl-dashboard-bulk-selecting="true"] table tbody {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+body[data-bl-dashboard-bulk-selecting="true"] {
+    cursor: wait !important;
+}
+body[data-bl-dashboard-bulk-selecting="true"] > *:not(.bl-dashboard-bulk-overlay):not(.bl-dashboard-bulk-status):not(#${BOT_DASHBOARD_FILTER_STYLE_ID}) {
+    opacity: 0 !important;
+    visibility: hidden !important;
+}
+.bl-dashboard-bulk-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483646;
+    background: #f8fafc;
+    pointer-events: all;
+}
+.bl-dashboard-bulk-status {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 2147483647;
+    background: #0b2545;
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
+    padding: 10px 14px;
+    font: 700 13px/1.3 system-ui, -apple-system, sans-serif;
+}
+.bl-dashboard-practice-inline-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+.bl-dashboard-practice-inline-actions button {
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+    font: 700 11px/1.1 system-ui, -apple-system, sans-serif;
+    min-height: 22px;
+    padding: 2px 7px;
+}
+.bl-dashboard-practice-inline-actions button[data-action="only"] {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+.bl-dashboard-practice-inline-actions button[data-action="show"] {
+    border-color: #fca5a5;
+    background: #fee2e2;
+    color: #991b1b;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function updateBotDashboardFilterLock(isActive = hasActiveBotDashboardFilters()) {
+        if (!document.body) return;
+        ensureBotDashboardFilterStyle();
+        if (isActive) {
+            document.body.dataset.blDashboardFilterLock = 'true';
+        } else {
+            delete document.body.dataset.blDashboardFilterLock;
+        }
+    }
+
+    function setBotDashboardBulkSelectingMask(isActive) {
+        if (!document.body) return;
+        ensureBotDashboardFilterStyle();
+        if (isActive) {
+            document.body.dataset.blDashboardBulkSelecting = 'true';
+            if (!botDashboardBulkOverlayEl) {
+                botDashboardBulkOverlayEl = document.createElement('div');
+                botDashboardBulkOverlayEl.className = 'bl-dashboard-bulk-overlay';
+                botDashboardBulkOverlayEl.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(botDashboardBulkOverlayEl);
+            }
+        } else {
+            delete document.body.dataset.blDashboardBulkSelecting;
+            botDashboardBulkOverlayEl?.remove();
+            botDashboardBulkOverlayEl = null;
+        }
+    }
+
+    function setBotDashboardBulkStatus(message = '') {
+        ensureBotDashboardFilterStyle();
+        if (!message) {
+            botDashboardBulkStatusEl?.remove();
+            botDashboardBulkStatusEl = null;
+            return;
+        }
+        if (!botDashboardBulkStatusEl) {
+            botDashboardBulkStatusEl = document.createElement('div');
+            botDashboardBulkStatusEl.className = 'bl-dashboard-bulk-status';
+            document.body.appendChild(botDashboardBulkStatusEl);
+        }
+        botDashboardBulkStatusEl.textContent = message;
+    }
+
+    function waitForNextFrame() {
+        return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+
     function applyBotDashboardPracticeFilters() {
         if (!isBotDashboardPage()) return;
         const hiddenPractices = loadHiddenBotDashboardPractices();
+        const selectedPractices = loadSelectedBotDashboardPractices();
+        const practiceMode = loadBotDashboardPracticeMode();
         const statusTerm = loadBotDashboardStatusFilterTerm().toLowerCase();
+        const jobTypeTerm = loadBotDashboardJobTypeFilterTerm().toLowerCase();
+        const selectedStatuses = loadSelectedBotDashboardStatuses();
+        const statusMode = loadBotDashboardStatusMode();
+        const selectedJobTypes = loadSelectedBotDashboardJobTypes();
+        const jobTypeMode = loadBotDashboardJobTypeMode();
+        const effectiveHiddenPractices = getEffectiveHiddenBotDashboardPractices(selectedPractices, hiddenPractices, practiceMode);
+        updateBotDashboardFilterLock(Boolean(effectiveHiddenPractices.size)
+            || Boolean(statusTerm)
+            || Boolean(jobTypeTerm)
+            || Boolean(selectedStatuses.size)
+            || Boolean(selectedJobTypes.size));
+        let shouldPruneSelection = false;
         getBotDashboardRowEntries({ visibleOnly: false }).forEach((entry) => {
-            const hiddenByPractice = hiddenPractices.has(entry.normalizedPracticeName);
-            const hiddenByStatus = Boolean(statusTerm) && !getBotDashboardStatusHaystack(entry).includes(statusTerm);
-            const shouldHide = hiddenByPractice || hiddenByStatus;
-            entry.row.style.display = shouldHide ? 'none' : '';
-            entry.row.dataset.blPracticeHidden = shouldHide ? 'true' : 'false';
-            entry.row.dataset.blStatusHidden = hiddenByStatus ? 'true' : 'false';
-            if (shouldHide) {
-                const checkbox = entry.row.querySelector('input[type="checkbox"]');
-                if (checkbox) checkbox.checked = false;
+            const hiddenByPractice = effectiveHiddenPractices.has(entry.normalizedPracticeName);
+            const hiddenByStatus = selectedStatuses.size
+                ? (statusMode === 'exclude'
+                    ? [...selectedStatuses].some((term) => botDashboardEntryMatchesStatusTerm(entry, term))
+                    : ![...selectedStatuses].some((term) => botDashboardEntryMatchesStatusTerm(entry, term)))
+                : Boolean(statusTerm) && !botDashboardEntryMatchesStatusTerm(entry, statusTerm);
+            const entryJobType = collapseText(entry.botJobRow?.job_type || entry.rowData?.jobType || '').toLowerCase();
+            const hiddenByJobType = selectedJobTypes.size
+                ? (jobTypeMode === 'exclude' ? selectedJobTypes.has(entryJobType) : !selectedJobTypes.has(entryJobType))
+                : Boolean(jobTypeTerm) && !getBotDashboardJobTypeHaystack(entry).includes(jobTypeTerm);
+            const shouldHide = hiddenByPractice || hiddenByStatus || hiddenByJobType;
+            const filterVisibleValue = shouldHide ? 'false' : 'true';
+            const displayValue = shouldHide ? 'none' : '';
+            const practiceHiddenValue = shouldHide ? 'true' : 'false';
+            const statusHiddenValue = hiddenByStatus ? 'true' : 'false';
+            const jobTypeHiddenValue = hiddenByJobType ? 'true' : 'false';
+            if (entry.row.dataset.blFilterVisible !== filterVisibleValue) {
+                entry.row.dataset.blFilterVisible = filterVisibleValue;
+            }
+            if (entry.row.style.display !== displayValue) {
+                entry.row.style.display = displayValue;
+            }
+            if (entry.row.dataset.blPracticeHidden !== practiceHiddenValue) {
+                entry.row.dataset.blPracticeHidden = practiceHiddenValue;
+            }
+            if (entry.row.dataset.blStatusHidden !== statusHiddenValue) {
+                entry.row.dataset.blStatusHidden = statusHiddenValue;
+            }
+            if (entry.row.dataset.blJobTypeHidden !== jobTypeHiddenValue) {
+                entry.row.dataset.blJobTypeHidden = jobTypeHiddenValue;
+            }
+            const checkbox = entry.row.querySelector('input[type="checkbox"]');
+            if (checkbox instanceof HTMLInputElement) {
+                if (checkbox.disabled !== shouldHide) {
+                    checkbox.disabled = shouldHide;
+                }
+                if (shouldHide && checkbox.checked) {
+                    shouldPruneSelection = true;
+                }
             }
         });
+        if (shouldPruneSelection) {
+            scheduleUnselectHiddenBotDashboardRows();
+        }
+    }
+
+    function hasActiveBotDashboardFilters() {
+        return loadHiddenBotDashboardPractices().size > 0
+            || loadSelectedBotDashboardPractices().size > 0
+            || loadSelectedBotDashboardStatuses().size > 0
+            || loadSelectedBotDashboardJobTypes().size > 0
+            || Boolean(loadBotDashboardStatusFilterTerm())
+            || Boolean(loadBotDashboardJobTypeFilterTerm());
+    }
+
+    function isHiddenBotDashboardRow(row) {
+        if (!(row instanceof HTMLElement)) return false;
+        return row.style.display === 'none'
+            || row.dataset.blPracticeHidden === 'true'
+            || row.dataset.blStatusHidden === 'true'
+            || row.dataset.blJobTypeHidden === 'true';
+    }
+
+    function setBotDashboardCheckboxChecked(checkbox, checked, { quiet = false } = {}) {
+        if (!(checkbox instanceof HTMLInputElement) || checkbox.checked === checked) return;
+        const wasDisabled = checkbox.disabled;
+        if (quiet) {
+            try {
+                if (wasDisabled) checkbox.disabled = false;
+                const checkedSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+                if (checkedSetter) {
+                    checkedSetter.call(checkbox, checked);
+                } else {
+                    checkbox.checked = checked;
+                }
+                checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+            } finally {
+                if (wasDisabled) checkbox.disabled = true;
+            }
+            return;
+        }
+
+        try {
+            if (wasDisabled) checkbox.disabled = false;
+            checkbox.click();
+        } catch {
+            checkbox.checked = checked;
+            checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        } finally {
+            if (wasDisabled) checkbox.disabled = true;
+        }
+        if (checkbox.checked !== checked) {
+            checkbox.checked = checked;
+            checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }
+
+    function uncheckBotDashboardCheckbox(checkbox, options = {}) {
+        setBotDashboardCheckboxChecked(checkbox, false, options);
+    }
+
+    function checkBotDashboardCheckbox(checkbox) {
+        if (!(checkbox instanceof HTMLInputElement) || checkbox.disabled) return;
+        setBotDashboardCheckboxChecked(checkbox, true);
+    }
+
+    function unselectHiddenBotDashboardRows({ quiet = true } = {}) {
+        if (!isBotDashboardPage()) return;
+        document.querySelectorAll('table tbody tr input[type="checkbox"]:checked').forEach((checkbox) => {
+            const row = checkbox.closest('tr');
+            if (!isHiddenBotDashboardRow(row)) return;
+            uncheckBotDashboardCheckbox(checkbox, { quiet });
+        });
+    }
+
+    function scheduleUnselectHiddenBotDashboardRows({ quiet = true } = {}) {
+        if (botDashboardSelectionPruneTimer) {
+            clearTimeout(botDashboardSelectionPruneTimer);
+        }
+        botDashboardSelectionPruneTimer = window.setTimeout(() => {
+            botDashboardSelectionPruneTimer = null;
+            botDashboardBulkSelecting = true;
+            try {
+                unselectHiddenBotDashboardRows({ quiet });
+            } finally {
+                botDashboardBulkSelecting = false;
+            }
+            window.setTimeout(() => unselectHiddenBotDashboardRows({ quiet }), 60);
+        }, 0);
+    }
+
+    function runBotDashboardFilterRefresh() {
+        invalidateBotDashboardRowCache();
+        applyBotDashboardPracticeFilters();
+        attachBotDashboardInlinePracticeControls();
+        attachBotDashboardPageIssueButton();
+    }
+
+    function reapplyBotDashboardFiltersSoon() {
+        if (botDashboardReapplyFrame == null) {
+            botDashboardReapplyFrame = window.requestAnimationFrame(() => {
+                botDashboardReapplyFrame = null;
+                runBotDashboardFilterRefresh();
+            });
+        }
+        if (botDashboardReapplyTimer) {
+            clearTimeout(botDashboardReapplyTimer);
+        }
+        botDashboardReapplyTimer = window.setTimeout(() => {
+            botDashboardReapplyTimer = null;
+            runBotDashboardFilterRefresh();
+        }, 40);
+    }
+
+    function findBotDashboardPracticeCountElements() {
+        const practiceCounts = getBotDashboardPracticeCounts();
+        if (!practiceCounts.length) return [];
+
+        const heading = Array.from(document.querySelectorAll('summary, div, span, button, p'))
+            .find((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && /view number of jobs per practice/i.test(collapseText(element.textContent || '')));
+        const headingTop = heading instanceof HTMLElement ? heading.getBoundingClientRect().top : -Infinity;
+        const statusTop = Array.from(document.querySelectorAll('button, a, div, span'))
+            .filter((element) => element instanceof HTMLElement && element.offsetParent !== null)
+            .filter((element) => /require attention|completed successfully|in progress/i.test(collapseText(element.textContent || '')))
+            .map((element) => element.getBoundingClientRect().top)
+            .filter((top) => top > headingTop + 10)
+            .sort((a, b) => a - b)[0] || Infinity;
+
+        const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const candidates = Array.from(document.querySelectorAll('body *'))
+            .filter((element) => element instanceof HTMLElement)
+            .filter((element) => element.offsetParent !== null)
+            .filter((element) => !element.closest(`#${BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID}`))
+            .filter((element) => !element.closest('table'))
+            .filter((element) => !element.closest('.bl-dashboard-practice-inline-actions'))
+            .map((element) => ({ element, rect: element.getBoundingClientRect(), text: collapseText(element.textContent || '') }))
+            .filter((entry) => entry.rect.top > headingTop && entry.rect.top < statusTop)
+            .filter((entry) => entry.text && entry.text.length < 180);
+
+        return practiceCounts
+            .map((item) => {
+                const namePattern = escapeRegex(item.name);
+                const countPattern = escapeRegex(String(item.count));
+                const rowPattern = new RegExp(`\\b${namePattern}\\b[\\s\\S]{0,40}\\b${countPattern}\\b`, 'i');
+                const exactNamePattern = new RegExp(`^${namePattern}$`, 'i');
+                const rowMatch = candidates
+                    .filter((entry) => rowPattern.test(entry.text))
+                    .sort((a, b) => a.text.length - b.text.length || a.rect.width - b.rect.width)[0];
+                if (rowMatch) return { element: rowMatch.element, item };
+
+                const nameMatch = candidates
+                    .filter((entry) => exactNamePattern.test(entry.text))
+                    .find((entry) => collapseText(entry.element.parentElement?.textContent || '').includes(String(item.count)));
+                return nameMatch ? { element: nameMatch.element.parentElement || nameMatch.element, item } : null;
+            })
+            .filter(Boolean);
+    }
+
+    function attachBotDashboardInlinePracticeControls() {
+        if (!isBotDashboardPage()) return;
+        ensureBotDashboardFilterStyle();
+        const practiceCounts = getBotDashboardPracticeCounts();
+        if (!practiceCounts.length) return;
+        const allPracticeKeys = new Set(practiceCounts.map((item) => item.key));
+        const hiddenPractices = loadHiddenBotDashboardPractices();
+
+        findBotDashboardPracticeCountElements().forEach(({ element, item }) => {
+            const existing = Array.from(element.querySelectorAll?.('.bl-dashboard-practice-inline-actions') || [])
+                .find((actions) => actions instanceof HTMLElement && actions.dataset.practiceKey === item.key);
+            if (existing) {
+                const showButton = existing.querySelector('[data-action="show"]');
+                const hideButton = showButton || existing.querySelector('[data-action="hide"]');
+                if (hideButton) {
+                    const isHidden = hiddenPractices.has(item.key);
+                    hideButton.dataset.action = isHidden ? 'show' : 'hide';
+                    hideButton.textContent = isHidden ? 'Show' : 'Hide';
+                    hideButton.title = `${isHidden ? 'Show' : 'Hide'} ${item.name}`;
+                }
+                return;
+            }
+
+            const actions = document.createElement('span');
+            actions.className = 'bl-dashboard-practice-inline-actions';
+            actions.dataset.practiceKey = item.key;
+
+            const onlyButton = document.createElement('button');
+            onlyButton.type = 'button';
+            onlyButton.dataset.action = 'only';
+            onlyButton.textContent = 'Only';
+            onlyButton.title = `Show only ${item.name}`;
+            onlyButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const nextHidden = new Set(allPracticeKeys);
+                nextHidden.delete(item.key);
+                saveHiddenBotDashboardPractices(nextHidden);
+                applyBotDashboardPracticeFilters();
+                attachBotDashboardPracticeFilterPanel();
+                attachBotDashboardInlinePracticeControls();
+                attachBotDashboardPageIssueButton();
+            });
+
+            const hideButton = document.createElement('button');
+            hideButton.type = 'button';
+            hideButton.dataset.action = hiddenPractices.has(item.key) ? 'show' : 'hide';
+            hideButton.textContent = hiddenPractices.has(item.key) ? 'Show' : 'Hide';
+            hideButton.title = `${hiddenPractices.has(item.key) ? 'Show' : 'Hide'} ${item.name}`;
+            hideButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const nextHidden = loadHiddenBotDashboardPractices();
+                if (nextHidden.has(item.key)) {
+                    nextHidden.delete(item.key);
+                } else {
+                    nextHidden.add(item.key);
+                }
+                saveHiddenBotDashboardPractices(nextHidden);
+                applyBotDashboardPracticeFilters();
+                attachBotDashboardPracticeFilterPanel();
+                attachBotDashboardInlinePracticeControls();
+                attachBotDashboardPageIssueButton();
+            });
+
+            actions.append(onlyButton, hideButton);
+            element.appendChild(actions);
+        });
+    }
+
+    function isBotDashboardSelectAllCheckbox(checkbox) {
+        if (!(checkbox instanceof HTMLInputElement) || checkbox.type !== 'checkbox') return false;
+        if (checkbox.closest('thead') || checkbox.closest('th') || !checkbox.closest('tbody')) return true;
+
+        const row = checkbox.closest('tr');
+        if (!row) return false;
+        const rowText = collapseText(row.textContent || '');
+        if (/^select all\b/i.test(rowText) || /\bselect all\b/i.test(rowText)) return true;
+
+        const rowData = getRowDataFromElement(row.querySelector('td') || row);
+        return rowData?.sourceKind !== 'bot_dashboard'
+            || !buildBotJobRowFromRowData(rowData);
+    }
+
+    function getCheckboxFromDashboardEvent(event) {
+        const target = event?.target;
+        if (target instanceof HTMLInputElement && target.type === 'checkbox') return target;
+
+        const path = typeof event?.composedPath === 'function' ? event.composedPath() : [];
+        const pathCheckbox = path.find((item) => item instanceof HTMLInputElement && item.type === 'checkbox');
+        if (pathCheckbox) return pathCheckbox;
+
+        if (target instanceof Element) {
+            const closestInput = target.closest('input[type="checkbox"]');
+            if (closestInput instanceof HTMLInputElement) return closestInput;
+
+            const label = target.closest('label');
+            const labelInput = label?.querySelector?.('input[type="checkbox"]');
+            if (labelInput instanceof HTMLInputElement) return labelInput;
+        }
+
+        if (typeof event?.clientX === 'number' && typeof event?.clientY === 'number') {
+            const pointedElement = document.elementFromPoint(event.clientX, event.clientY);
+            const pointedInput = pointedElement instanceof HTMLInputElement
+                ? pointedElement
+                : pointedElement?.closest?.('input[type="checkbox"]');
+            if (pointedInput instanceof HTMLInputElement) return pointedInput;
+        }
+
+        return null;
+    }
+
+    function runVisibleOnlySelectAllBatch(headerCheckbox) {
+        const entries = getBotDashboardRowEntries({ visibleOnly: false, forceFresh: true });
+        const visibleCheckboxes = entries
+            .filter((entry) => !isHiddenBotDashboardRow(entry.row))
+            .map((entry) => entry.row.querySelector('input[type="checkbox"]'))
+            .filter((rowCheckbox) => rowCheckbox instanceof HTMLInputElement && !rowCheckbox.disabled);
+        const hiddenCheckboxes = entries
+            .filter((entry) => isHiddenBotDashboardRow(entry.row))
+            .map((entry) => entry.row.querySelector('input[type="checkbox"]'))
+            .filter((rowCheckbox) => rowCheckbox instanceof HTMLInputElement);
+        const shouldSelect = visibleCheckboxes.some((rowCheckbox) => !rowCheckbox.checked);
+
+        hiddenCheckboxes
+            .filter((rowCheckbox) => rowCheckbox.checked)
+            .forEach((rowCheckbox) => setBotDashboardCheckboxChecked(rowCheckbox, false, { quiet: false }));
+
+        visibleCheckboxes
+            .filter((rowCheckbox) => rowCheckbox.checked !== shouldSelect)
+            .forEach((rowCheckbox) => setBotDashboardCheckboxChecked(rowCheckbox, shouldSelect, { quiet: false }));
+
+        if (headerCheckbox instanceof HTMLInputElement) {
+            headerCheckbox.checked = shouldSelect && visibleCheckboxes.length > 0;
+        }
+    }
+
+    function handleBotDashboardVisibleOnlySelectAll(event, checkboxOverride = null) {
+        const checkbox = checkboxOverride || getCheckboxFromDashboardEvent(event);
+        if (!(checkbox instanceof HTMLInputElement) || checkbox.type !== 'checkbox') return false;
+        if (!isBotDashboardSelectAllCheckbox(checkbox) || !hasActiveBotDashboardFilters()) return false;
+        if (event.__blDashboardSelectAllHandled) return true;
+        event.__blDashboardSelectAllHandled = true;
+        if (event.type !== 'click') return true;
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+
+        invalidateBotDashboardRowCache();
+        applyBotDashboardPracticeFilters();
+        botDashboardBulkSelecting = true;
+        setBotDashboardBulkSelectingMask(true);
+        setBotDashboardBulkStatus('Selecting visible jobs...');
+
+        waitForNextFrame()
+            .then(waitForNextFrame)
+            .then(() => {
+                try {
+                    runVisibleOnlySelectAllBatch(checkbox);
+                    invalidateBotDashboardRowCache();
+                } catch (error) {
+                    console.warn('[BL Navigator] visible-only Select All cleanup failed:', error);
+                } finally {
+                    window.setTimeout(() => {
+                        invalidateBotDashboardRowCache();
+                        runBotDashboardFilterRefresh();
+                        botDashboardBulkSelecting = false;
+                        setBotDashboardBulkStatus('');
+                        setBotDashboardBulkSelectingMask(false);
+                    }, 450);
+                }
+            });
+
+        return true;
+    }
+
+    function attachBotDashboardSelectionGuard() {
+        if (!isBotDashboardPage()) return;
+        if (document.body && document.body.dataset.blSelectionGuardBound !== 'true') {
+            document.body.dataset.blSelectionGuardBound = 'true';
+            const handleDocumentSelectAll = (event) => {
+                if (!isBotDashboardPage() || botDashboardBulkSelecting) return;
+                const checkbox = getCheckboxFromDashboardEvent(event);
+                if (!isBotDashboardSelectAllCheckbox(checkbox)) return;
+                handleBotDashboardVisibleOnlySelectAll(event, checkbox);
+            };
+            document.addEventListener('click', handleDocumentSelectAll, true);
+            document.addEventListener('change', handleDocumentSelectAll, true);
+        }
+
+        const table = document.querySelector('table');
+        if (!table || table.dataset.blSelectionGuardBound === 'true') return;
+        table.dataset.blSelectionGuardBound = 'true';
+        table.addEventListener('change', (event) => {
+            const checkbox = getCheckboxFromDashboardEvent(event);
+            if (checkbox instanceof HTMLInputElement && checkbox.type === 'checkbox') {
+                if (botDashboardBulkSelecting) return;
+                if (handleBotDashboardVisibleOnlySelectAll(event, checkbox)) return;
+                scheduleUnselectHiddenBotDashboardRows();
+                reapplyBotDashboardFiltersSoon();
+            }
+        }, true);
+        table.addEventListener('click', (event) => {
+            const checkbox = getCheckboxFromDashboardEvent(event);
+            if (checkbox instanceof HTMLInputElement && checkbox.type === 'checkbox') {
+                if (botDashboardBulkSelecting) return;
+                if (handleBotDashboardVisibleOnlySelectAll(event, checkbox)) return;
+                scheduleUnselectHiddenBotDashboardRows();
+                reapplyBotDashboardFiltersSoon();
+            }
+        }, true);
     }
 
     function getBotDashboardIssueRows() {
@@ -1962,29 +2811,96 @@ ${hiddenBlock}
         }
     }
 
-    function findBotDashboardPracticeFilterAnchor() {
-        return document.querySelector('table') || findBotDashboardPageIssueAnchor();
+    function findBotDashboardPracticeFilterPlacement() {
+        const existingHost = document.getElementById(BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID);
+        const heading = findBotDashboardPageIssueAnchor();
+        const headingTop = heading instanceof HTMLElement ? heading.getBoundingClientRect().top : -Infinity;
+        const visibleTables = Array.from(document.querySelectorAll('table'))
+            .filter((table) => table instanceof HTMLElement && table !== existingHost && table.offsetParent !== null)
+            .filter((table) => table.getBoundingClientRect().top > headingTop + 20);
+        const jobsTable = visibleTables[0] || null;
+        if (jobsTable?.parentElement) {
+            return {
+                parent: jobsTable.parentElement,
+                before: jobsTable
+            };
+        }
+
+        const noJobsElement = Array.from(document.querySelectorAll('div, span, p, td'))
+            .find((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && /^no jobs found$/i.test(collapseText(element.textContent || '')));
+        if (noJobsElement?.parentElement) {
+            return {
+                parent: noJobsElement.parentElement,
+                before: noJobsElement
+            };
+        }
+
+        const statusElement = Array.from(document.querySelectorAll('button, a, div, span'))
+            .find((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && /completed successfully/i.test(collapseText(element.textContent || ''))
+                && element.getBoundingClientRect().top > headingTop);
+        const statusContainer = statusElement?.parentElement || null;
+        if (statusContainer?.parentElement) {
+            return {
+                parent: statusContainer.parentElement,
+                after: statusContainer
+            };
+        }
+
+        if (heading?.parentElement) {
+            return {
+                parent: heading.parentElement,
+                after: heading
+            };
+        }
+
+        return null;
     }
 
     function renderBotDashboardPracticeFilterPanel(host, { force = false } = {}) {
         const practiceCounts = getBotDashboardPracticeCounts();
         const hiddenPractices = loadHiddenBotDashboardPractices();
+        const selectedPractices = loadSelectedBotDashboardPractices();
+        const practiceMode = loadBotDashboardPracticeMode();
+        const effectiveHiddenPractices = getEffectiveHiddenBotDashboardPractices(selectedPractices, hiddenPractices, practiceMode);
         const statusFilterTerm = loadBotDashboardStatusFilterTerm();
-        const statusCounts = getBotDashboardStatusCounts(hiddenPractices);
-        const searchTerm = collapseText(host.dataset.search || '').toLowerCase();
-        const filteredCounts = practiceCounts.filter((item) => !searchTerm || item.name.toLowerCase().includes(searchTerm));
+        const jobTypeFilterTerm = loadBotDashboardJobTypeFilterTerm();
+        const selectedStatuses = loadSelectedBotDashboardStatuses();
+        const statusMode = loadBotDashboardStatusMode();
+        const selectedJobTypes = loadSelectedBotDashboardJobTypes();
+        const jobTypeMode = loadBotDashboardJobTypeMode();
+        const statusCounts = getBotDashboardStatusCounts(effectiveHiddenPractices);
+        const jobTypeCounts = getBotDashboardJobTypeCounts(effectiveHiddenPractices);
+        const practiceSearchTerm = collapseText(host.dataset.practiceSearch || '').toLowerCase();
+        const filteredPracticeCounts = practiceCounts.filter((item) => !practiceSearchTerm
+            || item.name.toLowerCase().includes(practiceSearchTerm)
+            || String(item.odsCode || '').toLowerCase().includes(practiceSearchTerm));
         const statusSearchTerm = collapseText(host.dataset.statusSearch || '').toLowerCase();
         const filteredStatusCounts = statusCounts.filter((item) => !statusSearchTerm || item.label.toLowerCase().includes(statusSearchTerm));
+        const jobTypeSearchTerm = collapseText(host.dataset.jobTypeSearch || '').toLowerCase();
+        const filteredJobTypeCounts = jobTypeCounts.filter((item) => !jobTypeSearchTerm || item.label.toLowerCase().includes(jobTypeSearchTerm));
         const totalRows = getBotDashboardRowEntries({ visibleOnly: false }).length;
         const visibleRows = getBotDashboardRowEntries({ visibleOnly: true }).length;
         const hiddenRows = Math.max(0, totalRows - visibleRows);
         const signature = JSON.stringify({
             counts: practiceCounts.map((item) => [item.key, item.count]),
             statusCounts: statusCounts.map((item) => [item.label, item.count]),
+            jobTypeCounts: jobTypeCounts.map((item) => [item.label, item.count]),
             hidden: [...hiddenPractices].sort(),
+            selected: [...selectedPractices].sort(),
+            practiceMode,
+            selectedStatuses: [...selectedStatuses].sort(),
+            statusMode,
+            selectedJobTypes: [...selectedJobTypes].sort(),
+            jobTypeMode,
             statusFilterTerm,
-            searchTerm,
-            statusSearchTerm
+            jobTypeFilterTerm,
+            practiceSearchTerm,
+            statusSearchTerm,
+            jobTypeSearchTerm
         });
         if (!force && host.dataset.signature === signature && host.childElementCount > 0) return;
         host.dataset.signature = signature;
@@ -1996,7 +2912,9 @@ ${hiddenBlock}
             border: '1px solid #d8dee8',
             borderRadius: '8px',
             background: '#f8fafc',
-            maxWidth: '860px',
+            width: '100%',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
             fontFamily: 'system-ui, -apple-system, sans-serif',
             color: '#0b2545'
         });
@@ -2018,57 +2936,21 @@ ${hiddenBlock}
         });
 
         const summary = document.createElement('span');
-        summary.textContent = `${visibleRows} visible rows${hiddenRows ? `, ${hiddenRows} hidden` : ''}`;
+        const activeSelectionSummary = [
+            selectedPractices.size ? `${selectedPractices.size} practice${selectedPractices.size === 1 ? '' : 's'}` : '',
+            selectedJobTypes.size ? `${selectedJobTypes.size} job type${selectedJobTypes.size === 1 ? '' : 's'}` : '',
+            selectedStatuses.size ? `${selectedStatuses.size} status${selectedStatuses.size === 1 ? '' : 'es'}` : ''
+        ].filter(Boolean).join(', ');
+        summary.textContent = `${visibleRows} visible rows${hiddenRows ? `, ${hiddenRows} hidden` : ''}${activeSelectionSummary ? `, selected ${activeSelectionSummary}` : ''}`;
         Object.assign(summary.style, {
             fontSize: '12px',
             color: '#64748b'
         });
 
-        const searchInput = document.createElement('input');
-        searchInput.type = 'search';
-        searchInput.placeholder = 'Find practice';
-        searchInput.value = host.dataset.search || '';
-        Object.assign(searchInput.style, {
-            minWidth: '180px',
-            height: '30px',
-            border: '1px solid #cbd5e1',
-            borderRadius: '6px',
-            padding: '0 8px',
-            fontSize: '12px',
-            marginLeft: 'auto'
-        });
-        searchInput.addEventListener('input', () => {
-            host.dataset.search = searchInput.value;
-            renderBotDashboardPracticeFilterPanel(host, { force: true });
-        });
-
-        const statusInput = document.createElement('input');
-        statusInput.type = 'search';
-        statusInput.placeholder = 'Status or attempts';
-        statusInput.value = statusFilterTerm;
-        Object.assign(statusInput.style, {
-            minWidth: '180px',
-            height: '30px',
-            border: '1px solid #cbd5e1',
-            borderRadius: '6px',
-            padding: '0 8px',
-            fontSize: '12px'
-        });
-        statusInput.addEventListener('input', () => {
-            saveBotDashboardStatusFilterTerm(statusInput.value);
-            applyBotDashboardPracticeFilters();
-            const nextVisibleRows = getBotDashboardRowEntries({ visibleOnly: true }).length;
-            const nextHiddenRows = Math.max(0, totalRows - nextVisibleRows);
-            summary.textContent = `${nextVisibleRows} visible rows${nextHiddenRows ? `, ${nextHiddenRows} hidden` : ''}`;
-            clearButton.disabled = hiddenPractices.size === 0 && !collapseText(statusInput.value);
-            clearButton.style.opacity = clearButton.disabled ? '0.55' : '1';
-            attachBotDashboardPageIssueButton();
-        });
-
         const clearButton = document.createElement('button');
         clearButton.type = 'button';
         clearButton.textContent = 'Show all';
-        clearButton.title = 'Clear hidden-practice and status filters';
+        clearButton.title = 'Clear hidden-practice, job-type, and status filters';
         Object.assign(clearButton.style, {
             height: '30px',
             border: '1px solid #93c5fd',
@@ -2080,87 +2962,50 @@ ${hiddenBlock}
             padding: '0 10px',
             cursor: 'pointer'
         });
-        clearButton.disabled = hiddenPractices.size === 0 && !statusFilterTerm;
+        clearButton.disabled = selectedPractices.size === 0
+            && selectedJobTypes.size === 0
+            && selectedStatuses.size === 0
+            && hiddenPractices.size === 0
+            && !statusFilterTerm
+            && !jobTypeFilterTerm;
         clearButton.style.opacity = clearButton.disabled ? '0.55' : '1';
         clearButton.addEventListener('click', () => {
             saveHiddenBotDashboardPractices(new Set());
+            saveSelectedBotDashboardPractices(new Set());
+            saveSelectedBotDashboardJobTypes(new Set());
+            saveSelectedBotDashboardStatuses(new Set());
             saveBotDashboardStatusFilterTerm('');
+            saveBotDashboardJobTypeFilterTerm('');
+            saveBotDashboardPracticeMode('include');
+            saveBotDashboardStatusMode('include');
+            saveBotDashboardJobTypeMode('include');
             applyBotDashboardPracticeFilters();
             renderBotDashboardPracticeFilterPanel(host, { force: true });
+            attachBotDashboardInlinePracticeControls();
             attachBotDashboardPageIssueButton();
         });
 
-        topRow.append(title, summary, searchInput, statusInput, clearButton);
+        topRow.append(title, summary, clearButton);
 
-        const list = document.createElement('div');
-        Object.assign(list.style, {
-            display: 'flex',
-            gap: '6px',
-            flexWrap: 'wrap',
-            maxHeight: '150px',
-            overflow: 'auto'
-        });
-
-        filteredCounts.forEach((item) => {
-            const isHidden = hiddenPractices.has(item.key);
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = `${isHidden ? 'Show' : 'Hide'} ${item.name} (${item.count})`;
-            button.title = `${isHidden ? 'Show' : 'Hide'} rows for ${item.name}`;
-            Object.assign(button.style, {
-                minHeight: '28px',
-                border: `1px solid ${isHidden ? '#fca5a5' : '#cbd5e1'}`,
-                borderRadius: '999px',
-                background: isHidden ? '#fee2e2' : '#fff',
-                color: isHidden ? '#991b1b' : '#0f172a',
-                fontSize: '12px',
-                fontWeight: isHidden ? '700' : '600',
-                padding: '4px 9px',
-                cursor: 'pointer'
-            });
-            button.addEventListener('click', () => {
-                const nextHidden = loadHiddenBotDashboardPractices();
-                if (nextHidden.has(item.key)) {
-                    nextHidden.delete(item.key);
-                } else {
-                    nextHidden.add(item.key);
-                }
-                saveHiddenBotDashboardPractices(nextHidden);
-                applyBotDashboardPracticeFilters();
-                renderBotDashboardPracticeFilterPanel(host, { force: true });
-                attachBotDashboardPageIssueButton();
-            });
-            list.appendChild(button);
-        });
-
-        if (!filteredCounts.length) {
-            const empty = document.createElement('span');
-            empty.textContent = 'No matching practices on this page.';
-            Object.assign(empty.style, {
-                fontSize: '12px',
-                color: '#64748b'
-            });
-            list.appendChild(empty);
-        }
-
-        const statusHeader = document.createElement('div');
-        Object.assign(statusHeader.style, {
+        const practiceHeader = document.createElement('div');
+        Object.assign(practiceHeader.style, {
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
+            flexWrap: 'wrap',
             margin: '10px 0 6px 0'
         });
-        const statusTitle = document.createElement('strong');
-        statusTitle.textContent = 'Status / attempts';
-        Object.assign(statusTitle.style, {
-            fontSize: '12px'
-        });
-        const statusSearchInput = document.createElement('input');
-        statusSearchInput.type = 'search';
-        statusSearchInput.placeholder = 'Find status chip';
-        statusSearchInput.value = host.dataset.statusSearch || '';
-        Object.assign(statusSearchInput.style, {
-            minWidth: '170px',
+        const practiceTitle = document.createElement('strong');
+        practiceTitle.textContent = 'Practice';
+        Object.assign(practiceTitle.style, { fontSize: '12px' });
+        const practiceSearchInput = document.createElement('input');
+        practiceSearchInput.type = 'search';
+        practiceSearchInput.placeholder = 'Find practice or ODS';
+        practiceSearchInput.value = host.dataset.practiceSearch || '';
+        Object.assign(practiceSearchInput.style, {
+            minWidth: '150px',
+            width: 'min(190px, 100%)',
+            flex: '1 1 150px',
             height: '28px',
             border: '1px solid #cbd5e1',
             borderRadius: '6px',
@@ -2168,70 +3013,311 @@ ${hiddenBlock}
             fontSize: '12px',
             marginLeft: 'auto'
         });
-        statusSearchInput.addEventListener('input', () => {
-            host.dataset.statusSearch = statusSearchInput.value;
+        practiceSearchInput.addEventListener('input', () => {
+            host.dataset.practiceSearch = practiceSearchInput.value;
             renderBotDashboardPracticeFilterPanel(host, { force: true });
         });
-        statusHeader.append(statusTitle, statusSearchInput);
-
-        const statusList = document.createElement('div');
-        Object.assign(statusList.style, {
-            display: 'flex',
-            gap: '6px',
-            flexWrap: 'wrap',
-            maxHeight: '112px',
-            overflow: 'auto'
-        });
-        filteredStatusCounts.forEach((item) => {
-            const isActive = statusFilterTerm.toLowerCase() === item.term.toLowerCase();
-            const label = item.label.length > 74 ? `${item.label.slice(0, 74)}...` : item.label;
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = `${isActive ? 'Showing' : 'Show'} ${label} (${item.count})`;
-            button.title = `Show only rows matching: ${item.term}`;
-            Object.assign(button.style, {
-                minHeight: '28px',
-                border: `1px solid ${isActive ? '#93c5fd' : '#cbd5e1'}`,
-                borderRadius: '999px',
-                background: isActive ? '#dbeafe' : '#fff',
-                color: isActive ? '#1d4ed8' : '#0f172a',
-                fontSize: '12px',
-                fontWeight: isActive ? '700' : '600',
-                padding: '4px 9px',
-                cursor: 'pointer'
-            });
-            button.addEventListener('click', () => {
-                saveBotDashboardStatusFilterTerm(isActive ? '' : item.term);
+        const practiceModeToggle = makeVisibilityModeToggle({
+            mode: practiceMode,
+            showTitle: 'Selected practices are shown and other practices are hidden',
+            hideTitle: 'Selected practices are hidden and other practices remain visible',
+            onToggle: (nextMode) => {
+                saveBotDashboardPracticeMode(nextMode);
+                saveHiddenBotDashboardPractices(new Set());
                 applyBotDashboardPracticeFilters();
                 renderBotDashboardPracticeFilterPanel(host, { force: true });
                 attachBotDashboardPageIssueButton();
-            });
-            statusList.appendChild(button);
+            }
+        });
+        practiceHeader.append(practiceTitle, practiceModeToggle, practiceSearchInput);
+
+        const practiceSelect = document.createElement('select');
+        practiceSelect.multiple = true;
+        practiceSelect.size = 6;
+        practiceSelect.title = practiceMode === 'exclude'
+            ? 'Select one or more practices to hide those practices'
+            : 'Select one or more practices to show only those practices';
+        Object.assign(practiceSelect.style, {
+            width: '100%',
+            maxWidth: 'none',
+            minHeight: '112px',
+            border: '1px solid #cbd5e1',
+            borderRadius: '6px',
+            padding: '6px',
+            fontSize: '12px',
+            background: '#fff',
+            color: '#0f172a'
+        });
+        filteredPracticeCounts.forEach((item) => {
+            const option = document.createElement('option');
+            option.value = item.key;
+            option.selected = selectedPractices.has(item.key);
+            option.textContent = `${item.name}${item.odsCode ? ` (${item.odsCode})` : ''} - ${item.count}`;
+            practiceSelect.appendChild(option);
+        });
+        practiceSelect.addEventListener('change', () => {
+            const nextSelected = new Set(Array.from(practiceSelect.selectedOptions).map((option) => option.value).filter(Boolean));
+            saveSelectedBotDashboardPractices(nextSelected);
+            saveHiddenBotDashboardPractices(new Set());
+            applyBotDashboardPracticeFilters();
+            renderBotDashboardPracticeFilterPanel(host, { force: true });
+            attachBotDashboardPageIssueButton();
         });
 
-        if (!filteredStatusCounts.length) {
-            const empty = document.createElement('span');
-            empty.textContent = 'No status values from visible practices.';
-            Object.assign(empty.style, {
-                fontSize: '12px',
-                color: '#64748b'
+        const practiceHint = document.createElement('div');
+        practiceHint.textContent = selectedPractices.size
+            ? (practiceMode === 'exclude'
+                ? 'Selected practices are hidden. Use Show all to clear.'
+                : 'Only selected practices are visible. Use Show all to clear.')
+            : (practiceMode === 'exclude'
+                ? 'Select one or more practices to hide those jobs.'
+                : 'Select one or more practices to show only those jobs.');
+        Object.assign(practiceHint.style, {
+            marginTop: '4px',
+            fontSize: '12px',
+            color: '#64748b'
+        });
+
+        const filterGrid = document.createElement('div');
+        Object.assign(filterGrid.style, {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
+            gap: '12px',
+            alignItems: 'start'
+        });
+
+        const makeFilterColumn = (...children) => {
+            const column = document.createElement('div');
+            Object.assign(column.style, {
+                minWidth: '0'
             });
-            statusList.appendChild(empty);
+            column.append(...children);
+            return column;
+        };
+
+        function makeVisibilityModeToggle({ mode, onToggle, showTitle, hideTitle }) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            const isExclude = mode === 'exclude';
+            button.title = isExclude ? hideTitle : showTitle;
+            button.setAttribute('aria-label', button.title);
+            Object.assign(button.style, {
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                height: '26px',
+                border: isExclude ? '1px solid #fca5a5' : '1px solid #93c5fd',
+                borderRadius: '999px',
+                background: isExclude ? '#fef2f2' : '#eff6ff',
+                color: isExclude ? '#b91c1c' : '#1d4ed8',
+                fontWeight: '700',
+                fontSize: '11px',
+                padding: '0 9px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+            });
+            const icon = document.createElement('span');
+            icon.setAttribute('aria-hidden', 'true');
+            icon.innerHTML = isExclude
+                ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 20C7 20 2.73 16.89 1 12a11.8 11.8 0 0 1 5.06-5.94"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.9 4.24A10.8 10.8 0 0 1 12 4c5 0 9.27 3.11 11 8a11.7 11.7 0 0 1-2.16 3.19"></path><path d="M1 1l22 22"></path></svg>'
+                : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+            const label = document.createElement('span');
+            label.textContent = isExclude ? 'Hide selected' : 'Show selected';
+            button.append(icon, label);
+            button.addEventListener('click', () => {
+                onToggle(isExclude ? 'include' : 'exclude');
+            });
+            return button;
         }
 
-        host.append(topRow, list, statusHeader, statusList);
+        const makeSectionHeader = (label, placeholder, datasetKey, rerender) => {
+            const header = document.createElement('div');
+            Object.assign(header.style, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                flexWrap: 'wrap',
+                margin: '10px 0 6px 0'
+            });
+            const sectionTitle = document.createElement('strong');
+            sectionTitle.textContent = label;
+            Object.assign(sectionTitle.style, {
+                fontSize: '12px'
+            });
+            const chipSearchInput = document.createElement('input');
+            chipSearchInput.type = 'search';
+            chipSearchInput.placeholder = placeholder;
+            chipSearchInput.value = host.dataset[datasetKey] || '';
+            Object.assign(chipSearchInput.style, {
+                minWidth: '130px',
+                width: 'min(180px, 100%)',
+                flex: '1 1 130px',
+                height: '28px',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                padding: '0 8px',
+                fontSize: '12px',
+                marginLeft: 'auto'
+            });
+            chipSearchInput.addEventListener('input', () => {
+                host.dataset[datasetKey] = chipSearchInput.value;
+                rerender();
+            });
+            header.append(sectionTitle, chipSearchInput);
+            return header;
+        };
+
+        const makeMultiSelect = ({ items, selectedSet, title, emptyText, onChange, optionText }) => {
+            const select = document.createElement('select');
+            select.multiple = true;
+            select.size = 6;
+            select.title = title;
+            Object.assign(select.style, {
+                width: '100%',
+                maxWidth: 'none',
+                minHeight: '112px',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                padding: '6px',
+                fontSize: '12px',
+                background: '#fff',
+                color: '#0f172a'
+            });
+            if (!items.length) {
+                const option = document.createElement('option');
+                option.disabled = true;
+                option.textContent = emptyText;
+                select.appendChild(option);
+                return select;
+            }
+            items.forEach((item) => {
+                const option = document.createElement('option');
+                const value = collapseText(item.term || item.label || '').toLowerCase();
+                option.value = value;
+                option.selected = selectedSet.has(value);
+                option.textContent = optionText(item);
+                select.appendChild(option);
+            });
+            select.addEventListener('change', () => {
+                onChange(new Set(Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean)));
+            });
+            return select;
+        };
+
+        const jobTypeHeader = makeSectionHeader('Job type', 'Find job type chip', 'jobTypeSearch', () => {
+            renderBotDashboardPracticeFilterPanel(host, { force: true });
+        });
+        const jobTypeModeToggle = makeVisibilityModeToggle({
+            mode: jobTypeMode,
+            showTitle: 'Selected job types are shown and other job types are hidden',
+            hideTitle: 'Selected job types are hidden and other job types remain visible',
+            onToggle: (nextMode) => {
+                saveBotDashboardJobTypeMode(nextMode);
+                applyBotDashboardPracticeFilters();
+                renderBotDashboardPracticeFilterPanel(host, { force: true });
+                attachBotDashboardPageIssueButton();
+            }
+        });
+        jobTypeHeader.insertBefore(jobTypeModeToggle, jobTypeHeader.querySelector('input'));
+
+        const jobTypeSelect = makeMultiSelect({
+            items: filteredJobTypeCounts,
+            selectedSet: selectedJobTypes,
+            title: jobTypeMode === 'exclude'
+                ? 'Select one or more job types to hide those rows'
+                : 'Select one or more job types to show only those rows',
+            emptyText: 'No job types from visible practices.',
+            optionText: (item) => `${item.label} - ${item.count}`,
+            onChange: (nextSelected) => {
+                saveSelectedBotDashboardJobTypes(nextSelected);
+                saveBotDashboardJobTypeFilterTerm('');
+                applyBotDashboardPracticeFilters();
+                renderBotDashboardPracticeFilterPanel(host, { force: true });
+                attachBotDashboardPageIssueButton();
+            }
+        });
+
+        const jobTypeHint = document.createElement('div');
+        jobTypeHint.textContent = selectedJobTypes.size
+            ? (jobTypeMode === 'exclude'
+                ? 'Selected job types are hidden. Use Show all to clear.'
+                : 'Only selected job types are visible. Use Show all to clear.')
+            : (jobTypeMode === 'exclude'
+                ? 'Select one or more job types to hide those rows.'
+                : 'Select one or more job types to show only those rows.');
+        Object.assign(jobTypeHint.style, {
+            marginTop: '4px',
+            fontSize: '12px',
+            color: '#64748b'
+        });
+
+        const statusHeader = makeSectionHeader('Status / attempts', 'Find status chip', 'statusSearch', () => {
+            renderBotDashboardPracticeFilterPanel(host, { force: true });
+        });
+        const statusModeToggle = makeVisibilityModeToggle({
+            mode: statusMode,
+            showTitle: 'Selected statuses are shown and other statuses are hidden',
+            hideTitle: 'Selected statuses are hidden and other statuses remain visible',
+            onToggle: (nextMode) => {
+                saveBotDashboardStatusMode(nextMode);
+                applyBotDashboardPracticeFilters();
+                renderBotDashboardPracticeFilterPanel(host, { force: true });
+                attachBotDashboardPageIssueButton();
+            }
+        });
+        statusHeader.insertBefore(statusModeToggle, statusHeader.querySelector('input'));
+
+        const statusSelect = makeMultiSelect({
+            items: filteredStatusCounts,
+            selectedSet: selectedStatuses,
+            title: statusMode === 'exclude'
+                ? 'Select one or more statuses/attempt values to hide those rows'
+                : 'Select one or more statuses/attempt values to show only those rows',
+            emptyText: 'No status values from visible practices.',
+            optionText: (item) => `${item.label.length > 96 ? `${item.label.slice(0, 96)}...` : item.label} - ${item.count}`,
+            onChange: (nextSelected) => {
+                saveSelectedBotDashboardStatuses(nextSelected);
+                saveBotDashboardStatusFilterTerm('');
+                applyBotDashboardPracticeFilters();
+                renderBotDashboardPracticeFilterPanel(host, { force: true });
+                attachBotDashboardPageIssueButton();
+            }
+        });
+
+        const statusHint = document.createElement('div');
+        statusHint.textContent = selectedStatuses.size
+            ? (statusMode === 'exclude'
+                ? 'Selected statuses/attempt values are hidden. Use Show all to clear.'
+                : 'Only selected statuses/attempt values are visible. Use Show all to clear.')
+            : (statusMode === 'exclude'
+                ? 'Select one or more statuses or attempt values to hide those rows.'
+                : 'Select one or more statuses or attempt values to show only those rows.');
+        Object.assign(statusHint.style, {
+            marginTop: '4px',
+            fontSize: '12px',
+            color: '#64748b'
+        });
+
+        filterGrid.append(
+            makeFilterColumn(practiceHeader, practiceSelect, practiceHint),
+            makeFilterColumn(jobTypeHeader, jobTypeSelect, jobTypeHint),
+            makeFilterColumn(statusHeader, statusSelect, statusHint)
+        );
+        host.append(topRow, filterGrid);
     }
 
     function attachBotDashboardPracticeFilterPanel() {
         const existingHost = document.getElementById(BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID);
         if (!isBotDashboardPage()) {
             existingHost?.remove();
+            updateBotDashboardFilterLock(false);
             return;
         }
 
         applyBotDashboardPracticeFilters();
-        const anchor = findBotDashboardPracticeFilterAnchor();
-        if (!anchor?.parentElement) {
+        const placement = findBotDashboardPracticeFilterPlacement();
+        if (!placement?.parent) {
             existingHost?.remove();
             return;
         }
@@ -2240,8 +3326,9 @@ ${hiddenBlock}
         host.id = BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID;
         renderBotDashboardPracticeFilterPanel(host);
 
-        if (!host.parentElement) {
-            anchor.parentElement.insertBefore(host, anchor);
+        const desiredNextSibling = placement.before || placement.after?.nextSibling || null;
+        if (host.parentElement !== placement.parent || host.nextSibling !== desiredNextSibling) {
+            placement.parent.insertBefore(host, desiredNextSibling);
         }
     }
 
@@ -2265,11 +3352,17 @@ ${hiddenBlock}
 
         const host = existingHost || document.createElement('div');
         host.id = BOT_DASHBOARD_PAGE_ISSUE_HOST_ID;
+        const anchorParent = anchor.parentElement;
+        if (anchorParent && getComputedStyle(anchorParent).position === 'static') {
+            anchorParent.style.position = 'relative';
+        }
         Object.assign(host.style, {
             display: 'inline-flex',
             alignItems: 'center',
-            marginLeft: '12px',
-            verticalAlign: 'middle'
+            position: 'absolute',
+            top: '0',
+            right: '0',
+            zIndex: '5'
         });
 
         let button = host.querySelector('button');
@@ -2310,8 +3403,8 @@ ${hiddenBlock}
             ? `Create practice/job spike issues or single failures from ${selectedCount} selected bot job row${selectedCount === 1 ? '' : 's'} only`
             : `Create practice/job spike issues or single failures from ${visibleCount || 'the'} visible bot job row${visibleCount === 1 ? '' : 's'} only`;
 
-        if (!host.parentElement) {
-            anchor.insertAdjacentElement('afterend', host);
+        if (host.parentElement !== anchorParent) {
+            anchorParent.appendChild(host);
         }
     }
 
@@ -2475,12 +3568,28 @@ ${hiddenBlock}
         attachDocListeners();
         attachMetaListeners();
         attachRejectedPracticeIssueButton();
+        attachBotDashboardSelectionGuard();
         attachBotDashboardPracticeFilterPanel();
+        attachBotDashboardInlinePracticeControls();
         attachBotDashboardPageIssueButton();
         attachPreparingOver3hIssueButton();
     }
 
-    const observer = new MutationObserver(() => attachListeners());
+    function scheduleAttachListeners() {
+        invalidateBotDashboardRowCache();
+        if (botDashboardBulkSelecting) {
+            botDashboardBulkRefreshPending = true;
+            return;
+        }
+        if (attachListenersTimer) return;
+        const delay = isBotDashboardPage() && hasActiveBotDashboardFilters() ? 80 : 120;
+        attachListenersTimer = window.setTimeout(() => {
+            attachListenersTimer = null;
+            attachListeners();
+        }, delay);
+    }
+
+    const observer = new MutationObserver(() => scheduleAttachListeners());
 
     async function init() {
         if (listenersStarted) return;
