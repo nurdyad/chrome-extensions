@@ -634,6 +634,64 @@
     background: linear-gradient(180deg, #d97706 0%, #f59e0b 100%);
 }
 
+.docman-tool-status-card-compact {
+    padding: 8px 9px 8px 11px;
+}
+
+.docman-tool-compact-main {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.docman-tool-compact-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: #eef5ff;
+    color: #2563eb;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.docman-tool-status-card-compact.is-success .docman-tool-compact-icon {
+    background: #e7f7ed;
+    color: #16803d;
+}
+
+.docman-tool-status-card-compact.is-failed .docman-tool-compact-icon {
+    background: #fff1f1;
+    color: #b42318;
+}
+
+.docman-tool-status-card-compact .docman-tool-status-title {
+    margin-top: 1px;
+}
+
+.docman-tool-status-card-compact .docman-tool-status-subtitle {
+    margin-top: 2px;
+}
+
+.docman-tool-compact-copy {
+    min-width: 0;
+}
+
+.docman-tool-compact-meta {
+    margin-top: 7px;
+}
+
+.docman-tool-compact-log {
+    margin-top: 7px;
+}
+
+.docman-tool-compact-log .docman-tool-log {
+    max-height: 120px;
+}
+
 .docman-tool-status-kicker {
     font-size: 9px;
     font-weight: 700;

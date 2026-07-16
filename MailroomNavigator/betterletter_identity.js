@@ -5,6 +5,8 @@
   const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
   const SENT_CACHE_KEY = "__BL_IDENTITY_LAST_SENT__";
   const PAGE_MESSAGE_TYPE = "mailroomnavigator_betterletter_identity";
+  let identityCaptured = false;
+  let identityObserver = null;
 
   function collapse(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -105,6 +107,7 @@
   }
 
   function sendIdentitySnapshot() {
+    if (identityCaptured) return;
     const candidates = collectCandidates();
     const best = candidates[0];
     if (!best?.email) return;
@@ -126,9 +129,12 @@
     } catch {
       // Ignore extension context errors.
     }
+    identityCaptured = true;
+    identityObserver?.disconnect?.();
   }
 
   function forwardIdentitySnapshot(rawData) {
+    if (identityCaptured) return;
     const payload = {
       email: normalizeEmail(rawData?.email),
       source: collapse(rawData?.source).slice(0, 120),
@@ -147,11 +153,14 @@
     } catch {
       // Ignore extension context errors.
     }
+    identityCaptured = true;
+    identityObserver?.disconnect?.();
   }
 
   const debouncedSend = (() => {
     let timer = null;
     return () => {
+      if (identityCaptured) return;
       clearTimeout(timer);
       timer = setTimeout(sendIdentitySnapshot, 250);
     };
@@ -176,11 +185,11 @@
     forwardIdentitySnapshot(event.data?.data);
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") debouncedSend();
+    if (!identityCaptured && document.visibilityState === "visible") debouncedSend();
   });
 
-  const observer = new MutationObserver(() => debouncedSend());
-  observer.observe(document.documentElement || document.body, {
+  identityObserver = new MutationObserver(() => debouncedSend());
+  identityObserver.observe(document.documentElement || document.body, {
     childList: true,
     subtree: true,
     attributes: false
