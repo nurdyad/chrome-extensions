@@ -6,6 +6,8 @@
   const SENT_CACHE_KEY = "__MAILROOMNAV_LAST_IDENTITY_MAIN__";
   const MAX_NODES = 1800;
   const MAX_DEPTH = 5;
+  let identityCaptured = false;
+  let identityObserver = null;
 
   function normalizeEmail(value) {
     const normalized = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -182,6 +184,7 @@
   }
 
   function sendSnapshot() {
+    if (identityCaptured) return;
     const best = collectCandidates()[0];
     if (!best?.email) return;
 
@@ -213,11 +216,14 @@
       },
       window.location.origin
     );
+    identityCaptured = true;
+    identityObserver?.disconnect?.();
   }
 
   const debouncedSend = (() => {
     let timer = null;
     return () => {
+      if (identityCaptured) return;
       clearTimeout(timer);
       timer = setTimeout(sendSnapshot, 250);
     };
@@ -231,11 +237,11 @@
 
   window.addEventListener("load", sendSnapshot, { once: true });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") debouncedSend();
+    if (!identityCaptured && document.visibilityState === "visible") debouncedSend();
   });
 
-  const observer = new MutationObserver(() => debouncedSend());
-  observer.observe(document.documentElement || document.body, {
+  identityObserver = new MutationObserver(() => debouncedSend());
+  identityObserver.observe(document.documentElement || document.body, {
     childList: true,
     subtree: true,
     attributes: false

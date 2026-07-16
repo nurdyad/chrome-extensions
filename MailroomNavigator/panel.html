@@ -447,6 +447,19 @@
         </div>
       </div>
 
+      <div id="gitPublishSection" class="section-container" style="margin-top: 12px;">
+        <h3>GitHub Publish</h3>
+        <label for="gitPublishBranchInput">Branch name</label>
+        <input id="gitPublishBranchInput" type="text" autocomplete="off" placeholder="Preparing suggestion...">
+        <label for="gitPublishCommitInput" style="margin-top: 8px;">Commit message</label>
+        <input id="gitPublishCommitInput" type="text" autocomplete="off" placeholder="Preparing suggestion...">
+        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button id="prepareGitPublishBtn" class="btn btn-sm btn-ghost" type="button">Prepare</button>
+          <button id="runGitPublishBtn" class="btn btn-sm" type="button" style="background: #0f766e;">Push to GitHub</button>
+        </div>
+        <div id="gitPublishStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Use Prepare to check changed files and fill the branch/commit suggestion.</div>
+      </div>
+
       <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-top: 12px;">
         <h3>Access Service</h3>
         <label style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px;">

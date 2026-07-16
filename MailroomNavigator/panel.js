@@ -591,6 +591,7 @@ function applyExtensionFeatureAccessToUi() {
             && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
             && Boolean(String(document.getElementById('linearTriggerStatus')?.textContent || '').trim())
     );
+    setElementVisible('gitPublishSection', !serverlessLiteMode);
     setElementVisible('extensionUserManagementSection', !serverlessLiteMode && Boolean(extensionAccessState?.isOwner));
 
     const actionRow = document.getElementById('linearActionButtonsRow');
@@ -824,6 +825,12 @@ async function initializePanel() {
     const saveAccessServiceConfigBtn = document.getElementById('saveAccessServiceConfigBtn');
     const clearAccessServiceConfigBtn = document.getElementById('clearAccessServiceConfigBtn');
     const accessServiceConfigStatus = document.getElementById('accessServiceConfigStatus');
+    const gitPublishSection = document.getElementById('gitPublishSection');
+    const gitPublishBranchInput = document.getElementById('gitPublishBranchInput');
+    const gitPublishCommitInput = document.getElementById('gitPublishCommitInput');
+    const prepareGitPublishBtn = document.getElementById('prepareGitPublishBtn');
+    const runGitPublishBtn = document.getElementById('runGitPublishBtn');
+    const gitPublishStatus = document.getElementById('gitPublishStatus');
     const superblocksUuidLookupSection = document.getElementById('superblocksUuidLookupSection');
     const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
     const managedUserEmailInput = document.getElementById('managedUserEmailInput');
@@ -2535,6 +2542,29 @@ async function initializePanel() {
 
         docmanToolStatus.classList.remove('validation-badge', 'neutral', 'valid', 'invalid');
         docmanToolStatus.classList.add('docman-tool-status-host');
+        if (trimDocmanField(run.action, 40) === 'login') {
+            docmanToolStatus.innerHTML = `
+                <div class="docman-tool-status-card docman-tool-status-card-compact is-${tone}">
+                    <div class="docman-tool-compact-main">
+                        <div class="docman-tool-compact-icon" aria-hidden="true">${tone === 'success' ? '✓' : tone === 'running' ? '…' : '!'}</div>
+                        <div class="docman-tool-compact-copy">
+                            <div class="docman-tool-status-kicker">Docman Login</div>
+                            <div class="docman-tool-status-title">${escapeHtml(getDocmanRunHeadline(run, isActive))}</div>
+                            <div class="docman-tool-status-subtitle">${escapeHtml(trimDocmanField(run.practiceName, 160) || 'Selected practice')}</div>
+                        </div>
+                        <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
+                    </div>
+                    ${chips.length ? `<div class="docman-tool-meta-row docman-tool-compact-meta">${chips.map((chip) => `<span class="docman-tool-chip">${escapeHtml(chip)}</span>`).join('')}</div>` : ''}
+                    ${logLines.length ? `
+                        <details class="docman-tool-log-details docman-tool-compact-log">
+                            <summary>Activity (${logLines.length})</summary>
+                            <pre class="docman-tool-log">${escapeHtml(logLines.join('\n'))}</pre>
+                        </details>
+                    ` : ''}
+                </div>
+            `;
+            return;
+        }
         docmanToolStatus.innerHTML = `
             <div class="docman-tool-status-card is-${tone}">
                 <div class="docman-tool-status-header">
@@ -4794,6 +4824,112 @@ async function initializePanel() {
         }
     };
 
+    const setGitPublishStatus = (message, tone = 'neutral') => {
+        if (!gitPublishStatus) return;
+        gitPublishStatus.classList.remove('neutral', 'valid', 'invalid');
+        if (tone === 'valid') gitPublishStatus.classList.add('valid');
+        else if (tone === 'invalid') gitPublishStatus.classList.add('invalid');
+        else gitPublishStatus.classList.add('neutral');
+        gitPublishStatus.textContent = String(message || '').trim();
+    };
+
+    const setGitPublishBusy = (isBusy) => {
+        if (prepareGitPublishBtn) prepareGitPublishBtn.disabled = Boolean(isBusy);
+        if (runGitPublishBtn) {
+            runGitPublishBtn.disabled = Boolean(isBusy);
+            runGitPublishBtn.textContent = isBusy ? 'Publishing...' : 'Push to GitHub';
+        }
+    };
+
+    const requestGitPublishJson = async (path, options = {}) => {
+        const response = await fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}${path}`, {
+            ...options,
+            headers: {
+                ...(options.headers || {}),
+                ...(options.body ? { 'Content-Type': 'application/json' } : {})
+            }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok) {
+            throw new Error(trimField(payload?.error, 700) || `Local git service request failed (${response.status}).`);
+        }
+        return payload;
+    };
+
+    const formatGitChangedFiles = (files = []) => {
+        const normalizedFiles = Array.isArray(files)
+            ? files.map((file) => trimField(file, 220)).filter(Boolean)
+            : [];
+        if (!normalizedFiles.length) return 'No local changes found.';
+        const visibleFiles = normalizedFiles.slice(0, 8).map((file) => `- ${file}`);
+        const remainder = normalizedFiles.length > visibleFiles.length
+            ? `\n...and ${normalizedFiles.length - visibleFiles.length} more.`
+            : '';
+        return `${normalizedFiles.length} changed file(s):\n${visibleFiles.join('\n')}${remainder}`;
+    };
+
+    const prepareGitPublish = async () => {
+        if (!gitPublishSection) return;
+        try {
+            setGitPublishBusy(true);
+            setGitPublishStatus('Checking local git changes...', 'neutral');
+            const payload = await requestGitPublishJson('/git/status');
+            const branchName = trimField(payload?.suggestion?.branchName, 180);
+            const commitMessage = trimField(payload?.suggestion?.commitMessage, 180);
+            if (gitPublishBranchInput && branchName) gitPublishBranchInput.value = branchName;
+            if (gitPublishCommitInput && commitMessage) gitPublishCommitInput.value = commitMessage;
+            const changedCount = Number(payload?.changedCount || 0);
+            const tone = changedCount > 0 ? 'neutral' : 'valid';
+            setGitPublishStatus(
+                `${formatGitChangedFiles(payload?.changedFiles)}${payload?.currentBranch ? `\nCurrent branch: ${trimField(payload.currentBranch, 120)}` : ''}`,
+                tone
+            );
+        } catch (error) {
+            setGitPublishStatus(trimField(error?.message, 700) || 'Could not check local git changes.', 'invalid');
+        } finally {
+            setGitPublishBusy(false);
+        }
+    };
+
+    const runGitPublish = async () => {
+        const branchName = trimField(gitPublishBranchInput?.value, 180);
+        const commitMessage = trimField(gitPublishCommitInput?.value, 180);
+        if (!branchName || !commitMessage) {
+            setGitPublishStatus('Branch name and commit message are required.', 'invalid');
+            return;
+        }
+        const confirmed = window.confirm(
+            `Publish current MailroomNavigator changes?\n\nBranch:\n${branchName}\n\nCommit:\n${commitMessage}\n\nThis will switch to main, create the branch, commit, push, then return to main.`
+        );
+        if (!confirmed) return;
+
+        try {
+            setGitPublishBusy(true);
+            setGitPublishStatus('Publishing git changes...', 'neutral');
+            const payload = await requestGitPublishJson('/git/publish', {
+                method: 'POST',
+                body: JSON.stringify({ branchName, commitMessage })
+            });
+            const result = payload?.result || {};
+            const pushedBranch = trimField(result.branchName, 180) || branchName;
+            const commitHash = trimField(result.commitHash, 40);
+            const steps = Array.isArray(result.steps)
+                ? result.steps.map((step) => trimField(step, 80)).filter(Boolean)
+                : [];
+            setGitPublishStatus(
+                `Published successfully.\nBranch: ${pushedBranch}${commitHash ? `\nCommit: ${commitHash}` : ''}${steps.length ? `\n\n${steps.join('\n')}` : ''}`,
+                'valid'
+            );
+            showToast('Git branch pushed.');
+        } catch (error) {
+            const message = trimField(error?.message, 700) || 'Could not publish git changes.';
+            setGitPublishStatus(message, 'invalid');
+            showToast(message);
+        } finally {
+            setGitPublishBusy(false);
+        }
+    };
+
     const triggerLinearBotJobsRun = async () => {
         try {
             const isDryRun = Boolean(triggerLinearDryRunInput?.checked);
@@ -5494,6 +5630,12 @@ ${error?.message || String(error)}`, 'invalid');
             setLinearTriggerStatus('Could not restart local trigger service.', 'invalid');
             showToast('Could not restart local trigger service.');
         });
+    });
+    prepareGitPublishBtn?.addEventListener('click', () => {
+        prepareGitPublish().catch(() => undefined);
+    });
+    runGitPublishBtn?.addEventListener('click', () => {
+        runGitPublish().catch(() => undefined);
     });
     if (!extensionAccessState?.serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
