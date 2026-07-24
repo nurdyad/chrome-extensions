@@ -3,6 +3,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'offscreen') return false;
 
   const handle = async () => {
+    if (message.action === 'copyTextToClipboard') {
+      const value = String(message.value ?? '');
+      if (!value) return { success: false, error: 'Nothing to copy.' };
+
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          return { success: true };
+        }
+      } catch (_error) {
+        // Fall back to execCommand below.
+      }
+
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-9999px';
+        textarea.style.left = '-9999px';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        return { success: Boolean(copied) };
+      } catch (error) {
+        return { success: false, error: String(error?.message || error || 'Copy failed.') };
+      }
+    }
+
     if (!message?.data?.url) {
       return { error: 'Scrape failed: Missing URL' };
     }

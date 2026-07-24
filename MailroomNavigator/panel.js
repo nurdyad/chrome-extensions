@@ -7,7 +7,6 @@ import * as Jobs from './jobs.js';
 import { AuthManagement } from './auth_management.js';
 
 let practiceCacheLoadPromise = null;
-let isCdbHydrationTriggered = false;
 let extensionAccessState = null;
 let extensionUserManagementState = { users: [], featureCatalog: [] };
 let accessNoticeHideTimer = null;
@@ -139,7 +138,6 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
             });
             if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                 setCachedPractices(response.practiceCache);
-                Navigator.buildCdbIndex();
                 if (!forceRefresh || !allowScrape) return response.practiceCache;
             }
 
@@ -157,7 +155,6 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
                 });
                 if (response && response.practiceCache && Object.keys(response.practiceCache).length > 0) {
                     setCachedPractices(response.practiceCache);
-                    Navigator.buildCdbIndex();
                     return response.practiceCache;
                 }
                 if (attempt < 5) await wait(220);
@@ -173,21 +170,6 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
     return practiceCacheLoadPromise;
 }
 
-
-async function triggerCdbHydration({ limit = 60 } = {}) {
-    if (isCdbHydrationTriggered) return;
-    isCdbHydrationTriggered = true;
-    try {
-        await chrome.runtime.sendMessage({
-            action: 'hydratePracticeCdb',
-            limit: Math.max(10, Number(limit) || 60),
-            ...getProtectedActionPayload()
-        });
-        await syncPracticeCache({ forceRefresh: true, allowScrape: false });
-    } catch (e) {
-        console.warn('[Panel] CDB hydration skipped.');
-    }
-}
 
 // --- 1. Global View Switcher ---
 function showView(viewId, { force = false } = {}) {
@@ -562,6 +544,7 @@ function applyExtensionFeatureAccessToUi() {
 
     setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('docmanToolSection', hasExtensionFeature('practice_navigator'));
+    setElementVisible('docmanToolStatusSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
     setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
@@ -651,8 +634,21 @@ function extractJobId(value) {
 }
 
 function extractUuid(value) {
-    const match = String(value || '').trim().match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
-    return match ? match[0].toLowerCase() : '';
+    const raw = String(value || '')
+        .trim()
+        .replace(/(?:…|\.\.\.)$/u, '')
+        .trim();
+    if (!raw) return '';
+
+    const fullUuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    if (fullUuidMatch) return fullUuidMatch[0].toLowerCase();
+
+    const partialMatch = raw.match(/[0-9a-f-]{6,80}/i);
+    const partial = String(partialMatch?.[0] || '')
+        .trim()
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase();
+    return /^[0-9a-f-]{6,80}$/.test(partial) ? partial : '';
 }
 
 function extractAllNumericIds(value) {
@@ -779,7 +775,6 @@ function hideSuggestions() {
     setTimeout(() => {
         const ids = [
             'suggestions',
-            'cdbSuggestions',
             'autocompleteResults',
             'practiceAutocompleteResultsContainer',
             'docIdAutocompleteResultsContainer',
@@ -1606,31 +1601,6 @@ async function initializePanel() {
         });
     }
 
-    const cdbInput = document.getElementById('cdbSearchInput');
-    let isCdbHydrationQueued = false;
-    const refreshCdbSuggestions = () => {
-        Navigator.handleCdbInput();
-        const hasPracticeCache = Object.keys(state.cachedPractices || {}).length > 0;
-        syncPracticeCache({ forceRefresh: false, allowScrape: !hasPracticeCache })
-            .then(() => {
-                Navigator.handleCdbInput();
-                if (document.activeElement !== cdbInput || isCdbHydrationQueued || !hasPracticeCache) return;
-                isCdbHydrationQueued = true;
-                triggerCdbHydration({ limit: 80 })
-                    .then(() => {
-                        Navigator.handleCdbInput();
-                    })
-                    .catch(() => undefined)
-                    .finally(() => { isCdbHydrationQueued = false; });
-            })
-            .catch(() => undefined);
-    };
-
-    if (cdbInput) {
-        cdbInput.addEventListener('input', refreshCdbSuggestions);
-        cdbInput.addEventListener('focus', refreshCdbSuggestions);
-    }
-
     warmPracticeCache(false);
     
     // --- Create New Practice Button---
@@ -1967,6 +1937,7 @@ async function initializePanel() {
     const bookmarkletToolModalActions = document.getElementById('bookmarkletToolModalActions');
     const bookmarkletToolModalBody = document.getElementById('bookmarkletToolModalBody');
     const bookmarkletToolModalCloseBtn = document.getElementById('bookmarkletToolModalCloseBtn');
+    let bookmarkletToolModalReturnFocusEl = null;
 
     const linearIssueSourceInput = document.getElementById('linearIssueSourceInput');
     const generateLinearIssueDraftBtn = document.getElementById('generateLinearIssueDraftBtn');
@@ -2055,7 +2026,7 @@ async function initializePanel() {
         superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
         superblocksUuidLookupStatus.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
         superblocksUuidLookupStatus.classList.remove('superblocks-lookup-status', 'superblocks-lookup-card-host');
-        superblocksUuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID to check its Superblocks status.';
+        superblocksUuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID or UUID fragment to check status.';
     };
 
     const pruneSuperblocksLookupCache = () => {
@@ -2110,7 +2081,7 @@ async function initializePanel() {
             return 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).';
         }
         if (normalized) return normalized;
-        return status ? `Trigger service failed with status ${status}.` : 'Superblocks lookup failed.';
+        return status ? `Trigger service failed with status ${status}.` : 'UUID lookup failed.';
     };
 
     const fetchSuperblocksLookupDirect = async (uuid, { signal } = {}) => {
@@ -2142,7 +2113,7 @@ async function initializePanel() {
         });
 
         if (!response?.success) {
-            throw new Error(String(response?.error || 'Superblocks lookup failed.').trim());
+            throw new Error(String(response?.error || 'UUID lookup failed.').trim());
         }
 
         return response.result || {};
@@ -2184,7 +2155,7 @@ async function initializePanel() {
         const documentLink = collapseText(result.documentLink || result.detail || '');
         const rejectionReason = collapseText(result.rejectionReason || '');
         const displayTitle = documentId ? `Document ${documentId}` : (loading ? 'Looking up UUID' : 'Document status');
-        const displaySubtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'Superblocks UUID lookup';
+        const displaySubtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'UUID lookup';
         const normalizedStatus = documentStatus.toLowerCase();
         const prettyStatus = formatLookupDisplayValue(documentStatus) || 'Unknown';
         const prettyReason = formatLookupDisplayValue(rejectionReason);
@@ -2211,7 +2182,7 @@ async function initializePanel() {
                 </div>
                 <div class="superblocks-status-main">
                     <div class="practice-status-title">${escapeHtml(displayTitle)}</div>
-                    <div class="practice-status-subtitle superblocks-status-subtitle" title="${escapeHtml(uuid || 'Superblocks UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
+                    <div class="practice-status-subtitle superblocks-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
                 </div>
                 <div class="${summaryGridClass}">
                     <div class="practice-status-summary-card ${statusToneClass}">
@@ -2250,13 +2221,13 @@ async function initializePanel() {
 
         if (!rawValue) {
             lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
             return '';
         }
 
         if (!uuid) {
             lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Enter a valid UUID.', 'invalid');
+            setSuperblocksLookupStatus('Enter at least 6 UUID characters.', 'invalid');
             return '';
         }
 
@@ -2295,7 +2266,7 @@ async function initializePanel() {
             rememberSuperblocksLookup(uuid, result);
             if (!result.found || !result.status) {
                 setSuperblocksLookupStatus(
-                    String(result.detail || `No Superblocks status found for ${uuid}.`).trim(),
+                    String(result.detail || `No document found for ${uuid}.`).trim(),
                     'invalid'
                 );
                 return uuid;
@@ -2310,7 +2281,7 @@ async function initializePanel() {
             setSuperblocksLookupStatus(
                 requestTimedOut
                     ? 'Local trigger service timed out.'
-                    : String(error?.message || 'Superblocks lookup failed.').trim(),
+                    : String(error?.message || 'UUID lookup failed.').trim(),
                 'invalid'
             );
             return uuid;
@@ -2325,19 +2296,31 @@ async function initializePanel() {
 
     const closeBookmarkletToolModal = () => {
         if (!bookmarkletToolModal) return;
+        const activeElement = document.activeElement;
+        if (activeElement && bookmarkletToolModal.contains(activeElement)) {
+            activeElement.blur();
+        }
         bookmarkletToolModal.classList.remove('is-open');
         bookmarkletToolModal.setAttribute('aria-hidden', 'true');
         if (bookmarkletToolModalActions) bookmarkletToolModalActions.innerHTML = '';
         if (bookmarkletToolModalBody) bookmarkletToolModalBody.innerHTML = '';
+        if (bookmarkletToolModalReturnFocusEl && document.contains(bookmarkletToolModalReturnFocusEl)) {
+            bookmarkletToolModalReturnFocusEl.focus({ preventScroll: true });
+        }
+        bookmarkletToolModalReturnFocusEl = null;
     };
 
     const openBookmarkletToolModal = (title) => {
         if (!bookmarkletToolModal) return false;
+        bookmarkletToolModalReturnFocusEl = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
         if (bookmarkletToolModalTitle) bookmarkletToolModalTitle.textContent = title || 'Tool';
         if (bookmarkletToolModalActions) bookmarkletToolModalActions.innerHTML = '';
         if (bookmarkletToolModalBody) bookmarkletToolModalBody.innerHTML = '';
         bookmarkletToolModal.classList.add('is-open');
         bookmarkletToolModal.setAttribute('aria-hidden', 'false');
+        bookmarkletToolModalCloseBtn?.focus({ preventScroll: true });
         return true;
     };
 
@@ -2545,14 +2528,16 @@ async function initializePanel() {
         if (trimDocmanField(run.action, 40) === 'login') {
             docmanToolStatus.innerHTML = `
                 <div class="docman-tool-status-card docman-tool-status-card-compact is-${tone}">
+                    <div class="docman-tool-compact-header">
+                        <div class="docman-tool-status-kicker">Docman Login</div>
+                        <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
+                    </div>
                     <div class="docman-tool-compact-main">
                         <div class="docman-tool-compact-icon" aria-hidden="true">${tone === 'success' ? '✓' : tone === 'running' ? '…' : '!'}</div>
                         <div class="docman-tool-compact-copy">
-                            <div class="docman-tool-status-kicker">Docman Login</div>
                             <div class="docman-tool-status-title">${escapeHtml(getDocmanRunHeadline(run, isActive))}</div>
                             <div class="docman-tool-status-subtitle">${escapeHtml(trimDocmanField(run.practiceName, 160) || 'Selected practice')}</div>
                         </div>
-                        <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
                     </div>
                     ${chips.length ? `<div class="docman-tool-meta-row docman-tool-compact-meta">${chips.map((chip) => `<span class="docman-tool-chip">${escapeHtml(chip)}</span>`).join('')}</div>` : ''}
                     ${logLines.length ? `
@@ -5691,13 +5676,13 @@ ${error?.message || String(error)}`, 'invalid');
         const rawValue = String(superblocksUuidLookupInput.value || '').trim();
         if (!rawValue) {
             lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
             return;
         }
 
         if (!extractUuid(rawValue)) {
             lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Enter a valid UUID.', 'invalid');
+            setSuperblocksLookupStatus('Enter at least 6 UUID characters.', 'invalid');
             return;
         }
 
@@ -5716,7 +5701,7 @@ ${error?.message || String(error)}`, 'invalid');
             cancelSuperblocksLookupRequest();
             lastSuperblocksLookupUuid = '';
             superblocksUuidLookupInput.value = '';
-            setSuperblocksLookupStatus('Paste a UUID to check its Superblocks status.', 'neutral');
+            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
         }
     });
     superblocksUuidLookupStatus?.addEventListener('click', (event) => {
@@ -5852,7 +5837,6 @@ ${error?.message || String(error)}`, 'invalid');
         // List of all inputs that should NOT hide the dropdown when clicked
         const safeInputs = [
             'practiceInput', 
-            'cdbSearchInput',
             'manualDocId',
             'jobStatusInput'
         ];
@@ -5886,7 +5870,6 @@ ${error?.message || String(error)}`, 'invalid');
                 });
                 if (response && response.practiceCache) {
                     setCachedPractices(response.practiceCache);
-                    Navigator.buildCdbIndex();
                     console.log('Cache loaded:', Object.keys(response.practiceCache).length);
                     return;
                 }
