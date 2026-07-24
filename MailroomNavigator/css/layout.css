@@ -249,6 +249,45 @@ label {
     padding: 6px 2px; /* Tighter padding to fit text on one line */
 }
 
+.docman-quick-actions-section {
+    margin-top: 8px;
+    padding: 8px;
+    border-left-color: #0ea5e9;
+    background: linear-gradient(180deg, #fbfdff 0%, #f2f8fe 100%);
+}
+
+.docman-quick-actions-section h3 {
+    margin-bottom: 8px;
+    font-size: 1em;
+}
+
+.docman-quick-actions-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.docman-quick-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.docman-quick-actions-grid .btn {
+    width: 100%;
+    min-height: 28px;
+    padding: 5px 4px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 1.05;
+    font-weight: 700;
+}
+
+.docman-quick-actions-grid .docman-primary-action {
+    background: linear-gradient(180deg, #1d9ae0 0%, #147cc2 100%) !important;
+}
+
 .bookmarklet-section label {
     margin-bottom: 6px;
 }

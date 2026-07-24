@@ -284,6 +284,10 @@
     gap: 4px;
 }
 
+.practice-status-credential-field[data-secret-field="true"] {
+    grid-column: 1 / -1;
+}
+
 .practice-status-credential-label {
     font-size: 8px;
     font-weight: 700;
@@ -427,6 +431,182 @@
 .practice-status-metric.is-danger {
     background: linear-gradient(180deg, #fff1f1 0%, #ffdede 100%);
     border-color: #f3b6b6;
+}
+
+.practice-status-card-compact {
+    padding: 8px 9px 9px 12px;
+    border-radius: 12px;
+    background:
+        radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 34%),
+        linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+    box-shadow: 0 5px 12px rgba(20, 40, 70, 0.07);
+}
+
+.practice-status-card-compact .practice-status-hero {
+    gap: 5px;
+    padding-bottom: 6px;
+}
+
+.practice-status-card-compact .practice-status-kicker {
+    font-size: 8px;
+}
+
+.practice-status-card-compact .practice-status-title {
+    font-size: 12px;
+}
+
+.practice-status-card-compact .practice-status-subtitle {
+    font-size: 9px;
+}
+
+.practice-status-card-compact .practice-status-meta-grid {
+    width: 132px;
+    gap: 3px;
+}
+
+.practice-status-card-compact .practice-status-meta-item {
+    min-height: 20px;
+    padding: 3px 5px;
+    border-radius: 7px;
+}
+
+.practice-status-card-compact .practice-status-meta-label {
+    font-size: 6.5px;
+}
+
+.practice-status-card-compact .practice-status-meta-value {
+    font-size: 9px;
+}
+
+.practice-status-card-compact .practice-status-summary-strip {
+    gap: 5px;
+}
+
+.practice-status-card-compact .practice-status-summary-card {
+    padding: 5px;
+    border-radius: 9px;
+}
+
+.practice-status-card-compact .practice-status-summary-label {
+    font-size: 7px;
+}
+
+.practice-status-card-compact .practice-status-summary-value {
+    font-size: 13px;
+}
+
+.practice-status-card-compact .practice-status-section-head {
+    margin-bottom: 4px;
+}
+
+.practice-status-card-compact .practice-status-metrics {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.practice-status-card-compact .practice-status-metric {
+    min-height: 38px;
+    padding: 6px 4px;
+    border-radius: 9px;
+}
+
+.practice-status-card-compact .practice-status-metric-label {
+    font-size: 6.8px;
+    line-height: 1.05;
+}
+
+.practice-status-card-compact .practice-status-metric-value {
+    font-size: 13px;
+}
+
+.practice-status-ehr-details {
+    margin-top: 8px;
+    border: 1px solid #d8e6f2;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.78);
+    overflow: hidden;
+}
+
+.practice-status-ehr-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 9px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.practice-status-ehr-summary::-webkit-details-marker,
+.practice-status-credential-summary::-webkit-details-marker {
+    display: none;
+}
+
+.practice-status-ehr-summary::after,
+.practice-status-credential-summary::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-right: 2px solid #7b91a7;
+    border-bottom: 2px solid #7b91a7;
+    transform: rotate(45deg);
+    transition: transform 0.16s ease;
+}
+
+.practice-status-ehr-details[open] > .practice-status-ehr-summary::after,
+.practice-status-credential-card[open] > .practice-status-credential-summary::after {
+    transform: rotate(225deg);
+}
+
+.practice-status-ehr-summary-title {
+    font-size: 10px;
+    font-weight: 800;
+    color: #315879;
+}
+
+.practice-status-ehr-summary-meta {
+    min-width: 0;
+    overflow: hidden;
+    color: #71869c;
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.practice-status-ehr-details .practice-status-credentials-list {
+    padding: 0 8px 8px;
+}
+
+.practice-status-ehr-details .practice-status-credential-card {
+    display: block;
+    padding: 0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.practice-status-credential-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.practice-status-credential-preview {
+    min-width: 0;
+    overflow: hidden;
+    color: #6d8398;
+    font-size: 9px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.practice-status-ehr-details .practice-status-credential-card-body {
+    padding: 0 8px 8px;
 }
 
 .info-row {

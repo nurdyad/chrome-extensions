@@ -452,13 +452,28 @@ function buildCredentialFieldHtml(groupLabel, label, value, options = {}) {
 
 function buildCredentialGroupHtml(groupLabel, fields) {
     const body = fields.map((field) => buildCredentialFieldHtml(groupLabel, field.label, field.value, field)).join('');
+    const usernameField = fields.find((field) => String(field.label || '').toLowerCase() === 'username');
+    const username = formatOptionalStatusValue(usernameField?.value);
+    const hasPassword = fields.some((field) => (
+        field.secret === true
+        && (Boolean(formatOptionalStatusValue(field.value)) || field.present === true)
+    ));
+    const previewParts = [
+        username ? `User ${username}` : '',
+        hasPassword ? 'Password saved' : ''
+    ].filter(Boolean);
+    const preview = previewParts.length ? previewParts.join(' · ') : 'No saved credentials';
+
     return `
-        <div class="practice-status-credential-card">
-            <div class="practice-status-credential-card-title">${escapeHtml(groupLabel)}</div>
+        <details class="practice-status-credential-card">
+            <summary class="practice-status-credential-summary">
+                <span class="practice-status-credential-card-title">${escapeHtml(groupLabel)}</span>
+                <span class="practice-status-credential-preview">${escapeHtml(preview)}</span>
+            </summary>
             <div class="practice-status-credential-card-body">
                 ${body}
             </div>
-        </div>
+        </details>
     `;
 }
 
@@ -602,16 +617,16 @@ function buildPracticeStatusHtml(status, counts) {
     const ehrGroups = [
         buildCredentialGroupHtml('EMIS API', [
             { label: 'Username', value: status?.emisApiUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.emisApiPassword, secret: true, odsCode: status?.odsCode }
+            { label: 'Password', value: status?.emisApiPassword, present: Boolean(status?.emisApiPasswordPresent), secret: true, odsCode: status?.odsCode }
         ]),
         buildCredentialGroupHtml('EMIS Web', [
             { label: 'Username', value: status?.emisWebUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.emisWebPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.emisWebPassword, present: Boolean(status?.emisWebPasswordPresent), secret: true, odsCode: status?.odsCode },
             { label: 'Dummy NHS Number', value: status?.emisWebDummyNhsNumber, odsCode: status?.odsCode }
         ]),
         buildCredentialGroupHtml('Docman', [
             { label: 'Username', value: status?.docmanUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.docmanPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.docmanPassword, present: Boolean(status?.docmanPasswordPresent), secret: true, odsCode: status?.odsCode },
             { label: 'Dummy NHS Number', value: status?.docmanDummyNhsNumber, odsCode: status?.odsCode },
             { label: 'Input Folder', value: status?.docmanInputFolder, odsCode: status?.odsCode },
             { label: 'Processing Folder', value: status?.docmanProcessingFolder, odsCode: status?.odsCode },
@@ -621,7 +636,7 @@ function buildPracticeStatusHtml(status, counts) {
     ].join('');
 
     return `
-        <div class="status-info-box practice-status-card" data-status-ods="${escapeHtml(status.odsCode || '')}">
+        <div class="status-info-box practice-status-card practice-status-card-compact" data-status-ods="${escapeHtml(status.odsCode || '')}">
             <div class="practice-status-hero">
                 <div class="practice-status-hero-row">
                     <div class="practice-status-heading">
@@ -643,12 +658,15 @@ function buildPracticeStatusHtml(status, counts) {
             <div class="practice-status-metrics">
                 ${metricCards}
             </div>
-            <div class="practice-status-section-head practice-status-section-head-details">
-                <span class="practice-status-section-caption">EHR settings</span>
-            </div>
-            <div class="practice-status-credentials-list">
-                ${ehrGroups}
-            </div>
+            <details class="practice-status-ehr-details">
+                <summary class="practice-status-ehr-summary">
+                    <span class="practice-status-ehr-summary-title">EHR settings</span>
+                    <span class="practice-status-ehr-summary-meta">EMIS API · EMIS Web · Docman</span>
+                </summary>
+                <div class="practice-status-credentials-list">
+                    ${ehrGroups}
+                </div>
+            </details>
         </div>
     `;
 }

@@ -562,6 +562,7 @@ function applyExtensionFeatureAccessToUi() {
 
     setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('docmanToolSection', hasExtensionFeature('practice_navigator'));
+    setElementVisible('docmanToolStatusSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
     setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
