@@ -43,6 +43,7 @@
     const META_CLOSE_DELAY_MS = 120;
     const META_REANCHOR_DELAY_MS = 90;
     const CREATE_ISSUE_TIMEOUT_MS = 30000;
+    const DOCMAN_LOGIN_START_TIMEOUT_MS = 15000;
     const BOT_DASHBOARD_ROW_CACHE_TTL_MS = 900;
     const BOT_JOB_TITLE_PREFIX = 'Bot Job Error:';
     const PRACTICE_SUPPORT_TITLE_PREFIX = 'Practice Support Ticket:';
@@ -104,6 +105,37 @@
 
     function collapseText(value) {
         return toSingleLineText(value).replace(/\s+/g, ' ').trim();
+    }
+
+    function describeError(error, fallback = 'Something went wrong.') {
+        const direct = collapseText(error);
+        if (direct && direct !== '[object Object]') return direct;
+
+        if (error && typeof error === 'object') {
+            const nested = error.message || error.error || error.reason || error.detail || error.details;
+            const nestedText = collapseText(nested);
+            if (nestedText && nestedText !== '[object Object]') return nestedText;
+
+            try {
+                const json = JSON.stringify(error);
+                if (json && json !== '{}') return json;
+            } catch (_error) {
+                // Fall through to fallback below.
+            }
+        }
+
+        return fallback;
+    }
+
+    function summarizeIssuePayload(payload = null) {
+        if (!payload || typeof payload !== 'object') return 'unknown payload';
+        const parts = [
+            payload.documentId ? `doc=${collapseText(payload.documentId)}` : '',
+            payload.jobType ? `jobType=${collapseText(payload.jobType)}` : '',
+            payload.failedJobId ? `job=${collapseText(payload.failedJobId)}` : '',
+            payload.title ? `title="${collapseText(payload.title).slice(0, 120)}"` : ''
+        ].filter(Boolean);
+        return parts.join(' ') || 'unknown payload';
     }
 
     function extractNumericId(value) {
@@ -1824,10 +1856,43 @@ ${hiddenBlock}
     function canUseNavigatorClipboardApi() {
         try {
             const protocol = String(globalThis?.location?.protocol || '').toLowerCase();
-            return protocol === 'chrome-extension:' || protocol === 'moz-extension:';
+            if (protocol !== 'chrome-extension:' && protocol !== 'moz-extension:') {
+                return false;
+            }
+
+            const policy = document?.permissionsPolicy || document?.featurePolicy;
+            if (policy && typeof policy.allowsFeature === 'function') {
+                return policy.allowsFeature('clipboard-write');
+            }
+
+            return true;
         } catch (error) {
             return false;
         }
+    }
+
+    function copyToClipboardViaBackground(value) {
+        return new Promise((resolve) => {
+            try {
+                if (!chrome?.runtime?.sendMessage) {
+                    resolve(false);
+                    return;
+                }
+
+                chrome.runtime.sendMessage(
+                    { action: 'copyTextToClipboard', value },
+                    (response) => {
+                        if (chrome.runtime.lastError) {
+                            resolve(false);
+                            return;
+                        }
+                        resolve(Boolean(response?.success));
+                    }
+                );
+            } catch (error) {
+                resolve(false);
+            }
+        });
     }
 
     function copyToClipboard(text, onSuccess) {
@@ -1860,25 +1925,32 @@ ${hiddenBlock}
             }
         };
 
-        if (canUseNavigatorClipboardApi() && navigator?.clipboard?.writeText) {
-            navigator.clipboard.writeText(value).then(() => {
+        copyToClipboardViaBackground(value).then((copiedViaBackground) => {
+            if (copiedViaBackground) {
                 runSuccess();
-            }).catch(() => {
-                if (fallbackCopy()) {
+                return;
+            }
+
+            if (canUseNavigatorClipboardApi() && navigator?.clipboard?.writeText) {
+                navigator.clipboard.writeText(value).then(() => {
                     runSuccess();
-                    return;
-                }
-                console.warn('[BL Navigator] Clipboard copy failed.');
-            });
-            return;
-        }
+                }).catch(() => {
+                    if (fallbackCopy()) {
+                        runSuccess();
+                        return;
+                    }
+                    console.warn('[BL Navigator] Clipboard copy failed.');
+                });
+                return;
+            }
 
-        if (fallbackCopy()) {
-            runSuccess();
-            return;
-        }
+            if (fallbackCopy()) {
+                runSuccess();
+                return;
+            }
 
-        console.warn('[BL Navigator] Clipboard copy failed.');
+            console.warn('[BL Navigator] Clipboard copy failed.');
+        });
     }
 
     function showNavigatorToast(message, tone = 'neutral') {
@@ -1979,17 +2051,6 @@ ${hiddenBlock}
         if (!payload?.title || !payload?.description) return;
 
         const dedupeKey = collapseText(payload.dedupeKey || payload.failedJobId || payload.documentId || payload.title);
-        const existingIssue = dedupeKey ? createdIssueByDedupeKey.get(dedupeKey) : null;
-        if (existingIssue?.identifier) {
-            btn.textContent = String(existingIssue.identifier);
-            btn.style.background = '#0f766e';
-            if (existingIssue.url) openUrlInNewTab(existingIssue.url);
-            setTimeout(() => {
-                btn.textContent = originalLabel;
-                btn.style.background = originalBg;
-            }, 1500);
-            return;
-        }
 
         btn.disabled = true;
         btn.textContent = 'Creating...';
@@ -2012,21 +2073,29 @@ ${hiddenBlock}
             console.info('[BL Navigator] Create Linear issue response.', response);
 
             if (!response?.success || !response?.issue?.identifier) {
-                const reason = collapseText(response?.error || response || 'Could not create issue.');
+                const reason = describeError(response?.error || response, 'Could not create issue.');
                 throw new Error(reason);
             }
 
             if (dedupeKey) {
                 createdIssueByDedupeKey.set(dedupeKey, {
                     identifier: String(response.issue.identifier || ''),
-                    url: collapseText(response.issue.url || '')
+                    url: collapseText(response.issue.url || ''),
+                    reopened: Boolean(response.reopened),
+                    reopenStateName: collapseText(response.reopenStateName || '')
                 });
+            }
+            const issueUrl = collapseText(response.issue.url || '');
+            if (response?.duplicate && issueUrl) {
+                openUrlInNewTab(issueUrl);
             }
             btn.textContent = String(response.issue.identifier || 'Created');
             btn.style.background = '#16a34a';
             showNavigatorToast(
-                response?.duplicate
-                    ? `Using existing ${String(response.issue.identifier || 'issue')}.`
+                response?.duplicate && response?.reopened
+                    ? `Moved existing ${String(response.issue.identifier || 'issue')} to ${collapseText(response.reopenStateName || 'In Review')}.`
+                    : response?.duplicate
+                        ? `Opened existing ${String(response.issue.identifier || 'issue')}.`
                     : `Created ${String(response.issue.identifier || 'issue')}.`,
                 'valid'
             );
@@ -2036,13 +2105,13 @@ ${hiddenBlock}
                 btn.disabled = false;
             }, 1800);
         } catch (error) {
-            const failureMessage = collapseText(error?.message || 'Could not create issue.');
+            const failureMessage = describeError(error, 'Could not create issue.');
             btn.textContent = 'Failed';
             btn.style.background = '#dc2626';
             btn.title = failureMessage;
             showNavigatorToast(failureMessage, 'invalid');
             console.warn(`[BL Navigator] Issue creation failed: ${failureMessage}`);
-            console.debug('[BL Navigator] Issue creation failure details.', { payload, error: failureMessage });
+            console.debug(`[BL Navigator] Issue creation failure details: ${summarizeIssuePayload(payload)} error=${failureMessage}`);
             setTimeout(() => {
                 btn.textContent = originalLabel;
                 btn.style.background = originalBg;
@@ -2057,10 +2126,6 @@ ${hiddenBlock}
         }
 
         const dedupeKey = collapseText(payload.dedupeKey || payload.failedJobId || payload.documentId || payload.title);
-        const existingIssue = dedupeKey ? createdIssueByDedupeKey.get(dedupeKey) : null;
-        if (existingIssue?.identifier) {
-            return { duplicate: true, issue: existingIssue };
-        }
 
         console.info('[BL Navigator] Creating Linear issue.', {
             documentId: payload.documentId || '',
@@ -2077,14 +2142,16 @@ ${hiddenBlock}
         console.info('[BL Navigator] Create Linear issue response.', response);
 
         if (!response?.success || !response?.issue?.identifier) {
-            const reason = collapseText(response?.error || 'Could not create issue.');
+            const reason = describeError(response?.error || response, 'Could not create issue.');
             throw new Error(reason);
         }
 
         if (dedupeKey) {
             createdIssueByDedupeKey.set(dedupeKey, {
                 identifier: String(response.issue.identifier || ''),
-                url: collapseText(response.issue.url || '')
+                url: collapseText(response.issue.url || ''),
+                reopened: Boolean(response.reopened),
+                reopenStateName: collapseText(response.reopenStateName || '')
             });
         }
         return response;
@@ -2099,6 +2166,7 @@ ${hiddenBlock}
         btn.disabled = true;
         btn.style.background = '#1d4ed8';
         const created = [];
+        const reused = [];
         const failed = [];
 
         try {
@@ -2106,39 +2174,65 @@ ${hiddenBlock}
                 btn.textContent = `Creating ${index + 1}/${queue.length}`;
                 try {
                     const response = await createLinearIssueFromPayload(queue[index]);
-                    created.push(response?.issue?.identifier || 'issue');
+                    if (response?.duplicate) {
+                        reused.push({
+                            ...(response?.issue || {}),
+                            reopened: Boolean(response?.reopened),
+                            reopenStateName: collapseText(response?.reopenStateName || '')
+                        });
+                    }
+                    else created.push(response?.issue || {});
                 } catch (error) {
-                    failed.push(collapseText(error?.message || 'Could not create issue.'));
+                    const failureMessage = describeError(error, 'Could not create issue.');
+                    const payloadSummary = summarizeIssuePayload(queue[index]);
+                    failed.push(`${payloadSummary}: ${failureMessage}`);
+                    console.warn(`[BL Navigator] Page issue item failed: ${payloadSummary}: ${failureMessage}`);
                 }
             }
 
-            if (created.length > 0 && failed.length === 0) {
-                btn.textContent = created.length === 1 ? String(created[0]) : `Created ${created.length}`;
+            const successCount = created.length + reused.length;
+            if (successCount > 0 && failed.length === 0) {
+                if (queue.length === 1 && reused.length === 1 && collapseText(reused[0]?.url)) {
+                    openUrlInNewTab(collapseText(reused[0].url));
+                }
+
+                const firstIdentifier = collapseText(created[0]?.identifier || reused[0]?.identifier || 'issue');
+                const reopenedCount = reused.filter((issue) => issue?.reopened).length;
+                btn.textContent = successCount === 1 ? firstIdentifier : `Done ${successCount}`;
                 btn.style.background = '#16a34a';
                 showNavigatorToast(
-                    created.length === 1
-                        ? `Created ${created[0]}.`
-                        : `Created ${created.length} Linear issues.`,
+                    reopenedCount > 0 && created.length === 0
+                        ? (successCount === 1
+                            ? `Moved existing ${firstIdentifier} to ${collapseText(reused[0]?.reopenStateName || 'In Review')}.`
+                            : `Moved ${reopenedCount} existing Linear issues to In Review.`)
+                        : reused.length > 0 && created.length === 0
+                        ? (successCount === 1
+                            ? `Opened existing ${firstIdentifier}.`
+                            : `Using ${successCount} existing Linear issues.`)
+                        : (successCount === 1
+                            ? `Created ${firstIdentifier}.`
+                            : `Created ${created.length}; reused ${reused.length}.`),
                     'valid'
                 );
                 return;
             }
 
-            if (created.length > 0 && failed.length > 0) {
-                btn.textContent = `${created.length}/${queue.length}`;
+            if (successCount > 0 && failed.length > 0) {
+                btn.textContent = `${successCount}/${queue.length}`;
                 btn.style.background = '#f59e0b';
-                showNavigatorToast(`Created ${created.length}; failed ${failed.length}: ${failed[0]}`, 'invalid');
+                showNavigatorToast(`Handled ${successCount}; failed ${failed.length}: ${failed[0]}`, 'invalid');
                 return;
             }
 
             throw new Error(failed[0] || 'Could not create any issues.');
         } catch (error) {
-            const failureMessage = collapseText(error?.message || 'Could not create issues.');
+            const failureMessage = describeError(error, 'Could not create issues.');
             btn.textContent = 'Failed';
             btn.style.background = '#dc2626';
             btn.title = failureMessage;
             showNavigatorToast(failureMessage, 'invalid');
-            console.warn('[BL Navigator] Page issue creation failed.', { payloads: queue, error: failureMessage });
+            console.warn(`[BL Navigator] Page issue creation failed: ${failureMessage}`);
+            console.debug(`[BL Navigator] Page issue creation payload count=${queue.length}; first=${summarizeIssuePayload(queue[0])}`);
         } finally {
             setTimeout(() => {
                 btn.textContent = originalLabel;
@@ -2657,6 +2751,64 @@ ${hiddenBlock}
         });
     }
 
+    function makeDocmanLoginAction(rowData) {
+        const odsCode = collapseText(rowData?.odsCode).toUpperCase();
+        const practiceName = collapseText(rowData?.practiceName || rowData?.practice?.replace(odsCode, ''));
+        if (!/^[A-Z]\d{5}$/.test(odsCode)) return null;
+
+        return createButton({
+            label: 'Docman',
+            color: '#0891b2',
+            title: `Login to Docman for ${practiceName || odsCode}`,
+            onClick: async (btn) => {
+                const originalHtml = btn.innerHTML;
+                const originalBg = btn.style.background;
+                btn.disabled = true;
+                btn.textContent = 'Starting...';
+                btn.style.background = '#0e7490';
+
+                try {
+                    const response = await sendRuntimeMessage({
+                        action: 'runDocmanToolAction',
+                        payload: {
+                            action: 'login',
+                            practiceName: practiceName || odsCode,
+                            odsCode
+                        }
+                    }, {
+                        timeoutMs: DOCMAN_LOGIN_START_TIMEOUT_MS
+                    });
+
+                    if (response?.success && response?.run) {
+                        btn.textContent = 'Started';
+                        btn.style.background = '#047857';
+                        showNavigatorToast(`Docman login started for ${practiceName || odsCode}.`, 'valid');
+                    } else if (response?.running && response?.run) {
+                        btn.textContent = 'Busy';
+                        btn.style.background = '#b45309';
+                        showNavigatorToast('A Docman tool run is already in progress.', 'neutral');
+                    } else {
+                        const reason = collapseText(response?.error || response || 'Could not start Docman login.');
+                        throw new Error(reason);
+                    }
+                } catch (error) {
+                    const message = collapseText(error?.message || 'Could not start Docman login.');
+                    btn.textContent = 'Failed';
+                    btn.style.background = '#dc2626';
+                    btn.title = message;
+                    showNavigatorToast(message, 'invalid');
+                } finally {
+                    window.setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.style.background = originalBg;
+                        btn.disabled = false;
+                        btn.title = `Login to Docman for ${practiceName || odsCode}`;
+                    }, 1900);
+                }
+            }
+        });
+    }
+
     function getJobUrl(jobId) {
         const normalizedId = collapseText(jobId);
         if (!normalizedId) return '';
@@ -3055,8 +3207,8 @@ ${hiddenBlock}
             option.textContent = `${item.name}${item.odsCode ? ` (${item.odsCode})` : ''} - ${item.count}`;
             practiceSelect.appendChild(option);
         });
-        practiceSelect.addEventListener('change', () => {
-            const nextSelected = new Set(Array.from(practiceSelect.selectedOptions).map((option) => option.value).filter(Boolean));
+        bindToggleMultiSelect(practiceSelect, () => {
+            const nextSelected = getSelectedValuesFromMultiSelect(practiceSelect);
             saveSelectedBotDashboardPractices(nextSelected);
             saveHiddenBotDashboardPractices(new Set());
             applyBotDashboardPracticeFilters();
@@ -3096,39 +3248,85 @@ ${hiddenBlock}
         };
 
         function makeVisibilityModeToggle({ mode, onToggle, showTitle, hideTitle }) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            const isExclude = mode === 'exclude';
-            button.title = isExclude ? hideTitle : showTitle;
-            button.setAttribute('aria-label', button.title);
-            Object.assign(button.style, {
+            const group = document.createElement('div');
+            Object.assign(group.style, {
                 display: 'inline-flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: '5px',
-                height: '26px',
-                border: isExclude ? '1px solid #fca5a5' : '1px solid #93c5fd',
-                borderRadius: '999px',
-                background: isExclude ? '#fef2f2' : '#eff6ff',
-                color: isExclude ? '#b91c1c' : '#1d4ed8',
-                fontWeight: '700',
-                fontSize: '11px',
-                padding: '0 9px',
-                cursor: 'pointer',
+                gap: '4px',
+                flex: '0 0 auto',
                 whiteSpace: 'nowrap'
             });
-            const icon = document.createElement('span');
-            icon.setAttribute('aria-hidden', 'true');
-            icon.innerHTML = isExclude
-                ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 20C7 20 2.73 16.89 1 12a11.8 11.8 0 0 1 5.06-5.94"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.9 4.24A10.8 10.8 0 0 1 12 4c5 0 9.27 3.11 11 8a11.7 11.7 0 0 1-2.16 3.19"></path><path d="M1 1l22 22"></path></svg>'
-                : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
-            const label = document.createElement('span');
-            label.textContent = isExclude ? 'Hide selected' : 'Show selected';
-            button.append(icon, label);
-            button.addEventListener('click', () => {
-                onToggle(isExclude ? 'include' : 'exclude');
+            const makeModeButton = ({ modeValue, label, title, iconSvg }) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                const isActive = mode === modeValue;
+                button.title = title;
+                button.setAttribute('aria-label', title);
+                Object.assign(button.style, {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '5px',
+                    height: '26px',
+                    border: isActive ? '1px solid #2563eb' : '1px solid #cbd5e1',
+                    borderRadius: '999px',
+                    background: isActive ? '#eff6ff' : '#fff',
+                    color: isActive ? '#1d4ed8' : '#475569',
+                    fontWeight: '700',
+                    fontSize: '11px',
+                    padding: '0 9px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                });
+                const icon = document.createElement('span');
+                icon.setAttribute('aria-hidden', 'true');
+                icon.innerHTML = iconSvg;
+                const labelEl = document.createElement('span');
+                labelEl.textContent = label;
+                button.append(icon, labelEl);
+                button.addEventListener('click', () => {
+                    if (mode !== modeValue) onToggle(modeValue);
+                });
+                return button;
+            };
+            group.append(
+                makeModeButton({
+                    modeValue: 'include',
+                    label: 'Show only',
+                    title: showTitle,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'
+                }),
+                makeModeButton({
+                    modeValue: 'exclude',
+                    label: 'Hide',
+                    title: hideTitle,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 20C7 20 2.73 16.89 1 12a11.8 11.8 0 0 1 5.06-5.94"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.9 4.24A10.8 10.8 0 0 1 12 4c5 0 9.27 3.11 11 8a11.7 11.7 0 0 1-2.16 3.19"></path><path d="M1 1l22 22"></path></svg>'
+                })
+            );
+            return group;
+        }
+
+        function getSelectedValuesFromMultiSelect(select) {
+            return new Set(Array.from(select.options)
+                .filter((option) => option.selected && !option.disabled)
+                .map((option) => option.value)
+                .filter(Boolean));
+        }
+
+        function bindToggleMultiSelect(select, onSelectionChange) {
+            select.addEventListener('mousedown', (event) => {
+                const option = event.target instanceof HTMLOptionElement
+                    ? event.target
+                    : event.target?.closest?.('option');
+                if (!option || option.disabled) return;
+                event.preventDefault();
+                option.selected = !option.selected;
+                select.focus();
+                onSelectionChange(getSelectedValuesFromMultiSelect(select));
             });
-            return button;
+            select.addEventListener('change', () => {
+                onSelectionChange(getSelectedValuesFromMultiSelect(select));
+            });
         }
 
         const makeSectionHeader = (label, placeholder, datasetKey, rerender) => {
@@ -3199,8 +3397,8 @@ ${hiddenBlock}
                 option.textContent = optionText(item);
                 select.appendChild(option);
             });
-            select.addEventListener('change', () => {
-                onChange(new Set(Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean)));
+            bindToggleMultiSelect(select, () => {
+                onChange(getSelectedValuesFromMultiSelect(select));
             });
             return select;
         };
@@ -3536,7 +3734,11 @@ ${hiddenBlock}
                         icon: `${COPY_ICON_SVG}<span>ODS</span>`
                     }));
                 }
-                if (rowData.odsCode) actions.push(makePracticeEhrAction(rowData.odsCode));
+                if (rowData.odsCode) {
+                    const docmanLoginAction = makeDocmanLoginAction(rowData);
+                    if (docmanLoginAction) actions.push(docmanLoginAction);
+                    actions.push(makePracticeEhrAction(rowData.odsCode));
+                }
                 return actions;
             });
             bindCell('jobId', (rowData) => {

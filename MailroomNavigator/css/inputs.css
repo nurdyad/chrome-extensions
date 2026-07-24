@@ -202,7 +202,7 @@ input[readonly] {
     animation: spin 1s linear infinite;
 }
 
-#suggestions, #cdbSuggestions {
+#suggestions {
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
@@ -223,7 +223,7 @@ input[readonly] {
 }
 
 /* 3. Global List Item Style - The "Cut-Off" Fix */
-#suggestions li, #cdbSuggestions li {
+#suggestions li {
     padding: 10px 12px;
     cursor: pointer;
     font-size: 13px;
@@ -235,9 +235,22 @@ input[readonly] {
     line-height: 1.3;
 }
 
-#suggestions li:hover, #suggestions li.highlighted,
-#cdbSuggestions li:hover, #cdbSuggestions li.highlighted {
+#suggestions li:hover, #suggestions li.highlighted {
     background-color: #eaf4ff;
+}
+
+#suggestions li .suggestion-main,
+#suggestions li .suggestion-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#suggestions li .suggestion-meta {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: #64748b;
 }
 
 #suggestions li.all-practices-option {
@@ -259,23 +272,15 @@ input[readonly] {
     font-weight: 500;
 }
 
-#suggestions li:last-child,
-#cdbSuggestions li:last-child {
+#suggestions li:last-child {
     border-bottom: none;
 }
 
-#suggestions::-webkit-scrollbar,
-#cdbSuggestions::-webkit-scrollbar {
+#suggestions::-webkit-scrollbar {
     width: 8px;
 }
 
-#suggestions::-webkit-scrollbar-thumb,
-#cdbSuggestions::-webkit-scrollbar-thumb {
+#suggestions::-webkit-scrollbar-thumb {
     background: #c9d8e8;
     border-radius: 10px;
-}
-
-#cdbSearchInput {
-    padding-right: 10px !important;
-    margin-bottom: 0 !important;
 }

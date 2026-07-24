@@ -22,7 +22,7 @@ Use `SETUP.md` for installation on a new machine.
 ### Navigator Tab (Practice Navigator)
 
 - Practice search:
-  - `practiceInput` with suggestions (`Practice Name / ODS`)
+  - `practiceInput` with suggestions (`Practice Name / ODS / CDB`)
   - `Reset` button to clear/reload selection
   - Header quick actions:
     - `+` new practice
@@ -38,8 +38,6 @@ Use `SETUP.md` for installation on a new machine.
   - multi-select checkboxes
   - `Open Selected` buttons for both groups
   - supports `All practices` plus specific practice ODS URLs
-- Practice CDB search:
-  - `Search by Practice CDB` input with suggestion list
 - Practice status card fields:
   - `ODS Code`
   - `EHR Type`
@@ -88,12 +86,13 @@ Use `SETUP.md` for installation on a new machine.
   - `Copy Job Link`
   - `Open Problem Review` (opens `/admin_panel/error_fixer/problem_linked_to_problem_review/<job_id>`)
 
-#### Superblocks UUID Lookup
+#### UUID Lookup
 
 - Input: `superblocksUuidLookupInput`
 - Status badge: `superblocksUuidLookupStatus`
-- Looks up the UUID through the local trigger service so the extension only renders the field and returned status, not the full Superblocks app UI
-- Requires `SUPERBLOCKS_UUID_LOOKUP_URL` in `MailroomNavigator/.env` on the machine running the local trigger service
+- Looks up a full UUID or 6+ character UUID fragment through the local trigger service
+- Uses Cloud SQL/read-replica config when available, with the legacy Superblocks workflow as a fallback
+- Requires local trigger service plus `MAILROOMNAV_SQL_*` database config or `SUPERBLOCKS_UUID_LOOKUP_URL`
 
 #### Bulk ID Actions
 
@@ -164,7 +163,7 @@ Use `SETUP.md` for installation on a new machine.
 
 - `Open Access Mode on this machine` bypasses feature gating locally so everyone can use the extension immediately
 - the default GitHub/distributed setup is `Hybrid` with `Open Access Mode` enabled, so users are not blocked from Navigator, Job Panel, dashboard hover tools, or other browser-side features
-- localhost-backed tools like `Trigger Linear` and `Superblocks UUID Lookup` remain visible, but they still require the optional local trigger service to work
+- localhost-backed tools like `Trigger Linear` and `UUID Lookup` remain visible, but they still require the optional local trigger service to work
 - shared access service URL/key remain available when you want cross-machine user management
 - owner-only `Access Control` stays available for the configured owner account
 
