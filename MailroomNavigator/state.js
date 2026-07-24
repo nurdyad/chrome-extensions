@@ -4,7 +4,6 @@
 export const state = {
     currentSelectedOdsCode: null,
     cachedPractices: {},    // Stores the list of practices loaded from background
-    cachedCdbIndex: [],     // Cached CDB index for autocomplete
     jobData: [],            // Stores job data scraped from the dashboard
     uniquePractices: [],    // Unique list of practices found in job data
     docActive: -1,          // Navigation index for document dropdown

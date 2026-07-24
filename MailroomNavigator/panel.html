@@ -95,7 +95,7 @@
 
           <div class="search-container" style="position: relative;">
             <div class="input-with-button" style="margin-bottom: 0;">
-              <input id="practiceInput" placeholder="Enter Practice Name or ODS code" autocomplete="off">
+              <input id="practiceInput" placeholder="Enter Practice Name, ODS or CDB" autocomplete="off">
               <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
@@ -152,19 +152,23 @@
           </button>
         </div>
 
-        <div id="docmanToolSection" class="section-container" style="margin-top: 12px;">
-          <h3>Docman Tools</h3>
-          <label>Run local Docman actions for the selected practice</label>
-          <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
-            <button id="runDocmanLoginBtn" class="btn btn-sm" type="button" disabled>Login</button>
+        <div id="status"></div>
+
+        <div id="docmanToolSection" class="section-container docman-quick-actions-section">
+          <div class="docman-quick-actions-head">
+            <h3>Docman Tools</h3>
+          </div>
+          <div class="docman-quick-actions-grid">
+            <button id="runDocmanLoginBtn" class="btn btn-sm docman-primary-action" type="button" disabled>Login</button>
             <button id="runDocmanVerifyBtn" class="btn btn-sm" type="button" disabled>Verify</button>
             <button id="runDocmanCreateGroupBtn" class="btn btn-sm" type="button" disabled>Create Group</button>
             <button id="runDocmanCleanProcessingBtn" class="btn btn-sm" type="button" disabled>Clean Processing</button>
             <button id="runDocmanCleanFilingBtn" class="btn btn-sm" type="button" disabled>Clean Filing</button>
             <button id="runDocmanOnboardingBtn" class="btn btn-sm" type="button" disabled>Onboarding</button>
           </div>
-          <div id="docmanToolStatus" class="validation-badge neutral docman-tool-status-host" style="margin-top: 10px; white-space: pre-wrap;">Select a practice to run Docman tools.</div>
         </div>
+
+        <div id="statusDisplay"></div>
 
         <div class="section-container jobs-section">
           <div class="jobs-shell">
@@ -239,16 +243,10 @@
         </div>
       </div>
 
-        <div class="search-container" style="position: relative; width: 100%; max-width: 100%; margin-top: 12px;">
-          <label for="cdbSearchInput">Search by Practice CDB</label>
-          <div class="input-with-button" style="margin-bottom: 0;">
-            <input id="cdbSearchInput" placeholder="Enter Practice CDB" autocomplete="off">
-          </div>
-          <ul id="cdbSuggestions"></ul> 
+        <div id="docmanToolStatusSection" class="section-container docman-tool-results-section" style="margin-top: 12px;">
+          <h3>Docman Activity</h3>
+          <div id="docmanToolStatus" class="validation-badge neutral docman-tool-status-host" style="margin-top: 0; white-space: normal;">Select a practice to run Docman tools.</div>
         </div>
-        <div id="cdbSearchResult"></div>
-        <div id="status"></div>
-        <div id="statusDisplay"></div>
       </div>
     </div>
 
@@ -306,14 +304,14 @@
       </div>
 
       <div id="superblocksUuidLookupSection" class="section-container">
-        <h3>Superblocks UUID Lookup</h3>
+        <h3>UUID Lookup</h3>
         <label for="superblocksUuidLookupInput">UUID</label>
         <div class="search-container dashboard-id-search">
           <div class="input-with-button" style="margin-bottom: 0;">
-            <input id="superblocksUuidLookupInput" placeholder="Paste UUID to check status..." autocomplete="off">
+            <input id="superblocksUuidLookupInput" placeholder="Paste UUID or fragment..." autocomplete="off">
           </div>
         </div>
-        <div id="superblocksUuidLookupStatus" class="validation-badge neutral">Paste a UUID to check its Superblocks status.</div>
+        <div id="superblocksUuidLookupStatus" class="validation-badge neutral">Paste a UUID or UUID fragment to check status.</div>
       </div>
 
       <div class="section-container">

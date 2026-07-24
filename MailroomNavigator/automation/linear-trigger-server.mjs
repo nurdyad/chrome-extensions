@@ -6,6 +6,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import pg from "pg";
 
 /**
  * Local trigger server used by the extension "Trigger Linear" button.
@@ -19,6 +20,7 @@ const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 const DEFAULT_ENV_PATH = resolve(REPO_ROOT, ".env");
 const execFileAsync = promisify(execFile);
+const { Pool } = pg;
 loadDotenv({ path: process.env.DOTENV_CONFIG_PATH || DEFAULT_ENV_PATH });
 
 function normalizeTriggerServerHost(rawHost) {
@@ -95,6 +97,12 @@ const LINEAR_TEAM_KEY = String(
     || process.env.LINEAR_TRIGGER_TEAM_KEY
     || "",
 ).trim();
+const LINEAR_DUPLICATE_REOPEN_STATE_NAME = sanitizeSingleLine(
+  process.env.LINEAR_DUPLICATE_REOPEN_STATE_NAME
+    || process.env.LINEAR_REOPEN_DUPLICATE_STATE_NAME
+    || "In Review",
+  120,
+);
 const SLACK_BOT_TOKEN = String(
   process.env.SLACK_BOT_TOKEN
     || process.env.LINEAR_SLACK_BOT_TOKEN
@@ -181,6 +189,52 @@ const DOCMAN_LAST_RUN_STATE_PATH = join(STATE_DIR, "docman-tool-last-run.json");
 const BOT_JOBS_REPORTS_DIR = join(STATE_DIR, "reports");
 const SLACK_TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
+const SQL_LOOKUP_ENABLED = String(process.env.MAILROOMNAV_SQL_ENABLED || "1")
+  .trim()
+  .toLowerCase() !== "0";
+const SQL_CONNECTION_STRING = String(
+  process.env.MAILROOMNAV_DATABASE_URL
+    || process.env.MAILROOMNAV_SQL_DATABASE_URL
+    || process.env.DATABASE_URL
+    || "",
+).trim();
+const SQL_HOST = String(process.env.MAILROOMNAV_SQL_HOST || process.env.PGHOST || "127.0.0.1").trim();
+const SQL_PORT = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_PORT || process.env.PGPORT || "15432"), 10);
+  if (!Number.isFinite(parsed)) return 15432;
+  return Math.min(65535, Math.max(1, parsed));
+})();
+const SQL_DATABASE = String(process.env.MAILROOMNAV_SQL_DATABASE || process.env.PGDATABASE || "mailroom_prod").trim();
+const SQL_USER = String(process.env.MAILROOMNAV_SQL_USER || process.env.PGUSER || "reporting").trim();
+const SQL_PASSWORD = String(process.env.MAILROOMNAV_SQL_PASSWORD || process.env.PGPASSWORD || "").trim();
+const SQL_QUERY_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_QUERY_TIMEOUT_MS || "5000"), 10);
+  if (!Number.isFinite(parsed)) return 5000;
+  return Math.min(30000, Math.max(1000, parsed));
+})();
+const SQL_UUID_LOOKUP_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_UUID_LOOKUP_TIMEOUT_MS || "20000"), 10);
+  if (!Number.isFinite(parsed)) return 20000;
+  return Math.min(60000, Math.max(1000, parsed));
+})();
+const SQL_RECONCILE_ENABLED = String(process.env.MAILROOMNAV_SQL_RECONCILE_ENABLED || "1")
+  .trim()
+  .toLowerCase() !== "0";
+const SQL_RECONCILE_MAX_ROWS = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_RECONCILE_MAX_ROWS || "1000"), 10);
+  if (!Number.isFinite(parsed)) return 1000;
+  return Math.min(5000, Math.max(50, parsed));
+})();
+const SQL_RECONCILE_QUERY_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_RECONCILE_QUERY_TIMEOUT_MS || "15000"), 10);
+  if (!Number.isFinite(parsed)) return 15000;
+  return Math.min(60000, Math.max(1000, parsed));
+})();
+const SQL_CONNECTION_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(process.env.MAILROOMNAV_SQL_CONNECTION_TIMEOUT_MS || "2000"), 10);
+  if (!Number.isFinite(parsed)) return 2000;
+  return Math.min(15000, Math.max(500, parsed));
+})();
 
 const DEFAULT_ALLOWED_ORIGIN_PREFIX = "chrome-extension://";
 const configuredOrigins = String(process.env.LINEAR_TRIGGER_ALLOWED_ORIGINS || "")
@@ -195,6 +249,7 @@ let activeRun = null;
 let lastRun = null;
 let docmanActiveRun = null;
 let lastDocmanRun = null;
+let sqlPool = null;
 let resolvedLinearTeam = null;
 let resolvedLinearWorkflowStateCatalog = null;
 let resolvedLinearIssueLabelCatalog = null;
@@ -293,6 +348,318 @@ function sanitizeStringList(values, maxItems = 8, maxLength = 220) {
     .slice(0, maxItems);
 }
 
+function sanitizeDbSecret(value, maxLength = 1024) {
+  return String(value ?? "")
+    .replace(/\u0000/g, "")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeOdsCode(value) {
+  const normalized = sanitizeSingleLine(value, 24).toUpperCase();
+  return /^[A-Z]\d{5}$/.test(normalized) ? normalized : "";
+}
+
+function normalizePracticeLookupQuery(value) {
+  return sanitizeSingleLine(value, 120).replace(/[<>]/g, "").trim();
+}
+
+function sqlPasswordMayComeFromPgPass() {
+  const pgpassFile = String(process.env.PGPASSFILE || "").trim();
+  if (pgpassFile && existsSync(pgpassFile)) return true;
+  const homePgpass = process.env.HOME ? resolve(process.env.HOME, ".pgpass") : "";
+  return Boolean(homePgpass && existsSync(homePgpass));
+}
+
+function isSqlLookupConfigured() {
+  if (!SQL_LOOKUP_ENABLED) return false;
+  if (SQL_CONNECTION_STRING) return true;
+  return Boolean(SQL_HOST && SQL_PORT && SQL_DATABASE && SQL_USER && (SQL_PASSWORD || sqlPasswordMayComeFromPgPass()));
+}
+
+function getSqlPublicConfig() {
+  return {
+    enabled: SQL_LOOKUP_ENABLED,
+    configured: isSqlLookupConfigured(),
+    host: SQL_HOST || "",
+    port: SQL_PORT,
+    database: SQL_DATABASE || "",
+    user: SQL_USER || "",
+    passwordConfigured: Boolean(SQL_PASSWORD || SQL_CONNECTION_STRING || sqlPasswordMayComeFromPgPass()),
+    queryTimeoutMs: SQL_QUERY_TIMEOUT_MS,
+    uuidLookupTimeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS,
+    reconcileEnabled: SQL_RECONCILE_ENABLED,
+    reconcileMaxRows: SQL_RECONCILE_MAX_ROWS,
+    reconcileQueryTimeoutMs: SQL_RECONCILE_QUERY_TIMEOUT_MS,
+  };
+}
+
+function getSqlPool() {
+  if (!isSqlLookupConfigured()) {
+    throw new Error("Cloud SQL lookup is not configured. Add MAILROOMNAV_SQL_PASSWORD to MailroomNavigator/.env and restart the local service.");
+  }
+  if (sqlPool) return sqlPool;
+
+  const baseConfig = {
+    max: 2,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: SQL_CONNECTION_TIMEOUT_MS,
+    application_name: "mailroomnavigator-local-service",
+  };
+  sqlPool = SQL_CONNECTION_STRING
+    ? new Pool({ ...baseConfig, connectionString: SQL_CONNECTION_STRING })
+    : new Pool({
+        ...baseConfig,
+        host: SQL_HOST,
+        port: SQL_PORT,
+        database: SQL_DATABASE,
+        user: SQL_USER,
+        password: SQL_PASSWORD || undefined,
+        ssl: false,
+      });
+
+  sqlPool.on("error", (error) => {
+    appendServerLog(`[${nowIso()}] sql pool error: ${String(error?.message || error)}`).catch(() => undefined);
+  });
+  return sqlPool;
+}
+
+async function runSqlQuery(text, values = [], options = {}) {
+  const pool = getSqlPool();
+  const timeoutMs = (() => {
+    const parsed = Number.parseInt(String(options?.timeoutMs || SQL_QUERY_TIMEOUT_MS), 10);
+    if (!Number.isFinite(parsed)) return SQL_QUERY_TIMEOUT_MS;
+    return Math.min(60000, Math.max(1000, parsed));
+  })();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN READ ONLY");
+    await client.query("SELECT set_config($1, $2, true)", ["statement_timeout", String(timeoutMs)]);
+    const result = await client.query(text, values);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Ignore rollback failures; the original query error is more useful.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function isPresentSecret(value) {
+  return sanitizeDbSecret(value).length > 0;
+}
+
+function rowCountValue(value) {
+  if (value === null || value === undefined) return "";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return sanitizeSingleLine(value, 40);
+  return String(number);
+}
+
+function firstPresentCountValue(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (String(value).trim() === "") continue;
+    return rowCountValue(value);
+  }
+  return "";
+}
+
+function sanitizePracticeLookupRow(row = {}, { includeSecrets = false } = {}) {
+  const odsCode = normalizeOdsCode(row.ods_code);
+  const practiceCdb = sanitizeSingleLine(row.practice_cdb, 80);
+  const displayName = sanitizeSingleLine(row.display_name, 240);
+  const docmanPassword = sanitizeDbSecret(row.docman_password);
+  const emisApiPassword = sanitizeDbSecret(row.emis_api_password);
+  const emisWebPassword = sanitizeDbSecret(row.emis_web_password);
+  const isSelfService = row.self_service === true;
+  const preferredQuota = isSelfService
+    ? firstPresentCountValue(row.collection_quota, row.full_service_quota)
+    : firstPresentCountValue(row.full_service_quota, row.collection_quota);
+  const preferredQuotaUsed = isSelfService
+    ? firstPresentCountValue(row.collection_quota_used, row.full_service_quota_used)
+    : firstPresentCountValue(row.full_service_quota_used, row.collection_quota_used);
+
+  return {
+    id: odsCode,
+    ods: odsCode,
+    odsCode,
+    name: displayName,
+    displayName,
+    cdb: practiceCdb,
+    practiceCDB: practiceCdb,
+    ehrType: sanitizeSingleLine(row.ehr_type, 80),
+    serviceLevel: isSelfService ? "Self Service" : "Full Service",
+    active: row.active === true,
+    codingEnabled: row.coding_enabled === true,
+    selfService: isSelfService,
+    collectionQuota: preferredQuota,
+    collectedToday: preferredQuotaUsed,
+    fullServiceQuota: rowCountValue(row.full_service_quota),
+    fullServiceQuotaUsed: rowCountValue(row.full_service_quota_used),
+    source: "cloud-sql",
+    emisApiUsername: sanitizeSingleLine(row.emis_api_username, 240),
+    emisApiPassword: includeSecrets ? emisApiPassword : "",
+    emisApiPasswordPresent: isPresentSecret(row.emis_api_password),
+    emisWebUsername: sanitizeSingleLine(row.emis_web_username, 240),
+    emisWebPassword: includeSecrets ? emisWebPassword : "",
+    emisWebPasswordPresent: isPresentSecret(row.emis_web_password),
+    emisWebDummyNhsNumber: sanitizeSingleLine(row.emis_web_dummy_nhs_number, 80),
+    docmanUsername: sanitizeSingleLine(row.docman_username, 240),
+    docmanPassword: includeSecrets ? docmanPassword : "",
+    docmanPasswordPresent: isPresentSecret(row.docman_password),
+    docmanDummyNhsNumber: sanitizeSingleLine(row.docman_dummy_nhs_number, 80),
+    docmanInputFolder: sanitizeDocmanFolderName(row.docman_input_folder),
+    docmanProcessingFolder: sanitizeDocmanFolderName(row.docman_processing_folder),
+    docmanFilingFolder: sanitizeDocmanFolderName(row.docman_filing_folder),
+    docmanRejectedFolder: sanitizeDocmanFolderName(row.docman_rejected_folder),
+  };
+}
+
+const PRACTICE_LOOKUP_SQL = `
+select
+  ods_code,
+  display_name,
+  ehr_type,
+  "active?" as active,
+  coding_enabled,
+  "self_service?" as self_service,
+  collection_quota,
+  collection_quota_used,
+  full_service_quota,
+  full_service_quota_used,
+  ehr_settings->>'practice_cdb' as practice_cdb,
+  ehr_settings->'emis_api'->>'username' as emis_api_username,
+  ehr_settings->'emis_api'->>'password' as emis_api_password,
+  ehr_settings->'emis_web'->>'username' as emis_web_username,
+  ehr_settings->'emis_web'->>'password' as emis_web_password,
+  ehr_settings->'emis_web'->>'dummy_nhs_number' as emis_web_dummy_nhs_number,
+  ehr_settings->'docman'->>'username' as docman_username,
+  ehr_settings->'docman'->>'password' as docman_password,
+  ehr_settings->'docman'->>'dummy_nhs_number' as docman_dummy_nhs_number,
+  ehr_settings->'docman'->>'input_folder' as docman_input_folder,
+  ehr_settings->'docman'->>'processing_folder' as docman_processing_folder,
+  ehr_settings->'docman'->>'filing_folder' as docman_filing_folder,
+  ehr_settings->'docman'->>'rejected_folder' as docman_rejected_folder
+from practices
+where
+  (
+    upper(ods_code) = upper($1)
+    or ehr_settings->>'practice_cdb' = $1
+    or display_name ilike '%' || $1 || '%'
+  )
+order by
+  case
+    when upper(ods_code) = upper($1) then 0
+    when ehr_settings->>'practice_cdb' = $1 then 1
+    when display_name ilike $1 || '%' then 2
+    else 3
+  end,
+  "active?" desc nulls last,
+  display_name asc
+limit $2
+`;
+
+async function lookupPracticesFromSql(query, { includeSecrets = false, limit = 12 } = {}) {
+  const normalizedQuery = normalizePracticeLookupQuery(query);
+  if (!normalizedQuery) {
+    throw new Error("Practice lookup query is required.");
+  }
+  const safeLimit = Math.min(50, Math.max(1, Number.parseInt(String(limit || 12), 10) || 12));
+  const result = await runSqlQuery(PRACTICE_LOOKUP_SQL, [normalizedQuery, safeLimit]);
+  return result.rows.map((row) => sanitizePracticeLookupRow(row, { includeSecrets }));
+}
+
+async function lookupPracticeByOdsFromSql(odsCode, { includeSecrets = false } = {}) {
+  const normalizedOds = normalizeOdsCode(odsCode);
+  if (!normalizedOds) return null;
+  const practices = await lookupPracticesFromSql(normalizedOds, { includeSecrets, limit: 1 });
+  return practices[0] || null;
+}
+
+function sanitizeLiveCountRow(row = {}) {
+  const normalizeCount = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  };
+
+  return {
+    preparing: normalizeCount(row.preparing),
+    edit: normalizeCount(row.edit),
+    review: normalizeCount(row.review),
+    coding: normalizeCount(row.coding),
+    rejected: normalizeCount(row.rejected),
+    source: "cloud-sql",
+  };
+}
+
+const PRACTICE_LIVE_COUNTS_SQL = `
+select
+  count(*) filter (
+    where combined_status in (
+      'patient_not_matched',
+      'pending_patient_history',
+      'pending_patient_identification',
+      'pending_ocr',
+      'pending_dyadbot',
+      'uploading'
+    )
+  ) as preparing,
+  count(*) filter (where combined_status = 'needs_annotation') as edit,
+  count(*) filter (where combined_status = 'needs_review') as review,
+  count(*) filter (where combined_status = 'needs_coding') as coding,
+  count(*) filter (
+    where combined_status in ('manual_pending', 'auto_processing')
+      or rejection_processing_status in ('manual_pending', 'auto_processing')
+  ) as rejected
+from letter_list_items
+where practice_id = $1
+`;
+
+async function lookupPracticeLiveCountsFromSql(odsCode) {
+  const normalizedOds = normalizeOdsCode(odsCode);
+  if (!normalizedOds) {
+    throw new Error("Valid ODS code is required.");
+  }
+  const result = await runSqlQuery(PRACTICE_LIVE_COUNTS_SQL, [normalizedOds]);
+  return sanitizeLiveCountRow(result.rows[0] || {});
+}
+
+const PRACTICE_SECRET_FIELDS = new Set([
+  "emisApiPassword",
+  "emisWebPassword",
+  "docmanPassword",
+]);
+
+async function lookupPracticeSecretFromSql(odsCode, field) {
+  const normalizedOds = normalizeOdsCode(odsCode);
+  const normalizedField = sanitizeSingleLine(field, 80);
+  if (!normalizedOds) {
+    throw new Error("Valid ODS code is required.");
+  }
+  if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) {
+    throw new Error("Unsupported practice secret field.");
+  }
+
+  const practice = await lookupPracticeByOdsFromSql(normalizedOds, { includeSecrets: true });
+  if (!practice) {
+    throw new Error("Practice was not found.");
+  }
+
+  const value = sanitizeDbSecret(practice[normalizedField]);
+  const presentKey = `${normalizedField}Present`;
+  return {
+    field: normalizedField,
+    value,
+    present: Boolean(practice[presentKey] || value),
+  };
+}
+
 function sanitizeDocmanVerifyResultEntry(rawEntry = {}, index = 0) {
   const requestedUsername = sanitizeSingleLine(
     rawEntry?.requestedUsername
@@ -388,9 +755,24 @@ function normalizeEmail(value) {
   return normalized;
 }
 
+function normalizeUuidLookupInput(value) {
+  const raw = sanitizeSingleLine(value, 240)
+    .replace(/(?:…|\.\.\.)$/u, "")
+    .trim();
+  if (!raw) return "";
+
+  const fullUuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+  if (fullUuidMatch) return fullUuidMatch[0].toLowerCase();
+
+  const partialMatch = raw.match(/[0-9a-f-]{6,80}/i);
+  const partial = sanitizeSingleLine(partialMatch?.[0] || "", 80)
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return /^[0-9a-f-]{6,80}$/.test(partial) ? partial : "";
+}
+
 function extractUuid(value) {
-  const match = sanitizeSingleLine(value, 240).match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
-  return match ? match[0].toLowerCase() : "";
+  return normalizeUuidLookupInput(value);
 }
 
 function getValueByPath(value, path) {
@@ -1135,6 +1517,7 @@ async function resolveLinearLabelIds(labelNames = []) {
 }
 
 const LINEAR_ISSUE_DEDUPE_MARKER_PREFIX = "BOT_JOBS_DEDUPE:";
+const BOT_JOB_TITLE_PREFIX = "Bot Job Error:";
 const PRACTICE_SUPPORT_TITLE_PREFIX = "Practice Support Ticket:";
 const MAILROOM_REJECTED_TITLE_PREFIX = "Mailroom Rejected:";
 
@@ -1231,6 +1614,14 @@ function extractMailroomRejectedDocumentIdFromIssue(issue = {}) {
   );
 }
 
+function extractBotJobTypeFromIssueText(text) {
+  const structured = extractIssueStructuredField(text, "Job Type");
+  if (structured) return normalizeIssueLookupKey(structured);
+
+  const match = normalizeIssueText(text).match(/\b(docman_[a-z_]+|emis_[a-z_]+|generate_output)\b/i);
+  return normalizeIssueLookupKey(match?.[1] || "");
+}
+
 function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId) {
   if (!candidate?.id) return false;
 
@@ -1239,6 +1630,7 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
   const normalizedCandidateTitle = candidateTitle.toLowerCase();
   const normalizedPayloadTitle = sanitizeSingleLine(payload?.title, 240).toLowerCase();
   const payloadIsMailroomRejected = normalizedPayloadTitle.startsWith(MAILROOM_REJECTED_TITLE_PREFIX.toLowerCase());
+  const payloadIsBotJob = normalizedPayloadTitle.startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase());
 
   if (dedupeMarker && candidateDescription.includes(dedupeMarker)) {
     return true;
@@ -1252,6 +1644,24 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
     const candidateDocumentId = extractMailroomRejectedDocumentIdFromIssue(candidate)
       || normalizeIssueDocumentId(extractIssueStructuredField(candidateDescription, "Document ID"));
     if (candidateDocumentId && candidateDocumentId === payloadDocumentId) {
+      return true;
+    }
+  }
+
+  if (payloadIsBotJob && payloadDocumentId) {
+    const candidateDocumentId = normalizeIssueDocumentId(
+      extractIssueStructuredField(candidateDescription, "Document ID")
+      || candidateTitle
+    );
+    const payloadJobType = normalizeIssueLookupKey(payload?.jobType)
+      || extractBotJobTypeFromIssueText(`${payload?.title || ""}\n${payload?.description || ""}`);
+    const candidateJobType = extractBotJobTypeFromIssueText(`${candidateTitle}\n${candidateDescription}`);
+
+    if (
+      candidateDocumentId
+      && candidateDocumentId === payloadDocumentId
+      && (!payloadJobType || !candidateJobType || candidateJobType === payloadJobType)
+    ) {
       return true;
     }
   }
@@ -1280,14 +1690,14 @@ async function findExistingLinearIssue(payload, team) {
     return null;
   }
 
-  const query = `
+  const buildQuery = (stateFilterBlock = "") => `
     query FindPotentialDuplicateIssues($teamKey: String!, $first: Int!, $after: String) {
       issues(
         first: $first
         after: $after
         filter: {
           team: { key: { eq: $teamKey } }
-          state: { type: { nin: ["completed", "canceled"] } }
+          ${stateFilterBlock}
         }
       ) {
         nodes {
@@ -1299,6 +1709,8 @@ async function findExistingLinearIssue(payload, team) {
           createdAt
           updatedAt
           state {
+            id
+            name
             type
           }
         }
@@ -1310,45 +1722,179 @@ async function findExistingLinearIssue(payload, team) {
     }
   `;
 
-  let after = null;
-  for (let page = 0; page < 8; page += 1) {
-    const data = await runLinearGraphqlRequest(query, {
-      teamKey: team.key,
-      first: 100,
-      after,
-    });
-    const issuesRoot = data?.issues;
-    const nodes = Array.isArray(issuesRoot?.nodes) ? issuesRoot.nodes : [];
-    const match = nodes.find((candidate) =>
-      isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId)
-    );
-    if (match?.id) {
-      return {
-        identifier: sanitizeSingleLine(match.identifier, 64),
-        title: sanitizeSingleLine(match.title, 240),
-        url: sanitizeSingleLine(match.url, 1200),
-        priority: 0,
-      };
-    }
+  const searchScopes = [
+    {
+      name: "active",
+      stateFilterBlock: 'state: { type: { nin: ["completed", "canceled"] } }',
+      maxPages: 8,
+    },
+    {
+      name: "all_states",
+      stateFilterBlock: "",
+      maxPages: 16,
+    },
+  ];
+  const seenIssueIds = new Set();
 
-    const pageInfo = issuesRoot?.pageInfo;
-    if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 240)) {
-      break;
+  for (const scope of searchScopes) {
+    let after = null;
+    const query = buildQuery(scope.stateFilterBlock);
+    for (let page = 0; page < scope.maxPages; page += 1) {
+      const data = await runLinearGraphqlRequest(query, {
+        teamKey: team.key,
+        first: 100,
+        after,
+      });
+      const issuesRoot = data?.issues;
+      const nodes = Array.isArray(issuesRoot?.nodes) ? issuesRoot.nodes : [];
+      const match = nodes.find((candidate) => {
+        if (!candidate?.id || seenIssueIds.has(candidate.id)) return false;
+        seenIssueIds.add(candidate.id);
+        return isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId);
+      });
+      if (match?.id) {
+        return {
+          id: sanitizeSingleLine(match.id, 64),
+          identifier: sanitizeSingleLine(match.identifier, 64),
+          title: sanitizeSingleLine(match.title, 240),
+          url: sanitizeSingleLine(match.url, 1200),
+          priority: 0,
+          state: {
+            id: sanitizeSingleLine(match?.state?.id, 64),
+            name: sanitizeSingleLine(match?.state?.name, 120),
+            type: sanitizeSingleLine(match?.state?.type, 64),
+          },
+        };
+      }
+
+      const pageInfo = issuesRoot?.pageInfo;
+      if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 240)) {
+        break;
+      }
+      after = sanitizeSingleLine(pageInfo.endCursor, 240);
     }
-    after = sanitizeSingleLine(pageInfo.endCursor, 240);
   }
 
   return null;
+}
+
+function toPublicLinearIssue(issue = {}) {
+  return {
+    identifier: sanitizeSingleLine(issue?.identifier, 64),
+    title: sanitizeSingleLine(issue?.title, 240),
+    url: sanitizeSingleLine(issue?.url, 1200),
+    priority: clampLinearPriority(issue?.priority),
+    state: issue?.state
+      ? {
+          name: sanitizeSingleLine(issue.state.name, 120),
+          type: sanitizeSingleLine(issue.state.type, 64),
+        }
+      : undefined,
+  };
+}
+
+async function moveExistingLinearIssueToReopenState(issue, team) {
+  const issueId = sanitizeSingleLine(issue?.id, 64);
+  const stateName = sanitizeSingleLine(LINEAR_DUPLICATE_REOPEN_STATE_NAME, 120);
+  const fallbackIssue = toPublicLinearIssue(issue);
+
+  if (!issueId || !team?.id || !stateName) {
+    return {
+      issue: fallbackIssue,
+      reopened: false,
+      reopenStateName: stateName,
+      reopenSkipped: "missing_issue_or_state",
+    };
+  }
+
+  const currentStateName = sanitizeSingleLine(issue?.state?.name, 120);
+  if (currentStateName && currentStateName.toLowerCase() === stateName.toLowerCase()) {
+    return {
+      issue: fallbackIssue,
+      reopened: false,
+      reopenStateName: stateName,
+      reopenSkipped: "already_in_state",
+    };
+  }
+
+  const stateId = await resolveLinearWorkflowStateId(team.id, stateName);
+  if (!stateId) {
+    const message = `Linear workflow state "${stateName}" was not found.`;
+    await appendServerLog(
+      `[${nowIso()}] linear duplicate reopen skipped ${issue?.identifier || issueId}: ${message}`
+    ).catch(() => undefined);
+    return {
+      issue: fallbackIssue,
+      reopened: false,
+      reopenStateName: stateName,
+      reopenError: message,
+    };
+  }
+
+  try {
+    const mutation = `
+      mutation ReopenDuplicateIssue($id: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
+          success
+          issue {
+            id
+            identifier
+            title
+            url
+            priority
+            state {
+              id
+              name
+              type
+            }
+          }
+        }
+      }
+    `;
+    const data = await runLinearGraphqlRequest(mutation, {
+      id: issueId,
+      input: {
+        stateId,
+      },
+    });
+    const issueUpdate = data?.issueUpdate;
+    const updatedIssue = issueUpdate?.issue;
+    if (!issueUpdate?.success || !updatedIssue?.identifier || !updatedIssue?.url) {
+      throw new Error("Linear issue update did not return a successful issue.");
+    }
+
+    return {
+      issue: toPublicLinearIssue(updatedIssue),
+      reopened: true,
+      reopenStateName: stateName,
+    };
+  } catch (error) {
+    const message = sanitizeSingleLine(error?.message || error, 260) || "Could not move issue to reopen state.";
+    await appendServerLog(
+      `[${nowIso()}] linear duplicate reopen failed ${issue?.identifier || issueId}: ${message}`
+    ).catch(() => undefined);
+    return {
+      issue: fallbackIssue,
+      reopened: false,
+      reopenStateName: stateName,
+      reopenError: message,
+    };
+  }
 }
 
 async function createLinearIssue(payload) {
   const team = await resolveLinearTeam();
   const duplicateIssue = await findExistingLinearIssue(payload, team);
   if (duplicateIssue?.identifier && duplicateIssue?.url) {
+    const reopenResult = await moveExistingLinearIssueToReopenState(duplicateIssue, team);
     return {
       team,
-      issue: duplicateIssue,
+      issue: reopenResult.issue,
       duplicate: true,
+      reopened: Boolean(reopenResult.reopened),
+      reopenStateName: reopenResult.reopenStateName || LINEAR_DUPLICATE_REOPEN_STATE_NAME,
+      reopenError: reopenResult.reopenError || "",
+      reopenSkipped: reopenResult.reopenSkipped || "",
     };
   }
 
@@ -1797,6 +2343,156 @@ function rememberSuperblocksLookup(uuid, result) {
   });
 }
 
+function sanitizeUuidLookupRow(row = {}) {
+  return {
+    documentId: sanitizeSingleLine(row.document_id, 80),
+    matchedUuid: sanitizeSingleLine(row.matched_uuid, 160),
+    inputFileName: sanitizeSingleLine(row.input_file_name, 260),
+    status: sanitizeSingleLine(row.document_status, 120),
+    documentLink: sanitizeHttpUrl(row.document_link),
+    rejectionId: sanitizeSingleLine(row.rejection_id, 80),
+    rejectionReason: sanitizeSingleLine(row.rejection_reason, 420),
+    rejectionMarkedBy: sanitizeSingleLine(row.rejection_marked_by, 180),
+    rejectionProcessingStatus: sanitizeSingleLine(row.rejection_processing_status, 120),
+    matchType: sanitizeSingleLine(row.match_type, 80),
+  };
+}
+
+async function runSqlUuidLookup(uuid, { forceRefresh = false } = {}) {
+  const normalizedUuid = extractUuid(uuid);
+  if (!normalizedUuid) {
+    throw new Error("Invalid or missing UUID.");
+  }
+
+  if (!forceRefresh) {
+    const cached = getCachedSuperblocksLookup(normalizedUuid);
+    if (cached) return cached;
+
+    const inFlight = superblocksLookupInFlight.get(normalizedUuid);
+    if (inFlight) return inFlight;
+  }
+
+  const runPromise = (async () => {
+    const query = `
+      WITH search_input AS (
+        SELECT TRIM(
+          REGEXP_REPLACE(
+            $1,
+            '(…|\\.\\.\\.)$',
+            ''
+          )
+        ) AS uuid_part
+      )
+      SELECT
+        d.id AS document_id,
+        SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
+        d.input_file_name,
+        d.status AS document_status,
+        CONCAT(
+          'https://app.betterletter.ai/mailroom/annotations/',
+          d.id
+        ) AS document_link,
+        dr.id AS rejection_id,
+        dr.rejection_reason,
+        drv.origin->>'user' AS rejection_marked_by,
+        drv.changes->>'processing_status' AS rejection_processing_status,
+        CASE
+          WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
+            THEN 'Exact match'
+          ELSE 'Partial match'
+        END AS match_type
+      FROM documents d
+      CROSS JOIN search_input s
+      LEFT JOIN document_rejections dr
+        ON d.id = dr.mailroom_document_id
+      LEFT JOIN document_rejections_versions drv
+        ON drv.mailroom_document_id = d.id
+        AND drv.changes->>'processing_status' = 'done'
+      WHERE LENGTH(s.uuid_part) >= 6
+        AND SPLIT_PART(d.input_file_name, '.', 1)
+            ILIKE '%' || s.uuid_part || '%'
+      ORDER BY
+        CASE
+          WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
+            THEN 0
+          ELSE 1
+        END,
+        d.id DESC
+      LIMIT 100
+    `;
+
+    const result = await runSqlQuery(query, [normalizedUuid], { timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS });
+    const matches = (Array.isArray(result?.rows) ? result.rows : [])
+      .map(sanitizeUuidLookupRow)
+      .filter((row) => row.documentId)
+      .slice(0, 100);
+    const firstMatch = matches[0] || null;
+    const lookup = firstMatch
+      ? {
+          uuid: normalizedUuid,
+          found: true,
+          source: "cloud_sql",
+          status: firstMatch.status,
+          detail: firstMatch.inputFileName || firstMatch.matchType,
+          documentId: firstMatch.documentId,
+          documentLink: firstMatch.documentLink,
+          rejectionReason: firstMatch.rejectionReason,
+          matchedUuid: firstMatch.matchedUuid,
+          inputFileName: firstMatch.inputFileName,
+          rejectionId: firstMatch.rejectionId,
+          rejectionMarkedBy: firstMatch.rejectionMarkedBy,
+          rejectionProcessingStatus: firstMatch.rejectionProcessingStatus,
+          matchType: firstMatch.matchType,
+          matches,
+          checkedAt: nowIso(),
+          matchedStatusPath: "cloud_sql.documents.status",
+        }
+      : {
+          uuid: normalizedUuid,
+          found: false,
+          source: "cloud_sql",
+          status: "",
+          detail: `No document found for UUID fragment ${normalizedUuid}.`,
+          documentId: "",
+          documentLink: "",
+          rejectionReason: "",
+          matches: [],
+          checkedAt: nowIso(),
+          matchedStatusPath: "cloud_sql.documents.status",
+        };
+
+    rememberSuperblocksLookup(normalizedUuid, lookup);
+    return lookup;
+  })();
+
+  superblocksLookupInFlight.set(normalizedUuid, runPromise);
+  try {
+    return await runPromise;
+  } finally {
+    if (superblocksLookupInFlight.get(normalizedUuid) === runPromise) {
+      superblocksLookupInFlight.delete(normalizedUuid);
+    }
+  }
+}
+
+async function runUuidStatusLookup(uuid, options = {}) {
+  if (isSqlLookupConfigured()) {
+    try {
+      return await runSqlUuidLookup(uuid, options);
+    } catch (error) {
+      if (SUPERBLOCKS_UUID_LOOKUP_URL) {
+        appendServerLog(
+          `[${nowIso()}] sql uuid lookup failed; falling back to Superblocks: ${sanitizeSingleLine(error?.message || error, 300)}`,
+        ).catch(() => undefined);
+        return runSuperblocksUuidLookup(uuid, options);
+      }
+      throw new Error(`Cloud SQL UUID lookup failed: ${sanitizeSingleLine(error?.message || error, 300)}`);
+    }
+  }
+
+  return runSuperblocksUuidLookup(uuid, options);
+}
+
 async function runSuperblocksUuidLookup(uuid, { forceRefresh = false } = {}) {
   ensureSuperblocksLookupConfig();
 
@@ -1902,6 +2598,7 @@ async function runSuperblocksUuidLookup(uuid, { forceRefresh = false } = {}) {
     const result = {
       uuid: normalizedUuid,
       found: Boolean(status),
+      source: "superblocks",
       status,
       detail,
       documentId: pickFirstPresentValue(payload, [
@@ -2574,6 +3271,7 @@ function toRunPublic(run) {
     exitCode,
     signal: run.signal ? String(run.signal) : "",
     error: run.error ? String(run.error) : "",
+    source: sanitizeSingleLine(run?.source, 80),
     summaryLines: sanitizeStringList(run.summaryLines, 10, 240),
     reportErrors: sanitizeStringList(run.reportErrors, 4, 240),
     createdIssuesTotal: Number.isFinite(Number(run.createdIssuesTotal)) ? Number(run.createdIssuesTotal) : 0,
@@ -2693,6 +3391,607 @@ function summarizeBotJobsReport(report) {
     issueCandidatesTotal,
     floodMode: Boolean(report.safeguards?.flood_mode),
   };
+}
+
+const SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES = new Set([
+  "docman_import",
+  "docman_validate",
+]);
+const SQL_RECONCILE_DOC_MATCH_JOB_TYPES = new Set([
+  "docman_upload",
+  "docman_file",
+  "docman_review",
+  "docman_delete_original",
+  "docman_rejection",
+  "emis_api_consultation",
+  "emis_coding",
+  "emis_rejection",
+  "emis_delete_originals",
+  "emis_prepare",
+  "emis_unmatch",
+  "generate_output",
+  "merge_tasks_for_same_recipient",
+]);
+
+function normalizeSqlReconcileJobType(value) {
+  const normalized = sanitizeSingleLine(value, 120).toLowerCase();
+  if (!normalized) return "";
+  if (normalized.includes("docman_validate") || normalized.includes("validatejob.create")) return "docman_validate";
+  if (normalized.includes("docman_import")) return "docman_import";
+  return normalized;
+}
+
+function normalizeSqlReconcilePractice(value) {
+  return sanitizeSingleLine(value, 240)
+    .toLowerCase()
+    .replace(/[\u2026.]+$/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sqlReconcilePracticesLikelyMatch(a, b) {
+  const left = normalizeSqlReconcilePractice(a);
+  const right = normalizeSqlReconcilePractice(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.length >= 12 && right.startsWith(left)) return true;
+  if (right.length >= 12 && left.startsWith(right)) return true;
+  return false;
+}
+
+function sanitizeSqlReconcilePracticeCode(value) {
+  return normalizeOdsCode(value) || sanitizeSingleLine(value, 32).toUpperCase().match(/\b[A-Z]\d{4,6}\b/)?.[0] || "";
+}
+
+function extractSqlReconcileIssueField(description, fieldName) {
+  const text = String(description || "");
+  const escaped = escapeRegex(fieldName);
+  const patterns = [
+    new RegExp(`^[\\s>*\\-•]*${escaped}\\s*:\\s*(.*)$`, "im"),
+    new RegExp(`${escaped}\\s*:\\s*([^\\n\\r]+)`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return sanitizeSingleLine(match[1], 500);
+  }
+  return "";
+}
+
+function parseSqlReconcileBotIssueContext(issue = {}) {
+  const title = sanitizeSingleLine(issue?.title, 240);
+  if (!title.toLowerCase().includes(BOT_JOB_TITLE_PREFIX.toLowerCase())) return null;
+
+  const normalizedTitle = title.replace(/^\s*\[prod\]\s*/i, "").trim();
+  const titleMatch = normalizedTitle.match(/bot job error:\s*([^|]+)\|\s*([^|]+)\|\s*(.+)$/i);
+  const description = String(issue?.description || "");
+  const descJobType = extractSqlReconcileIssueField(description, "Job Type");
+  const descDocumentId = extractSqlReconcileIssueField(description, "Document ID");
+  const descPractice = extractSqlReconcileIssueField(description, "Practice");
+  const descPracticeCode = extractSqlReconcileIssueField(description, "Practice Code");
+
+  const jobType = normalizeSqlReconcileJobType(descJobType || titleMatch?.[1] || "");
+  const documentId = normalizeIssueDocumentId(descDocumentId || titleMatch?.[2] || "");
+  const practiceCandidate = sanitizeSingleLine(descPractice || titleMatch?.[3] || "", 240);
+  const practiceCode = sanitizeSqlReconcilePracticeCode(descPracticeCode)
+    || sanitizeSqlReconcilePracticeCode(practiceCandidate);
+  const practiceName = /practice code/i.test(practiceCandidate) ? "" : practiceCandidate;
+
+  return {
+    issue,
+    title,
+    job_type: jobType,
+    document_id: documentId,
+    practice_name: practiceName,
+    practice_code: practiceCode,
+  };
+}
+
+function sanitizeSqlReconcileDashboardRow(row = {}) {
+  const attemptCount = Number(row.attempt_count);
+  const maxAttempts = Number(row.max_attempts);
+  const statusReason = sanitizeMultiline(row.status_reason, 1000);
+  const fallbackStatus = Number.isFinite(attemptCount) && Number.isFinite(maxAttempts) && attemptCount >= maxAttempts
+    ? `Made ${attemptCount} attempts but still erroring`
+    : "Require Attention";
+
+  return {
+    environment: "production",
+    page_url: "cloud_sql.bot_jobs status=paused",
+    document_id: normalizeIssueDocumentId(row.document_id),
+    job_type: normalizeSqlReconcileJobType(row.job_type),
+    practice_name: sanitizeSingleLine(row.practice_name, 240),
+    practice_code: sanitizeSqlReconcilePracticeCode(row.practice_code),
+    status_text: statusReason || fallbackStatus,
+    attempts_count: Number.isFinite(attemptCount) ? attemptCount : null,
+    max_attempts: Number.isFinite(maxAttempts) ? maxAttempts : null,
+    job_id: sanitizeSingleLine(row.job_id, 120),
+    inserted_at: sanitizeSingleLine(row.inserted_at, 80),
+    updated_at: sanitizeSingleLine(row.updated_at, 80),
+  };
+}
+
+const SQL_RECONCILE_PAUSED_BOT_JOBS_SQL = `
+select
+  bj.id::text as job_id,
+  bj.type as job_type,
+  bj.document_id::text as document_id,
+  bj.practice_id as practice_code,
+  p.display_name as practice_name,
+  bj.status_reason,
+  bj.attempt_count,
+  bj.max_attempts,
+  bj.inserted_at::text as inserted_at,
+  bj.updated_at::text as updated_at
+from bot_jobs bj
+left join practices p
+  on p.ods_code = bj.practice_id
+where bj.status = 'paused'
+order by bj.updated_at desc nulls last, bj.inserted_at desc nulls last
+limit $1
+`;
+
+async function collectSqlReconcileDashboardRows(report) {
+  const result = await runSqlQuery(
+    SQL_RECONCILE_PAUSED_BOT_JOBS_SQL,
+    [SQL_RECONCILE_MAX_ROWS],
+    { timeoutMs: SQL_RECONCILE_QUERY_TIMEOUT_MS },
+  );
+  const rows = (Array.isArray(result?.rows) ? result.rows : [])
+    .map(sanitizeSqlReconcileDashboardRow)
+    .filter((row) => row.job_type || row.document_id || row.practice_code);
+
+  report.pages_visited.push({
+    url: "cloud_sql.bot_jobs where status = paused",
+    rows_scanned: rows.length,
+    actionable_found: rows.length,
+    source: "cloud_sql",
+  });
+  report.dashboard_rows.push(...rows);
+  return rows;
+}
+
+function buildSqlReconcileLiveIndex(rows = []) {
+  const docKeys = new Set();
+  const practiceByJobType = new Map();
+  const practiceCodeByJobType = new Map();
+
+  for (const row of rows) {
+    const jobType = normalizeSqlReconcileJobType(row.job_type);
+    const documentId = normalizeIssueDocumentId(row.document_id);
+    const practiceName = normalizeSqlReconcilePractice(row.practice_name);
+    const practiceCode = sanitizeSqlReconcilePracticeCode(row.practice_code);
+
+    if (jobType && documentId) {
+      docKeys.add(`${jobType}|${documentId}`);
+    }
+    if (jobType && practiceName) {
+      const existing = practiceByJobType.get(jobType) || [];
+      existing.push(practiceName);
+      practiceByJobType.set(jobType, existing);
+    }
+    if (jobType && practiceCode) {
+      const existing = practiceCodeByJobType.get(jobType) || new Set();
+      existing.add(practiceCode);
+      practiceCodeByJobType.set(jobType, existing);
+    }
+  }
+
+  return { docKeys, practiceByJobType, practiceCodeByJobType };
+}
+
+function sqlReconcileIssueStillExists(context, liveIndex) {
+  const jobType = normalizeSqlReconcileJobType(context?.job_type);
+  const documentId = normalizeIssueDocumentId(context?.document_id);
+  const practiceName = normalizeSqlReconcilePractice(context?.practice_name);
+  const practiceCode = sanitizeSqlReconcilePracticeCode(context?.practice_code);
+
+  if (!jobType) {
+    return { found: true, reason: "missing_job_type_in_issue" };
+  }
+
+  if (SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES.has(jobType)) {
+    const practices = liveIndex.practiceByJobType.get(jobType) || [];
+    const foundByName = practiceName
+      ? practices.some((candidate) => sqlReconcilePracticesLikelyMatch(practiceName, candidate))
+      : false;
+    if (foundByName) {
+      return { found: true, reason: "matched_practice_job_type" };
+    }
+
+    const codes = liveIndex.practiceCodeByJobType.get(jobType) || new Set();
+    const foundByCode = practiceCode ? codes.has(practiceCode) : false;
+    return {
+      found: foundByCode,
+      reason: foundByCode ? "matched_practice_code_job_type" : "practice_job_type_not_found",
+    };
+  }
+
+  if (!SQL_RECONCILE_DOC_MATCH_JOB_TYPES.has(jobType)) {
+    return { found: true, reason: "unsupported_job_type_for_auto_close" };
+  }
+
+  if (!documentId) {
+    return { found: true, reason: "missing_document_id_for_doc_match_job_type" };
+  }
+
+  const key = `${jobType}|${documentId}`;
+  const found = liveIndex.docKeys.has(key);
+  return { found, reason: found ? "matched_document_job_type" : "document_job_type_not_found" };
+}
+
+async function fetchSqlReconcileOpenBotIssues(team) {
+  const query = `
+    query ReconcileOpenBotIssues($teamKey: String!, $first: Int!, $after: String) {
+      issues(
+        first: $first
+        after: $after
+        filter: {
+          team: { key: { eq: $teamKey } }
+          state: { type: { nin: ["completed", "canceled"] } }
+        }
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          url
+          description
+          state {
+            id
+            name
+            type
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `;
+  const issues = [];
+  let after = null;
+  for (let page = 0; page < 20; page += 1) {
+    const data = await runLinearGraphqlRequest(query, {
+      teamKey: team.key,
+      first: 100,
+      after,
+    });
+    const root = data?.issues;
+    const nodes = Array.isArray(root?.nodes) ? root.nodes : [];
+    nodes
+      .filter((issue) => sanitizeSingleLine(issue?.title, 240).toLowerCase().includes(BOT_JOB_TITLE_PREFIX.toLowerCase()))
+      .forEach((issue) => issues.push(issue));
+
+    const pageInfo = root?.pageInfo;
+    if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 240)) break;
+    after = sanitizeSingleLine(pageInfo.endCursor, 240);
+  }
+  return issues;
+}
+
+async function resolveLinearDoneStateId(teamId) {
+  const exactDone = await resolveLinearWorkflowStateId(teamId, "Done");
+  if (exactDone) return exactDone;
+
+  const catalogHasStateType = Array.isArray(resolvedLinearWorkflowStateCatalog)
+    && resolvedLinearWorkflowStateCatalog.some((state) => Object.prototype.hasOwnProperty.call(state || {}, "type"));
+  if (!resolvedLinearWorkflowStateCatalog || !catalogHasStateType) {
+    const query = `
+      query workflowStates($first: Int) {
+        workflowStates(first: $first) {
+          nodes {
+            id
+            name
+            type
+            team {
+              id
+            }
+          }
+        }
+      }
+    `;
+    const data = await runLinearGraphqlRequest(query, { first: 250 });
+    resolvedLinearWorkflowStateCatalog = Array.isArray(data?.workflowStates?.nodes)
+      ? data.workflowStates.nodes
+      : [];
+  }
+
+  const completedState = (Array.isArray(resolvedLinearWorkflowStateCatalog) ? resolvedLinearWorkflowStateCatalog : [])
+    .find((state) =>
+      sanitizeSingleLine(state?.team?.id, 64) === teamId
+      && sanitizeSingleLine(state?.type, 64).toLowerCase() === "completed"
+    );
+  const stateId = sanitizeSingleLine(completedState?.id, 64);
+  if (!stateId) {
+    throw new Error(`Could not find a done/completed workflow state for team ${LINEAR_TEAM_KEY}.`);
+  }
+  return stateId;
+}
+
+async function moveLinearIssueToState(issueId, stateId) {
+  const mutation = `
+    mutation ReconcileIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+      }
+    }
+  `;
+  const data = await runLinearGraphqlRequest(mutation, {
+    id: sanitizeSingleLine(issueId, 64),
+    input: { stateId: sanitizeSingleLine(stateId, 64) },
+  });
+  if (!data?.issueUpdate?.success) {
+    throw new Error("Linear issue update did not return success.");
+  }
+}
+
+function buildSqlReconcileSummary(report) {
+  const rowsScannedTotal = report.pages_visited.reduce(
+    (sum, page) => sum + Number(page.rows_scanned || 0),
+    0,
+  );
+  const actionableFoundTotal = report.pages_visited.reduce(
+    (sum, page) => sum + Number(page.actionable_found || 0),
+    0,
+  );
+
+  return {
+    rows_scanned_total: rowsScannedTotal,
+    actionable_found_total: actionableFoundTotal,
+    open_issues_scanned_total: report.open_issues_scanned,
+    marked_done_total: report.issues_marked_done.length,
+    preview_done_total: report.issues_preview_done.length,
+    kept_open_total: report.issues_kept_open.length,
+    skipped_unmatchable_total: report.issues_skipped_unmatchable.length,
+    source: "cloud_sql",
+    lines: [
+      "It used Cloud SQL for the bot dashboard check.",
+      `It scanned ${rowsScannedTotal} SQL bot-job rows and found ${actionableFoundTotal} actionable.`,
+      `It scanned ${report.open_issues_scanned} open bot issues in Linear.`,
+      `It marked ${report.issues_marked_done.length} issues as done.`,
+      `It previewed ${report.issues_preview_done.length} issues to mark done.`,
+      `It kept ${report.issues_kept_open.length} issues open (still on dashboard).`,
+      `It skipped ${report.issues_skipped_unmatchable.length} issues due to missing match fields.`,
+    ],
+  };
+}
+
+async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
+  if (!SQL_RECONCILE_ENABLED) {
+    throw new Error("Cloud SQL reconcile is disabled by MAILROOMNAV_SQL_RECONCILE_ENABLED=0.");
+  }
+  ensureLinearConfig();
+  if (!isSqlLookupConfigured()) {
+    throw new Error("Cloud SQL is not configured for reconcile.");
+  }
+
+  const report = {
+    environment: "production",
+    dry_run: Boolean(dryRun),
+    source: "cloud_sql",
+    run_started_at: nowIso(),
+    run_finished_at: null,
+    pages_visited: [],
+    dashboard_rows: [],
+    open_issues_scanned: 0,
+    issues_marked_done: [],
+    issues_preview_done: [],
+    issues_kept_open: [],
+    issues_skipped_unmatchable: [],
+    errors: [],
+    auth_refresh_attempted: false,
+    auth_refresh_succeeded: null,
+    summary: null,
+  };
+
+  try {
+    const team = await resolveLinearTeam();
+    const doneStateId = dryRun ? "" : await resolveLinearDoneStateId(team.id);
+    const rows = await collectSqlReconcileDashboardRows(report);
+    const liveIndex = buildSqlReconcileLiveIndex(rows);
+    const openBotIssues = await fetchSqlReconcileOpenBotIssues(team);
+    report.open_issues_scanned = openBotIssues.length;
+
+    for (const issue of openBotIssues) {
+      const contextInfo = parseSqlReconcileBotIssueContext(issue);
+      if (!contextInfo) {
+        report.issues_skipped_unmatchable.push({
+          linear_key: sanitizeSingleLine(issue?.identifier, 64),
+          title: sanitizeSingleLine(issue?.title, 240),
+          reason: "not_parseable_bot_issue",
+        });
+        continue;
+      }
+
+      const missingRequiredFields =
+        !contextInfo.job_type
+        || (SQL_RECONCILE_DOC_MATCH_JOB_TYPES.has(contextInfo.job_type) && !contextInfo.document_id)
+        || (
+          SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES.has(contextInfo.job_type)
+          && !normalizeSqlReconcilePractice(contextInfo.practice_name)
+          && !sanitizeSqlReconcilePracticeCode(contextInfo.practice_code)
+        );
+      if (missingRequiredFields) {
+        report.issues_skipped_unmatchable.push({
+          linear_key: sanitizeSingleLine(issue?.identifier, 64),
+          title: sanitizeSingleLine(issue?.title, 240),
+          job_type: contextInfo.job_type,
+          document_id: contextInfo.document_id,
+          practice_name: contextInfo.practice_name,
+          practice_code: contextInfo.practice_code,
+          reason: "missing_required_match_fields",
+        });
+        continue;
+      }
+
+      const matchResult = sqlReconcileIssueStillExists(contextInfo, liveIndex);
+      const publicEntry = {
+        linear_key: sanitizeSingleLine(issue?.identifier, 64),
+        title: sanitizeSingleLine(issue?.title, 240),
+        job_type: contextInfo.job_type,
+        document_id: contextInfo.document_id,
+        practice_name: contextInfo.practice_name,
+        practice_code: contextInfo.practice_code,
+        reason: matchResult.reason,
+      };
+
+      if (matchResult.found) {
+        report.issues_kept_open.push(publicEntry);
+        continue;
+      }
+
+      if (dryRun) {
+        report.issues_preview_done.push({
+          ...publicEntry,
+          dry_run: true,
+        });
+        continue;
+      }
+
+      await moveLinearIssueToState(issue.id, doneStateId);
+      report.issues_marked_done.push(publicEntry);
+    }
+  } catch (error) {
+    report.errors.push({
+      step: "main",
+      message: sanitizeSingleLine(error?.message || error, 300) || "Cloud SQL reconcile failed.",
+    });
+  }
+
+  report.run_finished_at = nowIso();
+  report.summary = buildSqlReconcileSummary(report);
+  return report;
+}
+
+async function finalizeInProcessBotJobsRun({
+  runId,
+  startedAt,
+  dryRun,
+  runType,
+  reportPath,
+  slack,
+  report,
+  source = "",
+}) {
+  const endedAt = nowIso();
+  const reportSummary = summarizeBotJobsReport(report);
+  const reportErrors = Array.isArray(reportSummary.reportErrors) ? reportSummary.reportErrors : [];
+  const status = reportErrors.length ? "failed" : "success";
+  const finalError = reportErrors[0] || "";
+
+  try {
+    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  } catch (error) {
+    await appendServerLog(
+      `[${nowIso()}] [${runId}] failed to write report: ${sanitizeSingleLine(error?.message || error, 260)}`
+    ).catch(() => undefined);
+  }
+
+  lastRun = {
+    runId,
+    startedAt,
+    endedAt,
+    status,
+    runType: normalizeRunType(runType),
+    dryRun: Boolean(dryRun),
+    exitCode: status === "success" ? 0 : 1,
+    signal: "",
+    error: finalError,
+    pid: null,
+    reportPath,
+    slack: sanitizeLinearSlackPayload(slack),
+    slackNotification: null,
+    source: sanitizeSingleLine(source, 80),
+    ...reportSummary,
+  };
+  activeRun = null;
+  await appendServerLog(
+    `[${nowIso()}] [${runId}] finished status=${status} source=${sanitizeSingleLine(source, 80) || "in_process"}`
+  ).catch(() => undefined);
+  await writeLastRunState().catch(() => undefined);
+
+  await delay(LINEAR_TRIGGER_SLACK_SUMMARY_DELAY_MS);
+  const slackResult = await sendSlackBotJobsRunNotification(lastRun, slack);
+  if (slackResult.attempted) {
+    appendServerLog(
+      `[${nowIso()}] [${runId}] slack ${slackResult.success ? "sent" : "failed"} targetType=${slackResult.targetType} target=${slackResult.target || "n/a"}${slackResult.error ? ` error=${slackResult.error}` : ""}`,
+    ).catch(() => undefined);
+  }
+  lastRun = {
+    ...lastRun,
+    slackNotification: sanitizeSlackNotificationResult(slackResult),
+  };
+  await writeLastRunState().catch(() => undefined);
+}
+
+async function startSqlReconcileRun({ dryRun, slack = null } = {}) {
+  if (activeRun) {
+    return { accepted: false, reason: "already_running", run: toRunPublic(activeRun) };
+  }
+
+  const runId = createRunId();
+  const startedAt = nowIso();
+  const reportPath = join(BOT_JOBS_REPORTS_DIR, `${runId}.json`);
+  activeRun = {
+    runId,
+    startedAt,
+    endedAt: "",
+    status: "running",
+    runType: "reconcile",
+    dryRun: Boolean(dryRun),
+    exitCode: null,
+    signal: "",
+    error: "",
+    pid: null,
+    reportPath,
+    slack: sanitizeLinearSlackPayload(slack),
+    slackNotification: null,
+    source: "cloud_sql",
+  };
+  await appendServerLog(
+    `[${nowIso()}] [${runId}] started type=reconcile source=cloud_sql (dryRun=${Boolean(dryRun)})`,
+  );
+  await writeLastRunState();
+
+  void (async () => {
+    const report = await runSqlReconcileBotIssues({ dryRun }).catch((error) => ({
+      environment: "production",
+      dry_run: Boolean(dryRun),
+      source: "cloud_sql",
+      run_started_at: startedAt,
+      run_finished_at: nowIso(),
+      pages_visited: [],
+      dashboard_rows: [],
+      open_issues_scanned: 0,
+      issues_marked_done: [],
+      issues_preview_done: [],
+      issues_kept_open: [],
+      issues_skipped_unmatchable: [],
+      errors: [{
+        step: "main",
+        message: sanitizeSingleLine(error?.message || error, 300) || "Cloud SQL reconcile failed.",
+      }],
+      summary: {
+        lines: ["Cloud SQL reconcile failed."],
+        actionable_found_total: 0,
+      },
+    }));
+
+    await finalizeInProcessBotJobsRun({
+      runId,
+      startedAt,
+      dryRun,
+      runType: "reconcile",
+      reportPath,
+      slack: sanitizeLinearSlackPayload(slack),
+      report,
+      source: "cloud_sql",
+    });
+  })();
+
+  return { accepted: true, run: toRunPublic(activeRun) };
 }
 
 function isOriginAllowed(origin) {
@@ -2922,6 +4221,23 @@ function validateDocmanRunPayload(payload) {
       throw new Error("Create Group requires at least one username.");
     }
   }
+}
+
+async function hydrateDocmanRunPayloadFromSql(payload) {
+  const sanitizedPayload = sanitizeDocmanRunPayload(payload);
+  if (sanitizedPayload.docmanUsername && sanitizedPayload.docmanPassword) {
+    return sanitizedPayload;
+  }
+  const practice = await lookupPracticeByOdsFromSql(sanitizedPayload.odsCode, { includeSecrets: true });
+  if (!practice) return sanitizedPayload;
+
+  return sanitizeDocmanRunPayload({
+    ...sanitizedPayload,
+    practiceName: sanitizedPayload.practiceName || practice.name,
+    docmanUsername: sanitizedPayload.docmanUsername || practice.docmanUsername,
+    docmanPassword: sanitizedPayload.docmanPassword || practice.docmanPassword,
+    onboardingInputFolderName: sanitizedPayload.onboardingInputFolderName || practice.docmanInputFolder,
+  });
 }
 
 function buildDocmanToolLaunch(payload) {
@@ -3437,7 +4753,14 @@ async function startDocmanToolRun(rawPayload) {
     return { accepted: false, reason: "already_running", run: toDocmanRunPublic(docmanActiveRun) };
   }
 
-  const payload = sanitizeDocmanRunPayload(rawPayload);
+  let payload = sanitizeDocmanRunPayload(rawPayload);
+  if (!payload.docmanUsername || !payload.docmanPassword) {
+    try {
+      payload = await hydrateDocmanRunPayloadFromSql(payload);
+    } catch (error) {
+      await appendServerLog(`[${nowIso()}] docman SQL credential lookup failed ods=${payload.odsCode || "n/a"}: ${String(error?.message || error)}`);
+    }
+  }
   validateDocmanRunPayload(payload);
 
   if (!existsSync(DOCMAN_TOOL_DIR)) {
@@ -3672,6 +4995,7 @@ const server = createServer(async (req, res) => {
           uuidField: SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD,
           statusPath: SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH,
         },
+        database: getSqlPublicConfig(),
         access: {
           enabled: Boolean(ACCESS_CONTROL_OWNER_EMAIL),
           ownerEmail: ACCESS_CONTROL_OWNER_EMAIL,
@@ -3686,6 +5010,77 @@ const server = createServer(async (req, res) => {
         },
         serverTime: nowIso(),
       });
+      return;
+    }
+
+    if (method === "GET" && path === "/practice/lookup") {
+      try {
+        const query = normalizePracticeLookupQuery(url.searchParams.get("query"));
+        const limit = Number.parseInt(String(url.searchParams.get("limit") || "12"), 10);
+        const practices = await lookupPracticesFromSql(query, { includeSecrets: false, limit });
+        sendJson(res, 200, origin, {
+          ok: true,
+          practice: practices[0] || null,
+          practices,
+          database: getSqlPublicConfig(),
+          serverTime: nowIso(),
+        });
+      } catch (error) {
+        const message = sanitizeSingleLine(error?.message, 320) || "Could not look up practice from Cloud SQL.";
+        const statusCode = /not configured/i.test(message) ? 503 : /query is required/i.test(message) ? 400 : 502;
+        sendJson(res, statusCode, origin, {
+          ok: false,
+          error: message,
+          database: getSqlPublicConfig(),
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/practice/live-counts") {
+      try {
+        const odsCode = normalizeOdsCode(url.searchParams.get("ods") || url.searchParams.get("odsCode"));
+        const counts = await lookupPracticeLiveCountsFromSql(odsCode);
+        sendJson(res, 200, origin, {
+          ok: true,
+          odsCode,
+          counts,
+          database: getSqlPublicConfig(),
+          serverTime: nowIso(),
+        });
+      } catch (error) {
+        const message = sanitizeSingleLine(error?.message, 320) || "Could not look up practice live counts from Cloud SQL.";
+        const statusCode = /not configured/i.test(message) ? 503 : /valid ods/i.test(message) ? 400 : 502;
+        sendJson(res, statusCode, origin, {
+          ok: false,
+          error: message,
+          database: getSqlPublicConfig(),
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/practice/secret") {
+      try {
+        const odsCode = normalizeOdsCode(url.searchParams.get("ods") || url.searchParams.get("odsCode"));
+        const field = sanitizeSingleLine(url.searchParams.get("field"), 80);
+        const secret = await lookupPracticeSecretFromSql(odsCode, field);
+        sendJson(res, 200, origin, {
+          ok: true,
+          odsCode,
+          field: secret.field,
+          value: secret.value,
+          present: secret.present,
+          serverTime: nowIso(),
+        });
+      } catch (error) {
+        const message = sanitizeSingleLine(error?.message, 320) || "Could not load practice secret from Cloud SQL.";
+        const statusCode = /not configured/i.test(message) ? 503 : /valid ods|unsupported/i.test(message) ? 400 : /not found/i.test(message) ? 404 : 502;
+        sendJson(res, statusCode, origin, {
+          ok: false,
+          error: message,
+        });
+      }
       return;
     }
 
@@ -3928,13 +5323,13 @@ const server = createServer(async (req, res) => {
 
     if (method === "GET" && path === "/superblocks/uuid-status") {
       try {
-        const lookup = await runSuperblocksUuidLookup(url.searchParams.get("uuid"));
+        const lookup = await runUuidStatusLookup(url.searchParams.get("uuid"));
         sendJson(res, 200, origin, {
           ok: true,
           lookup,
         });
       } catch (error) {
-        const message = sanitizeSingleLine(error?.message, 320) || "Could not look up Superblocks status.";
+        const message = sanitizeSingleLine(error?.message, 320) || "Could not look up UUID status.";
         const statusCode = /missing in MailroomNavigator\/\.env/i.test(message)
           ? 503
           : /Invalid or missing UUID/i.test(message)
@@ -3998,12 +5393,18 @@ const server = createServer(async (req, res) => {
       const body = await parseJsonBody(req).catch(() => ({}));
       const dryRun = Boolean(body?.dryRun);
       const slack = sanitizeLinearSlackPayload(body?.slack);
-      const result = await startBotJobsRun({
-        dryRun,
-        slack,
-        entryScript: BOT_JOBS_RECONCILE_ENTRY,
-        runType: "reconcile",
-      });
+      const forceLegacy = ["1", "true", "yes"].includes(
+        sanitizeSingleLine(body?.legacy || body?.forceLegacy, 12).toLowerCase(),
+      );
+      const useSqlReconcile = SQL_RECONCILE_ENABLED && isSqlLookupConfigured() && !forceLegacy;
+      const result = useSqlReconcile
+        ? await startSqlReconcileRun({ dryRun, slack })
+        : await startBotJobsRun({
+            dryRun,
+            slack,
+            entryScript: BOT_JOBS_RECONCILE_ENTRY,
+            runType: "reconcile",
+          });
       if (!result.accepted) {
         sendJson(res, 409, origin, {
           ok: false,
@@ -4025,7 +5426,6 @@ const server = createServer(async (req, res) => {
       let payload = null;
       try {
         payload = sanitizeDocmanRunPayload(await parseJsonBody(req).catch(() => ({})));
-        validateDocmanRunPayload(payload);
       } catch (error) {
         sendJson(res, 400, origin, {
           ok: false,
@@ -4053,9 +5453,11 @@ const server = createServer(async (req, res) => {
         });
       } catch (error) {
         await appendServerLog(`[${nowIso()}] docman run failed: ${String(error?.message || error)}`);
-        sendJson(res, 502, origin, {
+        const message = sanitizeSingleLine(error?.message, 260) || "Could not start docman-tool.";
+        const statusCode = /missing|invalid|required|requires/i.test(message) ? 400 : 502;
+        sendJson(res, statusCode, origin, {
           ok: false,
-          error: sanitizeSingleLine(error?.message, 260) || "Could not start docman-tool.",
+          error: message,
         });
       }
       return;
@@ -4118,9 +5520,12 @@ const server = createServer(async (req, res) => {
         const slack = created?.duplicate
           ? { attempted: false, success: false, skipped: true }
           : await sendSlackIssueNotification(payload, created);
+        const reopenSummary = created?.duplicate
+          ? ` reopen=${created.reopened ? created.reopenStateName || "yes" : created.reopenError ? `failed:${created.reopenError}` : created.reopenSkipped || "not_changed"}`
+          : "";
         await appendServerLog(
           created?.duplicate
-            ? `[${nowIso()}] linear issue duplicate reused ${created.issue.identifier} doc=${payload.documentId || "n/a"} job=${payload.failedJobId || "n/a"} dedupe=${payload.dedupeKey || "n/a"}`
+            ? `[${nowIso()}] linear issue duplicate reused ${created.issue.identifier} doc=${payload.documentId || "n/a"} job=${payload.failedJobId || "n/a"} dedupe=${payload.dedupeKey || "n/a"}${reopenSummary}`
             : `[${nowIso()}] linear issue created ${created.issue.identifier} doc=${payload.documentId} job=${payload.failedJobId || "n/a"}`,
         );
         if (slack?.attempted) {
@@ -4138,6 +5543,10 @@ const server = createServer(async (req, res) => {
         sendJson(res, created?.duplicate ? 200 : 201, origin, {
           ok: true,
           duplicate: Boolean(created?.duplicate),
+          reopened: Boolean(created?.reopened),
+          reopenStateName: sanitizeSingleLine(created?.reopenStateName, 120),
+          reopenError: sanitizeSingleLine(created?.reopenError, 260),
+          reopenSkipped: sanitizeSingleLine(created?.reopenSkipped, 120),
           issue: created.issue,
           team: {
             key: created.team.key,
