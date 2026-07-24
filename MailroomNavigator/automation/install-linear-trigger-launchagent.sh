@@ -11,7 +11,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNNER_PATH="$SCRIPT_DIR/start-linear-trigger-server.sh"
 ENV_FILE="$REPO_ROOT/.env"
 SERVER_SCRIPT="$SCRIPT_DIR/linear-trigger-server.mjs"
-BOT_JOBS_ENTRY="${LINEAR_TRIGGER_BOT_JOBS_ENTRY:-bot-jobs.js}"
 PORT="${LINEAR_TRIGGER_SERVER_PORT:-4817}"
 HOST="${LINEAR_TRIGGER_SERVER_HOST:-127.0.0.1}"
 
@@ -19,9 +18,29 @@ if [[ "$HOST" == "0.0.0.0" || "$HOST" == "::" || "$HOST" == "[::]" ]]; then
   HOST="127.0.0.1"
 fi
 
+read_env_value() {
+  local key="$1"
+  local line value
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 1
+  fi
+  line="$(grep -E "^[[:space:]]*${key}=" "$ENV_FILE" | tail -n 1 || true)"
+  if [[ -z "$line" ]]; then
+    return 1
+  fi
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  printf '%s\n' "$value"
+}
+
 resolve_default_bot_jobs_dir() {
   local candidates=(
     "$REPO_ROOT/../bot-jobs-linear"
+    "$HOME/bot-jobs-linear"
     "$HOME/Projects/bot-jobs-linear"
   )
   local candidate
@@ -35,7 +54,8 @@ resolve_default_bot_jobs_dir() {
   printf '%s\n' "${candidates[0]}"
 }
 
-BOT_JOBS_DIR="${LINEAR_TRIGGER_BOT_JOBS_DIR:-$(resolve_default_bot_jobs_dir)}"
+BOT_JOBS_DIR="${LINEAR_TRIGGER_BOT_JOBS_DIR:-$(read_env_value LINEAR_TRIGGER_BOT_JOBS_DIR || resolve_default_bot_jobs_dir)}"
+BOT_JOBS_ENTRY="${LINEAR_TRIGGER_BOT_JOBS_ENTRY:-$(read_env_value LINEAR_TRIGGER_BOT_JOBS_ENTRY || printf '%s\n' bot-jobs.js)}"
 
 LABEL="ai.betterletter.mailroomnavigator.linear-trigger-server"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"

@@ -39,15 +39,52 @@
   function canUseNavigatorClipboardApi() {
     try {
       const protocol = String(globalThis?.location?.protocol || '').toLowerCase();
-      return protocol === 'chrome-extension:' || protocol === 'moz-extension:';
+      if (protocol !== 'chrome-extension:' && protocol !== 'moz-extension:') {
+        return false;
+      }
+
+      const policy = document?.permissionsPolicy || document?.featurePolicy;
+      if (policy && typeof policy.allowsFeature === 'function') {
+        return policy.allowsFeature('clipboard-write');
+      }
+
+      return true;
     } catch (_error) {
       return false;
     }
   }
 
+  function copyTextViaBackground(value) {
+    return new Promise((resolve) => {
+      try {
+        if (!chrome?.runtime?.sendMessage) {
+          resolve(false);
+          return;
+        }
+
+        chrome.runtime.sendMessage(
+          { action: 'copyTextToClipboard', value },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              resolve(false);
+              return;
+            }
+            resolve(Boolean(response?.success));
+          }
+        );
+      } catch (_error) {
+        resolve(false);
+      }
+    });
+  }
+
   async function copyTextToClipboard(text) {
     const value = String(text ?? '');
     if (!value) return false;
+
+    if (await copyTextViaBackground(value)) {
+      return true;
+    }
 
     try {
       if (canUseNavigatorClipboardApi() && navigator?.clipboard?.writeText) {

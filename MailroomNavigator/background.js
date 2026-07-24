@@ -37,6 +37,8 @@ const BETTERLETTER_IDENTITY_SNAPSHOT_STORAGE_KEY = 'betterletterIdentitySnapshot
 const EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY = 'extensionAccessStateSnapshotV1';
 const ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY = 'accessControlServiceConfigV1';
 const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
+const PRACTICE_SECRET_OVERRIDES_STORAGE_KEY = 'practiceSecretOverridesV1';
+const PRACTICE_SECRET_HISTORY_STORAGE_KEY = 'practiceSecretHistoryV1';
 const ACCESS_CONTROL_REMOTE_TIMEOUT_MS = 6000;
 const ACCESS_CONTROL_SHARED_KEY_HEADER = 'X-MailroomNavigator-Access-Key';
 const DEPLOYMENT_DEFAULTS = globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS || {};
@@ -47,6 +49,12 @@ const liveCountsTempFetchInFlightByOds = new Map();
 const liveCountsLastTempFetchAtByOds = new Map();
 const liveCountsResolveInFlightByOds = new Map();
 const LEGACY_MAILROOM_API_STORAGE_KEYS = ['mailroomApiConfigV1', 'MAILROOM_API_URL', 'MAILROOM_API_KEY'];
+const PRACTICE_SECRET_FIELDS = new Set(['emisApiPassword', 'emisWebPassword', 'docmanPassword']);
+const PRACTICE_SECRET_ADMIN_FIELD_NAMES = {
+    emisApiPassword: 'ehr_settings[emis_api][password]',
+    emisWebPassword: 'ehr_settings[emis_web][password]',
+    docmanPassword: 'ehr_settings[docman][password]'
+};
 const MORNING_DASHBOARD_ALERT_STATE_KEY = 'morningDashboardAlertStateV2';
 const MORNING_DASHBOARD_ALERT_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
 const MORNING_DASHBOARD_ALERT_MIN_INTERVAL_MS = 10 * 60 * 1000;
@@ -115,6 +123,11 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     getLinearBotJobsTriggerStatus: ['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'],
     runDocmanToolAction: ['practice_navigator'],
     getDocmanToolRunStatus: ['practice_navigator'],
+    getPracticeSecret: ['practice_navigator'],
+    getPracticeSecretHistory: ['practice_navigator'],
+    savePracticeSecretOverride: ['practice_navigator'],
+    savePracticeSecretToAdminPanel: ['practice_navigator'],
+    undoPracticeSecretSave: ['practice_navigator'],
     lookupSuperblocksUuidStatus: ['job_panel']
 };
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
@@ -299,6 +312,158 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
     return { success: true };
 }
 
+async function getPracticeAdminTabForEhrSettings(odsCode) {
+    const normalizedOds = String(odsCode || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        throw new Error('Invalid practice code.');
+    }
+
+    const targetUrl = buildPracticeAdminUrl(normalizedOds);
+    let tabId = await findAndFocusPracticeTab(normalizedOds);
+    if (!tabId) {
+        const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
+        tabId = newTab.id;
+    }
+
+    await waitForTabComplete(tabId, 15000).catch(() => undefined);
+    await clickLiveViewTab(tabId, 'ehr_settings');
+    return tabId;
+}
+
+async function savePracticeSecretViaAdminPage({ odsCode, field, value }) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    const normalizedValue = normalizePracticeSecretOverrideValue(value);
+    const fieldName = PRACTICE_SECRET_ADMIN_FIELD_NAMES[normalizedField] || '';
+
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        throw new Error('Valid ODS code is required.');
+    }
+    if (!fieldName || !PRACTICE_SECRET_FIELDS.has(normalizedField)) {
+        throw new Error('Unsupported password field.');
+    }
+    if (normalizedValue.length < 8) {
+        throw new Error('Password is too short to save.');
+    }
+
+    const tabId = await getPracticeAdminTabForEhrSettings(normalizedOds);
+    const [executionResult] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async ({ fieldName: targetFieldName, passwordValue }) => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const findPasswordInput = () => {
+                const byName = document.getElementsByName(targetFieldName)?.[0];
+                if (byName instanceof HTMLInputElement) return byName;
+
+                const byId = document.getElementById(targetFieldName);
+                if (byId instanceof HTMLInputElement) return byId;
+
+                return Array.from(document.querySelectorAll('input[type="password"], input[name*="[password]"]'))
+                    .find((input) => input.getAttribute('name') === targetFieldName || input.id === targetFieldName) || null;
+            };
+
+            const isVisible = (element) => {
+                if (!(element instanceof HTMLElement)) return false;
+                const style = window.getComputedStyle(element);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            const findSaveButton = (root) => {
+                const candidates = Array.from((root || document).querySelectorAll('button[type="submit"], input[type="submit"], button'));
+                return candidates.find((candidate) => {
+                    if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) return false;
+                    const text = normalizeText(candidate.textContent || candidate.value || candidate.getAttribute('aria-label'));
+                    return text === 'save' || text.includes('save');
+                }) || null;
+            };
+
+            let input = null;
+            const inputDeadline = Date.now() + 8000;
+            while (Date.now() < inputDeadline) {
+                input = findPasswordInput();
+                if (input && isVisible(input)) break;
+                await wait(200);
+            }
+            if (!input || !isVisible(input)) {
+                return {
+                    ok: false,
+                    error: `Could not find ${targetFieldName} on the EHR settings page.`
+                };
+            }
+
+            input.scrollIntoView({ block: 'center', inline: 'center' });
+            input.focus();
+            const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            if (valueSetter) valueSetter.call(input, passwordValue);
+            else input.value = passwordValue;
+
+            input.dispatchEvent(new InputEvent('input', {
+                bubbles: true,
+                cancelable: true,
+                data: passwordValue,
+                inputType: 'insertReplacementText'
+            }));
+            input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
+
+            const form = input.closest('form') || document.querySelector('form');
+            let saveButton = null;
+            const saveDeadline = Date.now() + 6000;
+            while (Date.now() < saveDeadline) {
+                saveButton = findSaveButton(form || document);
+                if (saveButton && !saveButton.disabled && saveButton.getAttribute('aria-disabled') !== 'true') break;
+                await wait(200);
+            }
+
+            if (!saveButton) {
+                return {
+                    ok: false,
+                    error: 'Could not find the EHR settings Save button.'
+                };
+            }
+
+            if (saveButton.disabled || saveButton.getAttribute('aria-disabled') === 'true') {
+                return {
+                    ok: false,
+                    error: 'The EHR settings Save button stayed disabled after changing the password.'
+                };
+            }
+
+            saveButton.scrollIntoView({ block: 'center', inline: 'center' });
+            saveButton.focus();
+            try {
+                saveButton.click();
+            } catch (error) {
+                ['mousedown', 'mouseup', 'click'].forEach((type) => {
+                    saveButton.dispatchEvent(new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    }));
+                });
+            }
+
+            await wait(650);
+            return { ok: true };
+        },
+        args: [{ fieldName, passwordValue: normalizedValue }]
+    });
+
+    const result = executionResult?.result || {};
+    if (!result.ok) {
+        throw new Error(sanitizeSingleLine(result.error, 240) || 'Could not save password in BetterLetter admin panel.');
+    }
+
+    return {
+        field: normalizedField,
+        value: normalizedValue,
+        tabId
+    };
+}
+
 // --- 3. SYSTEM UTILITIES ---
 
 async function setupOffscreen() {
@@ -306,13 +471,25 @@ async function setupOffscreen() {
     if (contexts.length > 0) return;
     await chrome.offscreen.createDocument({
         url: 'offscreen.html',
-        reasons: ['DOM_SCRAPING'],
-        justification: 'Silent data sync.'
+        reasons: ['DOM_SCRAPING', 'CLIPBOARD'],
+        justification: 'Silent data sync and extension-owned clipboard copy fallback.'
     });
 }
 
 function isBetterLetterUrl(url) {
     return typeof url === 'string' && url.startsWith(`${BETTERLETTER_ORIGIN}/`);
+}
+
+function isAllowedExtensionTabUrl(url) {
+    try {
+        const parsed = new URL(String(url || ''));
+        if (parsed.protocol !== 'https:') return false;
+        if (parsed.origin === BETTERLETTER_ORIGIN) return true;
+        if (parsed.hostname === 'linear.app' || parsed.hostname.endsWith('.linear.app')) return true;
+        return false;
+    } catch (error) {
+        return false;
+    }
 }
 
 function isBetterLetterSignInUrl(url) {
@@ -357,9 +534,22 @@ function sanitizeMultiline(value, maxLength = 12000) {
         .slice(0, maxLength);
 }
 
+function normalizeUuidLookupInput(value) {
+    const raw = sanitizeSingleLine(value, 240).replace(/(?:…|\.\.\.)$/u, '').trim();
+    if (!raw) return '';
+
+    const fullUuidMatch = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    if (fullUuidMatch) return fullUuidMatch[0].toLowerCase();
+
+    const partialMatch = raw.match(/[0-9a-f-]{6,80}/i);
+    const partial = sanitizeSingleLine(partialMatch?.[0] || '', 80)
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase();
+    return /^[0-9a-f-]{6,80}$/.test(partial) ? partial : '';
+}
+
 function extractUuid(value) {
-    const match = sanitizeSingleLine(value, 240).match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
-    return match ? match[0].toLowerCase() : '';
+    return normalizeUuidLookupInput(value);
 }
 
 function normalizeEmail(value) {
@@ -674,6 +864,10 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
                 url: sanitizeSingleLine(serverPayload?.issue?.url, 1000)
             },
             duplicate: Boolean(serverPayload?.duplicate),
+            reopened: Boolean(serverPayload?.reopened),
+            reopenStateName: sanitizeSingleLine(serverPayload?.reopenStateName, 120),
+            reopenError: sanitizeSingleLine(serverPayload?.reopenError, 260),
+            reopenSkipped: sanitizeSingleLine(serverPayload?.reopenSkipped, 120),
             team: {
                 key: sanitizeSingleLine(serverPayload?.team?.key, 32),
                 name: sanitizeSingleLine(serverPayload?.team?.name, 120)
@@ -862,6 +1056,7 @@ function sanitizeSuperblocksLookupResult(rawLookup = null) {
         return {
             uuid: '',
             found: false,
+            source: '',
             status: '',
             detail: '',
             checkedAt: '',
@@ -872,11 +1067,18 @@ function sanitizeSuperblocksLookupResult(rawLookup = null) {
     return {
         uuid: extractUuid(rawLookup.uuid),
         found: Boolean(rawLookup.found),
+        source: sanitizeSingleLine(rawLookup.source, 80),
         status: sanitizeSingleLine(rawLookup.status, 240),
         detail: sanitizeSingleLine(rawLookup.detail, 320),
         documentId: sanitizeSingleLine(rawLookup.documentId, 80),
         documentLink: sanitizeSingleLine(rawLookup.documentLink, 1200),
         rejectionReason: sanitizeSingleLine(rawLookup.rejectionReason, 320),
+        matchedUuid: sanitizeSingleLine(rawLookup.matchedUuid, 160),
+        inputFileName: sanitizeSingleLine(rawLookup.inputFileName, 260),
+        rejectionId: sanitizeSingleLine(rawLookup.rejectionId, 80),
+        rejectionMarkedBy: sanitizeSingleLine(rawLookup.rejectionMarkedBy, 180),
+        rejectionProcessingStatus: sanitizeSingleLine(rawLookup.rejectionProcessingStatus, 120),
+        matchType: sanitizeSingleLine(rawLookup.matchType, 80),
         checkedAt: sanitizeSingleLine(rawLookup.checkedAt, 80),
         matchedStatusPath: sanitizeSingleLine(rawLookup.matchedStatusPath, 160)
     };
@@ -1334,6 +1536,285 @@ async function callLinearTriggerServer(path, options = {}) {
     return callJsonService(LINEAR_TRIGGER_SERVER_BASE_URL, path, options);
 }
 
+function sanitizeSqlPracticeDetails(rawPractice = null) {
+    if (!rawPractice || typeof rawPractice !== 'object') return null;
+    const odsCode = sanitizeSingleLine(rawPractice.odsCode || rawPractice.ods || rawPractice.id, 16).toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(odsCode)) return null;
+
+    return {
+        id: odsCode,
+        ods: odsCode,
+        odsCode,
+        name: sanitizeSingleLine(rawPractice.name || rawPractice.displayName, 240),
+        displayName: sanitizeSingleLine(rawPractice.displayName || rawPractice.name, 240),
+        cdb: sanitizeSingleLine(rawPractice.cdb || rawPractice.practiceCDB, 80),
+        practiceCDB: sanitizeSingleLine(rawPractice.practiceCDB || rawPractice.cdb, 80),
+        ehrType: sanitizeSingleLine(rawPractice.ehrType, 80),
+        serviceLevel: sanitizeSingleLine(rawPractice.serviceLevel, 80),
+        collectionQuota: sanitizeSingleLine(rawPractice.collectionQuota, 40),
+        collectedToday: sanitizeSingleLine(rawPractice.collectedToday, 40),
+        fullServiceQuota: sanitizeSingleLine(rawPractice.fullServiceQuota, 40),
+        fullServiceQuotaUsed: sanitizeSingleLine(rawPractice.fullServiceQuotaUsed, 40),
+        active: Boolean(rawPractice.active),
+        codingEnabled: Boolean(rawPractice.codingEnabled),
+        selfService: Boolean(rawPractice.selfService),
+        source: sanitizeSingleLine(rawPractice.source, 80) || 'cloud-sql',
+        practiceCdb: sanitizeSingleLine(rawPractice.practiceCDB || rawPractice.cdb, 80),
+        emisApiUsername: sanitizeSingleLine(rawPractice.emisApiUsername, 240),
+        emisApiPassword: '',
+        emisApiPasswordPresent: Boolean(rawPractice.emisApiPasswordPresent),
+        emisWebUsername: sanitizeSingleLine(rawPractice.emisWebUsername, 240),
+        emisWebPassword: '',
+        emisWebPasswordPresent: Boolean(rawPractice.emisWebPasswordPresent),
+        emisWebDummyNhsNumber: sanitizeSingleLine(rawPractice.emisWebDummyNhsNumber, 80),
+        docmanUsername: sanitizeSingleLine(rawPractice.docmanUsername, 240),
+        docmanPassword: '',
+        docmanPasswordPresent: Boolean(rawPractice.docmanPasswordPresent),
+        docmanDummyNhsNumber: sanitizeSingleLine(rawPractice.docmanDummyNhsNumber, 80),
+        docmanInputFolder: sanitizeSingleLine(rawPractice.docmanInputFolder, 240),
+        docmanProcessingFolder: sanitizeSingleLine(rawPractice.docmanProcessingFolder, 240),
+        docmanFilingFolder: sanitizeSingleLine(rawPractice.docmanFilingFolder, 240),
+        docmanRejectedFolder: sanitizeSingleLine(rawPractice.docmanRejectedFolder, 240)
+    };
+}
+
+async function fetchPracticeDetailsFromSql(query, { timeoutMs = 2200 } = {}) {
+    const normalizedQuery = sanitizeSingleLine(query, 120);
+    if (!normalizedQuery) return null;
+
+    try {
+        const { response, payload } = await callLinearTriggerServer(`/practice/lookup?query=${encodeURIComponent(normalizedQuery)}&limit=1`, {
+            method: 'GET',
+            timeoutMs
+        });
+        if (!response.ok || !payload?.ok) return null;
+        return sanitizeSqlPracticeDetails(payload.practice);
+    } catch (error) {
+        return null;
+    }
+}
+
+function sanitizeSqlLiveCounts(rawCounts = null) {
+    if (!rawCounts || typeof rawCounts !== 'object') return null;
+    return {
+        preparing: normalizeLetterCountValue(rawCounts.preparing),
+        edit: normalizeLetterCountValue(rawCounts.edit),
+        review: normalizeLetterCountValue(rawCounts.review),
+        coding: normalizeLetterCountValue(rawCounts.coding),
+        rejected: normalizeLetterCountValue(rawCounts.rejected),
+        source: sanitizeSingleLine(rawCounts.source, 80) || 'cloud-sql',
+        fetchedAt: Date.now()
+    };
+}
+
+async function fetchPracticeLiveCountsFromSql(odsCode, { timeoutMs = 2400 } = {}) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return null;
+
+    try {
+        const { response, payload } = await callLinearTriggerServer(`/practice/live-counts?ods=${encodeURIComponent(normalizedOds)}`, {
+            method: 'GET',
+            timeoutMs
+        });
+        if (!response.ok || !payload?.ok) return null;
+        return sanitizeSqlLiveCounts(payload.counts);
+    } catch (error) {
+        return null;
+    }
+}
+
+async function fetchPracticeSecretFromSql(odsCode, field, { timeoutMs = 2400 } = {}) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return null;
+    if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) return null;
+
+    try {
+        const { response, payload } = await callLinearTriggerServer(`/practice/secret?ods=${encodeURIComponent(normalizedOds)}&field=${encodeURIComponent(normalizedField)}`, {
+            method: 'GET',
+            timeoutMs
+        });
+        if (!response.ok || !payload?.ok) return null;
+        return {
+            field: sanitizeSingleLine(payload.field, 80),
+            value: String(payload.value || '').trim().slice(0, 1024),
+            present: Boolean(payload.present)
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function normalizePracticeSecretOverrideValue(value) {
+    return String(value || '').replace(/\u0000/g, '').trim().slice(0, 1024);
+}
+
+async function getPracticeSecretOverrides() {
+    const result = await chrome.storage.local.get([PRACTICE_SECRET_OVERRIDES_STORAGE_KEY]);
+    const rawOverrides = result?.[PRACTICE_SECRET_OVERRIDES_STORAGE_KEY];
+    return rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides)
+        ? rawOverrides
+        : {};
+}
+
+async function getPracticeSecretOverride(odsCode, field) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return '';
+    if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) return '';
+    const overrides = await getPracticeSecretOverrides();
+    return normalizePracticeSecretOverrideValue(overrides?.[normalizedOds]?.[normalizedField]);
+}
+
+function normalizePracticeSecretHistoryEntries(entries) {
+    if (!Array.isArray(entries)) return [];
+    const seenValues = new Set();
+    const normalizedEntries = [];
+
+    for (const entry of entries) {
+        const value = normalizePracticeSecretOverrideValue(
+            entry && typeof entry === 'object' ? entry.value : entry
+        );
+        if (!value || seenValues.has(value)) continue;
+        seenValues.add(value);
+        normalizedEntries.push({
+            value,
+            savedAt: sanitizeSingleLine(entry?.savedAt, 40) || new Date().toISOString(),
+            source: sanitizeSingleLine(entry?.source, 40) || 'unknown'
+        });
+        if (normalizedEntries.length >= 3) break;
+    }
+
+    return normalizedEntries;
+}
+
+async function getPracticeSecretHistoryStore() {
+    const result = await chrome.storage.local.get([PRACTICE_SECRET_HISTORY_STORAGE_KEY]);
+    const rawHistory = result?.[PRACTICE_SECRET_HISTORY_STORAGE_KEY];
+    return rawHistory && typeof rawHistory === 'object' && !Array.isArray(rawHistory)
+        ? rawHistory
+        : {};
+}
+
+async function getPracticeSecretHistory(odsCode, field) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return [];
+    if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) return [];
+
+    const history = await getPracticeSecretHistoryStore();
+    return normalizePracticeSecretHistoryEntries(history?.[normalizedOds]?.[normalizedField]);
+}
+
+async function savePracticeSecretHistory(odsCode, field, entries) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        throw new Error('Valid ODS code is required.');
+    }
+    if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) {
+        throw new Error('Unsupported password field.');
+    }
+
+    const normalizedEntries = normalizePracticeSecretHistoryEntries(entries);
+    const history = await getPracticeSecretHistoryStore();
+    const nextForPractice = {
+        ...(history[normalizedOds] && typeof history[normalizedOds] === 'object' ? history[normalizedOds] : {}),
+        [normalizedField]: normalizedEntries
+    };
+    const nextHistory = {
+        ...history,
+        [normalizedOds]: nextForPractice
+    };
+    await chrome.storage.local.set({ [PRACTICE_SECRET_HISTORY_STORAGE_KEY]: nextHistory });
+    return normalizedEntries;
+}
+
+async function rememberPracticeSecretHistoryEntry(odsCode, field, value, { source = 'unknown', excludeValue = '' } = {}) {
+    const previousValue = normalizePracticeSecretOverrideValue(value);
+    const normalizedExcludeValue = normalizePracticeSecretOverrideValue(excludeValue);
+    if (!previousValue || previousValue === normalizedExcludeValue) {
+        return getPracticeSecretHistory(odsCode, field);
+    }
+
+    const currentHistory = await getPracticeSecretHistory(odsCode, field);
+    const nextHistory = [
+        {
+            value: previousValue,
+            savedAt: new Date().toISOString(),
+            source
+        },
+        ...currentHistory.filter((entry) => normalizePracticeSecretOverrideValue(entry.value) !== previousValue)
+    ];
+    return savePracticeSecretHistory(odsCode, field, nextHistory);
+}
+
+async function savePracticeSecretOverride(odsCode, field, value) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    const normalizedField = sanitizeSingleLine(field, 80);
+    const normalizedValue = normalizePracticeSecretOverrideValue(value);
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) {
+        throw new Error('Valid ODS code is required.');
+    }
+    if (!PRACTICE_SECRET_FIELDS.has(normalizedField)) {
+        throw new Error('Unsupported password field.');
+    }
+    if (normalizedValue.length < 8) {
+        throw new Error('Password is too short to save.');
+    }
+
+    const overrides = await getPracticeSecretOverrides();
+    const nextForPractice = {
+        ...(overrides[normalizedOds] && typeof overrides[normalizedOds] === 'object' ? overrides[normalizedOds] : {}),
+        [normalizedField]: normalizedValue
+    };
+    const nextOverrides = {
+        ...overrides,
+        [normalizedOds]: nextForPractice
+    };
+    await chrome.storage.local.set({ [PRACTICE_SECRET_OVERRIDES_STORAGE_KEY]: nextOverrides });
+    return {
+        field: normalizedField,
+        value: normalizedValue
+    };
+}
+
+async function getPracticeSecretValue(odsCode, field) {
+    const overrideValue = await getPracticeSecretOverride(odsCode, field);
+    if (overrideValue) {
+        return {
+            field: sanitizeSingleLine(field, 80),
+            value: overrideValue,
+            source: 'browser'
+        };
+    }
+
+    const sqlSecret = await fetchPracticeSecretFromSql(odsCode, field);
+    if (!sqlSecret?.value) return sqlSecret;
+    return {
+        ...sqlSecret,
+        source: 'cloud-sql'
+    };
+}
+
+async function applyPracticeSecretOverrides(odsCode, ehrSettings) {
+    const normalizedOds = sanitizeSingleLine(odsCode, 16).toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(normalizedOds)) return ehrSettings;
+
+    const overrides = await getPracticeSecretOverrides();
+    const practiceOverrides = overrides?.[normalizedOds];
+    if (!practiceOverrides || typeof practiceOverrides !== 'object') return ehrSettings;
+
+    const next = { ...ehrSettings };
+    for (const field of PRACTICE_SECRET_FIELDS) {
+        const value = normalizePracticeSecretOverrideValue(practiceOverrides[field]);
+        if (!value) continue;
+        next[field] = value;
+        next[`${field}Present`] = true;
+    }
+    return next;
+}
+
 async function callAccessControlService(path, options = {}) {
     const config = await getStoredAccessControlServiceConfig();
     const usingRemoteConfig = Boolean(config.enabled && config.baseUrl);
@@ -1448,7 +1929,14 @@ function normalizeLinearTriggerError(error) {
         return 'Local trigger service timed out.';
     }
 
-    const message = sanitizeSingleLine(error?.message, 220);
+    const message = sanitizeSingleLine(
+        error?.message
+            || error?.error
+            || error?.reason
+            || error?.detail
+            || error,
+        320
+    );
     if (!message) {
         return 'Local trigger service is unavailable.';
     }
@@ -1644,27 +2132,11 @@ async function handleRunDocmanToolAction(rawPayload) {
             'These actions run the local docman-tool on your machine, so they still need the optional local trigger service.'
         );
     }
-    try {
-        const payload = sanitizeDocmanToolRunPayload(rawPayload);
-        const ehrSettings = /^[A-Z]\d{5}$/.test(payload.odsCode)
-            ? await fetchPracticeEhrSettingsByOds(payload.odsCode)
-            : createEmptyPracticeEhrSettings();
-        const directDocmanPayload = sanitizeDocmanToolRunPayload({
-            ...payload,
-            docmanUsername: ehrSettings.docmanUsername || payload.docmanUsername,
-            docmanPassword: ehrSettings.docmanPassword || payload.docmanPassword
-        });
 
-        if (!directDocmanPayload.docmanUsername || !directDocmanPayload.docmanPassword) {
-            return {
-                success: false,
-                error: 'Could not read Docman username/password from BetterLetter settings. Keep a signed-in BetterLetter tab open for this practice and retry.'
-            };
-        }
-
+    const startDocmanRun = async (runPayload) => {
         const { response, payload: serverPayload } = await callLinearTriggerServer('/docman/run', {
             method: 'POST',
-            body: directDocmanPayload
+            body: runPayload
         });
         const run = sanitizeDocmanToolRun(serverPayload?.run);
 
@@ -1687,6 +2159,7 @@ async function handleRunDocmanToolAction(rawPayload) {
             }
             return {
                 success: false,
+                statusCode: response.status,
                 error: serverError || `Trigger service failed with status ${response.status}.`
             };
         }
@@ -1695,6 +2168,49 @@ async function handleRunDocmanToolAction(rawPayload) {
             success: true,
             run
         };
+    };
+
+    try {
+        const payload = sanitizeDocmanToolRunPayload(rawPayload);
+        const sqlFirstResult = await startDocmanRun(payload);
+        if (sqlFirstResult.success || sqlFirstResult.running) {
+            return sqlFirstResult;
+        }
+
+        const shouldFallbackToScrape = (
+            sqlFirstResult.statusCode === 400
+            && /docman username\/password|username\/password|credentials|missing/i.test(sqlFirstResult.error || '')
+        );
+        if (!shouldFallbackToScrape) {
+            return {
+                success: false,
+                error: sqlFirstResult.error || 'Could not start Docman tool.'
+            };
+        }
+
+        const ehrSettings = /^[A-Z]\d{5}$/.test(payload.odsCode)
+            ? await fetchPracticeEhrSettingsByOds(payload.odsCode)
+            : createEmptyPracticeEhrSettings();
+        const directDocmanPayload = sanitizeDocmanToolRunPayload({
+            ...payload,
+            docmanUsername: ehrSettings.docmanUsername || payload.docmanUsername,
+            docmanPassword: ehrSettings.docmanPassword || payload.docmanPassword
+        });
+
+        if (!directDocmanPayload.docmanUsername || !directDocmanPayload.docmanPassword) {
+            return {
+                success: false,
+                error: 'Could not read Docman username/password from Cloud SQL or BetterLetter settings. Check Cloud SQL proxy/service config, or keep a signed-in BetterLetter tab open for this practice and retry.'
+            };
+        }
+
+        const fallbackResult = await startDocmanRun(directDocmanPayload);
+        return fallbackResult.success || fallbackResult.running
+            ? fallbackResult
+            : {
+                success: false,
+                error: fallbackResult.error || 'Could not start Docman tool.'
+            };
     } catch (error) {
         return {
             success: false,
@@ -1739,8 +2255,8 @@ async function handleGetDocmanToolRunStatus() {
 async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
     if (isServerlessLiteModeEnabled()) {
         return buildServerlessLiteUnsupportedResponse(
-            'Superblocks UUID Lookup',
-            'The current lookup still depends on a token-backed workflow. We can add a browser-safe direct config next if you want.'
+            'UUID Lookup',
+            'UUID lookup needs the local trigger service and Cloud SQL/Superblocks config.'
         );
     }
     try {
@@ -3544,11 +4060,14 @@ function createEmptyPracticeEhrSettings() {
         practiceCdb: '',
         emisApiUsername: '',
         emisApiPassword: '',
+        emisApiPasswordPresent: false,
         emisWebUsername: '',
         emisWebPassword: '',
+        emisWebPasswordPresent: false,
         emisWebDummyNhsNumber: '',
         docmanUsername: '',
         docmanPassword: '',
+        docmanPasswordPresent: false,
         docmanDummyNhsNumber: '',
         docmanInputFolder: '',
         docmanProcessingFolder: '',
@@ -3896,11 +4415,14 @@ async function fetchPracticeEhrSettingsByOds(odsCode, preferredTabId = null) {
                 practiceCdb: getFieldValue(cdbInput),
                 emisApiUsername: emisApi.username,
                 emisApiPassword: emisApi.password,
+                emisApiPasswordPresent: Boolean(emisApi.password),
                 emisWebUsername: emisWeb.username,
                 emisWebPassword: emisWeb.password,
+                emisWebPasswordPresent: Boolean(emisWeb.password),
                 emisWebDummyNhsNumber: emisWeb.dummyNhsNumber,
                 docmanUsername: docman.username,
                 docmanPassword: docman.password,
+                docmanPasswordPresent: Boolean(docman.password),
                 docmanDummyNhsNumber: docman.dummyNhsNumber,
                 docmanInputFolder: docman.inputFolder,
                 docmanProcessingFolder: docman.processingFolder,
@@ -4456,6 +4978,19 @@ async function fetchLiveMailroomCountsByOds(odsCode, options = {}) {
 
     const cachedCounts = getCachedLiveCounts(normalizedOds);
     let aggregatedCounts = createEmptyLiveCounts();
+
+    const countsFromSql = await fetchPracticeLiveCountsFromSql(normalizedOds);
+    if (countsFromSql && hasCompleteLiveCounts(countsFromSql)) {
+        setCachedLiveCounts(normalizedOds, countsFromSql, 'cloud-sql');
+        return {
+            preparing: normalizeLetterCountValue(countsFromSql.preparing),
+            edit: normalizeLetterCountValue(countsFromSql.edit),
+            review: normalizeLetterCountValue(countsFromSql.review),
+            coding: normalizeLetterCountValue(countsFromSql.coding),
+            rejected: normalizeLetterCountValue(countsFromSql.rejected),
+            fetchedAt: Date.now()
+        };
+    }
 
     // First preference: parse hydrated values directly from already open mailroom tabs.
     // This captures LiveView-updated counters that can differ from static server HTML.
@@ -5162,6 +5697,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
                 const iframe = document.createElement('iframe');
                 iframe.title = 'BetterLetter Panel';
+                iframe.allow = 'clipboard-write';
                 iframe.dataset.pendingSrc = buildExpectedSrc();
                 if (!shouldForceCollapsed) {
                     ensureIframeLoaded(iframe);
@@ -5397,7 +5933,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (message.action === 'openUrlInNewTab') {
             const targetUrl = String(message.url || '').trim();
-            if (!isBetterLetterUrl(targetUrl)) {
+            if (!isAllowedExtensionTabUrl(targetUrl)) {
                 return { success: false, error: 'Invalid URL for tab open.' };
             }
             const tabOptions = { url: targetUrl, active: true };
@@ -5406,6 +5942,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             await chrome.tabs.create(tabOptions);
             return { success: true };
+        }
+        if (message.action === 'copyTextToClipboard') {
+            const value = String(message.value ?? '');
+            if (!value) return { success: false, error: 'Nothing to copy.' };
+            await setupOffscreen();
+            const result = await chrome.runtime.sendMessage({
+                target: 'offscreen',
+                action: 'copyTextToClipboard',
+                value
+            });
+            return {
+                success: Boolean(result?.success),
+                error: result?.error || ''
+            };
         }
         if (message.action === 'openPractice') return await handleOpenPractice(message.input, message.settingType);
         if (message.action === 'createLinearIssueFromEnv' || message.action === 'createLinearIssueAndNotifySlack') {
@@ -5443,14 +5993,159 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { success: true, practicesCount: (data || []).length };
         }
         if (message.action === 'getPracticeLiveCounts') {
-            // Never open extra tabs for live counts; use invisible in-session fetch only.
+            // Prefer Cloud SQL for live counts, then fall back to in-session page reads.
             const liveMailroomCounts = await resolveLiveMailroomCountsByOds(message.odsCode, { allowTempTab: false });
             return { success: true, liveMailroomCounts };
+        }
+        if (message.action === 'getPracticeSecret') {
+            const secret = await getPracticeSecretValue(message.odsCode, message.field);
+            if (!secret?.value) {
+                return {
+                    success: false,
+                    error: secret?.present
+                        ? 'Password is configured but could not be loaded.'
+                        : 'Password is not configured.'
+                };
+            }
+            return {
+                success: true,
+                field: secret.field,
+                value: secret.value,
+                source: secret.source || 'cloud-sql'
+            };
+        }
+        if (message.action === 'getPracticeSecretHistory') {
+            const history = await getPracticeSecretHistory(message.odsCode, message.field);
+            return {
+                success: true,
+                field: sanitizeSingleLine(message.field, 80),
+                count: history.length
+            };
+        }
+        if (message.action === 'savePracticeSecretOverride') {
+            try {
+                const saved = await savePracticeSecretOverride(message.odsCode, message.field, message.value);
+                return {
+                    success: true,
+                    field: saved.field,
+                    value: saved.value,
+                    source: 'browser'
+                };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: sanitizeSingleLine(error?.message, 240) || 'Password could not be saved.'
+                };
+            }
+        }
+        if (message.action === 'savePracticeSecretToAdminPanel') {
+            try {
+                const requestedValue = normalizePracticeSecretOverrideValue(message.value);
+                const previousSecret = await getPracticeSecretValue(message.odsCode, message.field);
+                if (previousSecret?.value && previousSecret.value === requestedValue) {
+                    const history = await getPracticeSecretHistory(message.odsCode, message.field);
+                    return {
+                        success: true,
+                        field: sanitizeSingleLine(message.field, 80),
+                        value: requestedValue,
+                        source: 'unchanged',
+                        historyCount: history.length
+                    };
+                }
+
+                const saved = await savePracticeSecretViaAdminPage({
+                    odsCode: message.odsCode,
+                    field: message.field,
+                    value: requestedValue
+                });
+                const history = await rememberPracticeSecretHistoryEntry(
+                    message.odsCode,
+                    message.field,
+                    previousSecret?.value,
+                    {
+                        source: previousSecret?.source || 'unknown',
+                        excludeValue: saved.value
+                    }
+                );
+                await savePracticeSecretOverride(message.odsCode, message.field, saved.value);
+                return {
+                    success: true,
+                    field: saved.field,
+                    value: saved.value,
+                    source: 'admin-panel',
+                    historyCount: history.length,
+                    tabId: saved.tabId
+                };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: sanitizeSingleLine(error?.message, 240) || 'Password could not be saved in BetterLetter.'
+                };
+            }
+        }
+        if (message.action === 'undoPracticeSecretSave') {
+            try {
+                const history = await getPracticeSecretHistory(message.odsCode, message.field);
+                const restoreEntry = history[0];
+                const restoreValue = normalizePracticeSecretOverrideValue(restoreEntry?.value);
+                if (!restoreValue) {
+                    return {
+                        success: false,
+                        error: 'No saved password history for this field.'
+                    };
+                }
+
+                const currentSecret = await getPracticeSecretValue(message.odsCode, message.field);
+                let tabId = null;
+                if (currentSecret?.value !== restoreValue) {
+                    const restored = await savePracticeSecretViaAdminPage({
+                        odsCode: message.odsCode,
+                        field: message.field,
+                        value: restoreValue
+                    });
+                    tabId = restored.tabId;
+                }
+                await savePracticeSecretOverride(message.odsCode, message.field, restoreValue);
+                const remainingHistory = await savePracticeSecretHistory(
+                    message.odsCode,
+                    message.field,
+                    history.slice(1)
+                );
+                return {
+                    success: true,
+                    field: sanitizeSingleLine(message.field, 80),
+                    value: restoreValue,
+                    source: 'history',
+                    historyCount: remainingHistory.length,
+                    tabId
+                };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: sanitizeSingleLine(error?.message, 240) || 'Password could not be restored.'
+                };
+            }
         }
         if (message.action === 'getPracticeStatus') {
             const normalizedOds = String(message.odsCode || '').trim().toUpperCase();
             let p = Object.values(practiceCache).find(x => x.ods === normalizedOds);
             const preferredTabId = typeof message?.preferredTabId === 'number' ? message.preferredTabId : null;
+            const sqlPractice = /^[A-Z]\d{5}$/.test(normalizedOds)
+                ? await fetchPracticeDetailsFromSql(normalizedOds)
+                : null;
+            if (sqlPractice) {
+                p = {
+                    ...(p || {}),
+                    ...sqlPractice,
+                    ods: sqlPractice.odsCode,
+                    cdb: sqlPractice.practiceCDB || sqlPractice.cdb || '',
+                    practiceCDB: sqlPractice.practiceCDB || sqlPractice.cdb || '',
+                    timestamp: Date.now()
+                };
+                const cacheKey = `${p.name || p.displayName || p.ods} (${p.ods})`;
+                practiceCache[cacheKey] = p;
+                await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
+            }
 
             // Return fast using cached live counts, and refresh counts in background.
             let liveMailroomCounts = getCachedLiveCounts(normalizedOds, LIVE_COUNTS_CACHE_TTL_MS * 4) || createEmptyLiveCounts();
@@ -5463,9 +6158,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
-            const ehrSettings = /^[A-Z]\d{5}$/.test(normalizedOds)
+            let ehrSettings = sqlPractice
+                ? { ...createEmptyPracticeEhrSettings(), ...sqlPractice, practiceCdb: sqlPractice.practiceCDB || sqlPractice.cdb || '' }
+                : /^[A-Z]\d{5}$/.test(normalizedOds)
                 ? await fetchPracticeEhrSettingsByOds(normalizedOds, preferredTabId)
                 : createEmptyPracticeEhrSettings();
+            ehrSettings = await applyPracticeSecretOverrides(normalizedOds, ehrSettings);
 
             const resolvedPracticeCdb = String(ehrSettings.practiceCdb || p?.cdb || '').trim();
             if (p && looksInvalidCdb && resolvedPracticeCdb) {
@@ -5484,11 +6182,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     practiceCDB: resolvedPracticeCdb || p?.cdb || '',
                     emisApiUsername: ehrSettings.emisApiUsername || '',
                     emisApiPassword: ehrSettings.emisApiPassword || '',
+                    emisApiPasswordPresent: Boolean(ehrSettings.emisApiPasswordPresent || ehrSettings.emisApiPassword),
                     emisWebUsername: ehrSettings.emisWebUsername || '',
                     emisWebPassword: ehrSettings.emisWebPassword || '',
+                    emisWebPasswordPresent: Boolean(ehrSettings.emisWebPasswordPresent || ehrSettings.emisWebPassword),
                     emisWebDummyNhsNumber: ehrSettings.emisWebDummyNhsNumber || '',
                     docmanUsername: ehrSettings.docmanUsername || '',
                     docmanPassword: ehrSettings.docmanPassword || '',
+                    docmanPasswordPresent: Boolean(ehrSettings.docmanPasswordPresent || ehrSettings.docmanPassword),
                     docmanDummyNhsNumber: ehrSettings.docmanDummyNhsNumber || '',
                     docmanInputFolder: ehrSettings.docmanInputFolder || '',
                     docmanProcessingFolder: ehrSettings.docmanProcessingFolder || '',

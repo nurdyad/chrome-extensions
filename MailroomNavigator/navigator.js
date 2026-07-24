@@ -85,11 +85,14 @@ function buildStatusDetailSignature(status) {
         collectedToday: String(status?.collectedToday || '').trim(),
         emisApiUsername: String(status?.emisApiUsername || '').trim(),
         emisApiPassword: String(status?.emisApiPassword || '').trim(),
+        emisApiPasswordPresent: Boolean(status?.emisApiPasswordPresent),
         emisWebUsername: String(status?.emisWebUsername || '').trim(),
         emisWebPassword: String(status?.emisWebPassword || '').trim(),
+        emisWebPasswordPresent: Boolean(status?.emisWebPasswordPresent),
         emisWebDummyNhsNumber: String(status?.emisWebDummyNhsNumber || '').trim(),
         docmanUsername: String(status?.docmanUsername || '').trim(),
         docmanPassword: String(status?.docmanPassword || '').trim(),
+        docmanPasswordPresent: Boolean(status?.docmanPasswordPresent),
         docmanDummyNhsNumber: String(status?.docmanDummyNhsNumber || '').trim(),
         docmanInputFolder: String(status?.docmanInputFolder || '').trim(),
         docmanProcessingFolder: String(status?.docmanProcessingFolder || '').trim(),
@@ -137,8 +140,11 @@ export function normalizePracticeSelection(input) {
       return { name: fromKey.name, ods: fromKey.ods, display: trimmed };
     }
 
+    const normalizedQuery = trimmed.toLowerCase();
     const byName = Object.values(state.cachedPractices).find(practice =>
-      practice?.name?.toLowerCase() === trimmed.toLowerCase()
+      practice?.name?.toLowerCase() === normalizedQuery
+      || String(practice?.ods || '').toLowerCase() === normalizedQuery
+      || String(practice?.cdb || practice?.practiceCDB || '').toLowerCase() === normalizedQuery
     );
     if (byName) {
       return {
@@ -173,7 +179,6 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   }
 
   hidePracticeSuggestions();
-  hideCdbSuggestions();
 
   setNavigatorButtonsState({ hasConcretePractice, isAllPractices });
   if (triggerStatus) {
@@ -217,12 +222,6 @@ export function hidePracticeSuggestions() {
     if (!listEl) return;
     listEl.style.display = 'none';
     listEl.innerHTML = '';
-}
-
-export function hideCdbSuggestions() {
-    const listEl = document.getElementById('cdbSuggestions');
-    if (!listEl) return;
-    listEl.style.display = 'none';
 }
 
 // --- 4. Enable/Disable Buttons ---
@@ -374,12 +373,85 @@ function maskSecretValue(value) {
     return '*'.repeat(Math.min(Math.max(normalizedValue.length, 6), 14));
 }
 
+function getRandomPasswordCharacter(charset) {
+    const safeCharset = String(charset || '');
+    if (!safeCharset) return '';
+    const bytes = new Uint32Array(1);
+    crypto.getRandomValues(bytes);
+    return safeCharset[bytes[0] % safeCharset.length];
+}
+
+function shufflePasswordCharacters(chars) {
+    const next = [...chars];
+    for (let index = next.length - 1; index > 0; index -= 1) {
+        const bytes = new Uint32Array(1);
+        crypto.getRandomValues(bytes);
+        const swapIndex = bytes[0] % (index + 1);
+        [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+    }
+    return next.join('');
+}
+
+function generateSafePassword(length = 18) {
+    const lower = 'abcdefghijkmnpqrstuvwxyz';
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const digits = '23456789';
+    const special = '!@#$%^&*+-_?';
+    const groups = [lower, upper, digits, special];
+    const all = groups.join('');
+    const safeLength = Math.max(16, Number.parseInt(String(length || 18), 10) || 18);
+    const chars = groups.map(getRandomPasswordCharacter);
+    while (chars.length < safeLength) {
+        chars.push(getRandomPasswordCharacter(all));
+    }
+    return shufflePasswordCharacters(chars);
+}
+
+function setSecretValueElement(valueEl, rawValue, { visible = false } = {}) {
+    const value = String(rawValue || '').trim();
+    const masked = maskSecretValue(value);
+    valueEl.setAttribute('data-secret-value', value);
+    valueEl.setAttribute('data-secret-mask', masked);
+    valueEl.removeAttribute('data-secret-fetch');
+    valueEl.classList.remove('is-configured');
+    valueEl.textContent = visible ? value : masked;
+    valueEl.setAttribute('data-secret-visible', visible ? 'true' : 'false');
+}
+
 function buildStatusActionIcon(type) {
     if (type === 'eye') {
         return `
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"></path>
                 <circle cx="12" cy="12" r="3.2"></circle>
+            </svg>
+        `;
+    }
+
+    if (type === 'generate') {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M13 2 9.8 8.8 3 12l6.8 3.2L13 22l3.2-6.8L23 12l-6.8-3.2Z"></path>
+                <path d="m5 3 1 2 2 1-2 1-1 2-1-2-2-1 2-1Z"></path>
+            </svg>
+        `;
+    }
+
+    if (type === 'save') {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5 3h12l2 2v16H5Z"></path>
+                <path d="M8 3v6h8V3"></path>
+                <path d="M8 17h8"></path>
+            </svg>
+        `;
+    }
+
+    if (type === 'undo') {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M9 7H4v5"></path>
+                <path d="M5 12a7 7 0 1 0 2-5"></path>
             </svg>
         `;
     }
@@ -417,27 +489,41 @@ function buildCredentialFieldHtml(groupLabel, label, value, options = {}) {
     const fullLabel = `${groupLabel} ${label}`.trim();
     const safeFullLabel = escapeHtml(fullLabel);
     const isSecret = options.secret === true;
+    const isConfiguredSecret = isSecret && !normalizedValue && options.present === true;
+    const secretKey = String(options.secretKey || '').trim();
     const isVisible = isSecret && isSecretFieldVisible(options.odsCode, fullLabel);
+    const canRevealSecret = isSecret && (Boolean(normalizedValue) || isConfiguredSecret);
     const valueMarkup = normalizedValue
         ? (isSecret
-            ? `<span class="practice-status-credential-value is-secret" data-secret-value="${escapeHtml(normalizedValue)}" data-secret-mask="${escapeHtml(maskSecretValue(normalizedValue))}" data-secret-label="${safeFullLabel}" data-secret-visible="${isVisible ? 'true' : 'false'}">${escapeHtml(isVisible ? normalizedValue : maskSecretValue(normalizedValue))}</span>`
+            ? `<span class="practice-status-credential-value is-secret" data-secret-field-key="${escapeHtml(secretKey)}" data-secret-value="${escapeHtml(normalizedValue)}" data-secret-mask="${escapeHtml(maskSecretValue(normalizedValue))}" data-secret-label="${safeFullLabel}" data-secret-visible="${isVisible ? 'true' : 'false'}">${escapeHtml(isVisible ? normalizedValue : maskSecretValue(normalizedValue))}</span>`
             : `<span class="practice-status-credential-value">${escapeHtml(normalizedValue)}</span>`)
+        : isConfiguredSecret
+            ? `<span class="practice-status-credential-value is-secret is-configured" data-secret-field-key="${escapeHtml(secretKey)}" data-secret-fetch="${escapeHtml(secretKey)}" data-secret-label="${safeFullLabel}" data-secret-visible="false">Hidden</span>`
         : '<span class="practice-status-credential-value is-empty">&nbsp;</span>';
-    const actionsMarkup = normalizedValue
+    const actionsMarkup = (normalizedValue || isConfiguredSecret)
         ? `
             <div class="practice-status-inline-actions">
-                ${isSecret
+                ${canRevealSecret
                     ? `<button class="practice-status-inline-action${isVisible ? ' is-active' : ''}" type="button" data-secret-toggle="true" aria-pressed="${isVisible ? 'true' : 'false'}" aria-label="${isVisible ? 'Hide' : 'Show'} ${safeFullLabel}" title="${isVisible ? 'Hide' : 'Show'} ${safeFullLabel}">
                         ${buildStatusActionIcon('eye')}
                     </button>`
                     : ''}
-                <button class="practice-status-inline-action" type="button" data-copy-value="${escapeHtml(normalizedValue)}" data-copy-label="${safeFullLabel}" title="Copy ${safeFullLabel}">
+                ${canRevealSecret ? `<button class="practice-status-inline-action" type="button" data-secret-copy="true" aria-label="Copy ${safeFullLabel}" title="Copy ${safeFullLabel}">
                     ${buildStatusActionIcon('copy')}
-                </button>
+                </button>` : ''}
+                ${canRevealSecret ? `<button class="practice-status-inline-action" type="button" data-secret-generate="true" aria-label="Generate ${safeFullLabel}" title="Generate ${safeFullLabel}">
+                    ${buildStatusActionIcon('generate')}
+                </button>` : ''}
+                ${canRevealSecret ? `<button class="practice-status-inline-action" type="button" data-secret-save="true" aria-label="Save ${safeFullLabel} in BetterLetter" title="Save ${safeFullLabel} in BetterLetter">
+                    ${buildStatusActionIcon('save')}
+                </button>` : ''}
+                ${canRevealSecret ? `<button class="practice-status-inline-action" type="button" data-secret-undo="true" aria-label="Undo last saved ${safeFullLabel}" title="Undo last saved ${safeFullLabel}">
+                    ${buildStatusActionIcon('undo')}
+                </button>` : ''}
             </div>
         `
         : '';
-    const fieldAttributes = isSecret && normalizedValue ? ' data-secret-field="true"' : '';
+    const fieldAttributes = canRevealSecret ? ' data-secret-field="true"' : '';
 
     return `
         <div class="practice-status-credential-field"${fieldAttributes}>
@@ -452,13 +538,28 @@ function buildCredentialFieldHtml(groupLabel, label, value, options = {}) {
 
 function buildCredentialGroupHtml(groupLabel, fields) {
     const body = fields.map((field) => buildCredentialFieldHtml(groupLabel, field.label, field.value, field)).join('');
+    const usernameField = fields.find((field) => String(field.label || '').toLowerCase() === 'username');
+    const username = formatOptionalStatusValue(usernameField?.value);
+    const hasPassword = fields.some((field) => (
+        field.secret === true
+        && (Boolean(formatOptionalStatusValue(field.value)) || field.present === true)
+    ));
+    const previewParts = [
+        username ? `User ${username}` : '',
+        hasPassword ? 'Password saved' : ''
+    ].filter(Boolean);
+    const preview = previewParts.length ? previewParts.join(' · ') : 'No saved credentials';
+
     return `
-        <div class="practice-status-credential-card">
-            <div class="practice-status-credential-card-title">${escapeHtml(groupLabel)}</div>
+        <details class="practice-status-credential-card">
+            <summary class="practice-status-credential-summary">
+                <span class="practice-status-credential-card-title">${escapeHtml(groupLabel)}</span>
+                <span class="practice-status-credential-preview">${escapeHtml(preview)}</span>
+            </summary>
             <div class="practice-status-credential-card-body">
                 ${body}
             </div>
-        </div>
+        </details>
     `;
 }
 
@@ -504,32 +605,179 @@ function ensureStatusDisplayInteractions() {
     const statusDisplayEl = document.getElementById('statusDisplay');
     if (!statusDisplayEl) return;
 
+    const getSecretContext = (actionTarget) => {
+        const fieldEl = actionTarget?.closest?.('[data-secret-field]');
+        const valueEl = fieldEl?.querySelector?.('[data-secret-value], [data-secret-fetch], [data-secret-field-key]');
+        if (!fieldEl || !valueEl) return null;
+        const odsCode = String(
+            valueEl.closest('.status-info-box')?.getAttribute('data-status-ods') || state.currentSelectedOdsCode || ''
+        ).toUpperCase();
+        const field = String(
+            valueEl.getAttribute('data-secret-field-key') ||
+            valueEl.getAttribute('data-secret-fetch') ||
+            ''
+        ).trim();
+        const label = String(valueEl.getAttribute('data-secret-label') || 'Password').trim();
+        if (!odsCode || !field) return null;
+        return { fieldEl, valueEl, odsCode, field, label };
+    };
+
+    const ensureSecretValue = async (context, actionTarget, { reveal = false } = {}) => {
+        let rawValue = String(context.valueEl.getAttribute('data-secret-value') || '').trim();
+        if (rawValue) return rawValue;
+
+        const previousText = context.valueEl.textContent;
+        if (actionTarget) actionTarget.disabled = true;
+        context.valueEl.textContent = 'Loading...';
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'getPracticeSecret',
+                odsCode: context.odsCode,
+                field: context.field
+            });
+            rawValue = String(response?.value || '').trim();
+            if (!response?.success || !rawValue) {
+                throw new Error(response?.error || 'Password could not be loaded.');
+            }
+            setSecretValueElement(context.valueEl, rawValue, { visible: reveal });
+            return rawValue;
+        } catch (error) {
+            context.valueEl.textContent = previousText || 'Hidden';
+            showToast(error?.message || 'Password could not be loaded.');
+            return '';
+        } finally {
+            if (actionTarget) actionTarget.disabled = false;
+        }
+    };
+
     statusDisplayEl.addEventListener('click', async (event) => {
         const toggleTarget = event.target instanceof Element
             ? event.target.closest('[data-secret-toggle]')
             : null;
         if (toggleTarget) {
             rememberStatusDisplayInteraction();
-            const fieldEl = toggleTarget.closest('[data-secret-field]');
-            const valueEl = fieldEl?.querySelector('[data-secret-value]');
-            if (!valueEl) return;
+            const context = getSecretContext(toggleTarget);
+            if (!context) return;
 
-            const currentVisible = String(valueEl.getAttribute('data-secret-visible') || '').toLowerCase() === 'true';
-            const rawValue = String(valueEl.getAttribute('data-secret-value') || '');
-            const maskedValue = String(valueEl.getAttribute('data-secret-mask') || '');
-            const secretLabel = String(valueEl.getAttribute('data-secret-label') || 'secret').trim();
+            const currentVisible = String(context.valueEl.getAttribute('data-secret-visible') || '').toLowerCase() === 'true';
             const nextVisible = !currentVisible;
-            const odsCode = String(
-                valueEl.closest('.status-info-box')?.getAttribute('data-status-ods') || state.currentSelectedOdsCode || ''
-            ).toUpperCase();
+            const rawValue = nextVisible
+                ? await ensureSecretValue(context, toggleTarget, { reveal: true })
+                : String(context.valueEl.getAttribute('data-secret-value') || '').trim();
+            if (!rawValue) return;
 
-            valueEl.textContent = nextVisible ? rawValue : maskedValue;
-            valueEl.setAttribute('data-secret-visible', nextVisible ? 'true' : 'false');
+            context.valueEl.textContent = nextVisible ? rawValue : maskSecretValue(rawValue);
+            context.valueEl.setAttribute('data-secret-visible', nextVisible ? 'true' : 'false');
             toggleTarget.setAttribute('aria-pressed', nextVisible ? 'true' : 'false');
-            toggleTarget.setAttribute('aria-label', `${nextVisible ? 'Hide' : 'Show'} ${secretLabel}`);
-            toggleTarget.setAttribute('title', `${nextVisible ? 'Hide' : 'Show'} ${secretLabel}`);
+            toggleTarget.setAttribute('aria-label', `${nextVisible ? 'Hide' : 'Show'} ${context.label}`);
+            toggleTarget.setAttribute('title', `${nextVisible ? 'Hide' : 'Show'} ${context.label}`);
             toggleTarget.classList.toggle('is-active', nextVisible);
-            setSecretFieldVisibility(odsCode, secretLabel, nextVisible);
+            setSecretFieldVisibility(context.odsCode, context.label, nextVisible);
+            return;
+        }
+
+        const secretCopyTarget = event.target instanceof Element
+            ? event.target.closest('[data-secret-copy]')
+            : null;
+        if (secretCopyTarget) {
+            rememberStatusDisplayInteraction();
+            const context = getSecretContext(secretCopyTarget);
+            if (!context) return;
+            const rawValue = await ensureSecretValue(context, secretCopyTarget, { reveal: false });
+            if (!rawValue) return;
+            try {
+                const copied = await copyTextToClipboard(rawValue);
+                if (!copied) throw new Error('copy failed');
+                showToast(`${context.label} copied.`);
+            } catch (error) {
+                showToast('Copy failed.');
+            }
+            return;
+        }
+
+        const secretGenerateTarget = event.target instanceof Element
+            ? event.target.closest('[data-secret-generate]')
+            : null;
+        if (secretGenerateTarget) {
+            rememberStatusDisplayInteraction();
+            const context = getSecretContext(secretGenerateTarget);
+            if (!context) return;
+            const generatedPassword = generateSafePassword(18);
+            setSecretValueElement(context.valueEl, generatedPassword, { visible: true });
+            const toggleTargetForField = context.fieldEl.querySelector('[data-secret-toggle]');
+            if (toggleTargetForField) {
+                toggleTargetForField.setAttribute('aria-pressed', 'true');
+                toggleTargetForField.setAttribute('aria-label', `Hide ${context.label}`);
+                toggleTargetForField.setAttribute('title', `Hide ${context.label}`);
+                toggleTargetForField.classList.add('is-active');
+            }
+            setSecretFieldVisibility(context.odsCode, context.label, true);
+            showToast('Generated password. Click save to update BetterLetter.');
+            return;
+        }
+
+        const secretSaveTarget = event.target instanceof Element
+            ? event.target.closest('[data-secret-save]')
+            : null;
+        if (secretSaveTarget) {
+            rememberStatusDisplayInteraction();
+            const context = getSecretContext(secretSaveTarget);
+            if (!context) return;
+            const rawValue = await ensureSecretValue(context, secretSaveTarget, { reveal: false });
+            if (!rawValue) return;
+            secretSaveTarget.disabled = true;
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    action: 'savePracticeSecretToAdminPanel',
+                    odsCode: context.odsCode,
+                    field: context.field,
+                    value: rawValue
+                });
+                if (!response?.success) {
+                    throw new Error(response?.error || 'Password could not be saved.');
+                }
+                showToast('Password saved in BetterLetter.');
+            } catch (error) {
+                showToast(error?.message || 'Password could not be saved.');
+            } finally {
+                secretSaveTarget.disabled = false;
+            }
+            return;
+        }
+
+        const secretUndoTarget = event.target instanceof Element
+            ? event.target.closest('[data-secret-undo]')
+            : null;
+        if (secretUndoTarget) {
+            rememberStatusDisplayInteraction();
+            const context = getSecretContext(secretUndoTarget);
+            if (!context) return;
+            secretUndoTarget.disabled = true;
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    action: 'undoPracticeSecretSave',
+                    odsCode: context.odsCode,
+                    field: context.field
+                });
+                if (!response?.success || !response?.value) {
+                    throw new Error(response?.error || 'No saved password history for this field.');
+                }
+
+                setSecretValueElement(context.valueEl, response.value, { visible: true });
+                const toggleTargetForField = context.fieldEl.querySelector('[data-secret-toggle]');
+                if (toggleTargetForField) {
+                    toggleTargetForField.setAttribute('aria-pressed', 'true');
+                    toggleTargetForField.setAttribute('aria-label', `Hide ${context.label}`);
+                    toggleTargetForField.setAttribute('title', `Hide ${context.label}`);
+                    toggleTargetForField.classList.add('is-active');
+                }
+                setSecretFieldVisibility(context.odsCode, context.label, true);
+                showToast('Previous password restored in BetterLetter.');
+            } catch (error) {
+                showToast(error?.message || 'Password could not be restored.');
+            } finally {
+                secretUndoTarget.disabled = false;
+            }
             return;
         }
 
@@ -602,16 +850,16 @@ function buildPracticeStatusHtml(status, counts) {
     const ehrGroups = [
         buildCredentialGroupHtml('EMIS API', [
             { label: 'Username', value: status?.emisApiUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.emisApiPassword, secret: true, odsCode: status?.odsCode }
+            { label: 'Password', value: status?.emisApiPassword, present: Boolean(status?.emisApiPasswordPresent), secret: true, secretKey: 'emisApiPassword', odsCode: status?.odsCode }
         ]),
         buildCredentialGroupHtml('EMIS Web', [
             { label: 'Username', value: status?.emisWebUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.emisWebPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.emisWebPassword, present: Boolean(status?.emisWebPasswordPresent), secret: true, secretKey: 'emisWebPassword', odsCode: status?.odsCode },
             { label: 'Dummy NHS Number', value: status?.emisWebDummyNhsNumber, odsCode: status?.odsCode }
         ]),
         buildCredentialGroupHtml('Docman', [
             { label: 'Username', value: status?.docmanUsername, odsCode: status?.odsCode },
-            { label: 'Password', value: status?.docmanPassword, secret: true, odsCode: status?.odsCode },
+            { label: 'Password', value: status?.docmanPassword, present: Boolean(status?.docmanPasswordPresent), secret: true, secretKey: 'docmanPassword', odsCode: status?.odsCode },
             { label: 'Dummy NHS Number', value: status?.docmanDummyNhsNumber, odsCode: status?.odsCode },
             { label: 'Input Folder', value: status?.docmanInputFolder, odsCode: status?.odsCode },
             { label: 'Processing Folder', value: status?.docmanProcessingFolder, odsCode: status?.odsCode },
@@ -621,7 +869,7 @@ function buildPracticeStatusHtml(status, counts) {
     ].join('');
 
     return `
-        <div class="status-info-box practice-status-card" data-status-ods="${escapeHtml(status.odsCode || '')}">
+        <div class="status-info-box practice-status-card practice-status-card-compact" data-status-ods="${escapeHtml(status.odsCode || '')}">
             <div class="practice-status-hero">
                 <div class="practice-status-hero-row">
                     <div class="practice-status-heading">
@@ -643,12 +891,15 @@ function buildPracticeStatusHtml(status, counts) {
             <div class="practice-status-metrics">
                 ${metricCards}
             </div>
-            <div class="practice-status-section-head practice-status-section-head-details">
-                <span class="practice-status-section-caption">EHR settings</span>
-            </div>
-            <div class="practice-status-credentials-list">
-                ${ehrGroups}
-            </div>
+            <details class="practice-status-ehr-details">
+                <summary class="practice-status-ehr-summary">
+                    <span class="practice-status-ehr-summary-title">EHR settings</span>
+                    <span class="practice-status-ehr-summary-meta">EMIS API · EMIS Web · Docman</span>
+                </summary>
+                <div class="practice-status-credentials-list">
+                    ${ehrGroups}
+                </div>
+            </details>
         </div>
     `;
 }
@@ -802,7 +1053,9 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
     if (!inputEl || !listEl) return;
 
     const query = inputEl.value.toLowerCase().trim();
-    const allNames = Object.keys(state.cachedPractices);
+    const allPractices = Object.entries(state.cachedPractices)
+        .map(([label, practice]) => ({ label, practice }))
+        .filter(({ practice }) => practice && practice.ods);
 
     if (!query && !showOnEmpty) {
         listEl.innerHTML = '';
@@ -810,10 +1063,19 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
         return;
     }
 
-    // Show all practice names when empty (if explicitly requested), and all filtered matches when typing.
-    let matches = !query
-        ? allNames
-        : allNames.filter(name => name.toLowerCase().includes(query));
+    const practiceMatchesQuery = ({ label, practice }) => {
+        if (!query) return true;
+        return [
+            label,
+            practice?.name,
+            practice?.ods,
+            practice?.cdb,
+            practice?.practiceCDB
+        ].some((value) => String(value || '').toLowerCase().includes(query));
+    };
+
+    // Show all practices when empty (if explicitly requested), and filter by name, ODS, or CDB while typing.
+    let matches = allPractices.filter(practiceMatchesQuery);
 
     const shouldShowAllPractices = !query || ALL_PRACTICES_LABEL.toLowerCase().includes(query);
 
@@ -836,72 +1098,22 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
         listEl.appendChild(allLi);
     }
 
-    matches.forEach(name => {
+    matches.forEach(({ label, practice }) => {
         const li = document.createElement('li');
-        li.textContent = name;
+        const meta = [
+            practice?.ods ? `ODS ${practice.ods}` : '',
+            practice?.cdb || practice?.practiceCDB ? `CDB ${practice.cdb || practice.practiceCDB}` : ''
+        ].filter(Boolean).join(' · ');
+        li.innerHTML = `
+            <div class="suggestion-main">${escapeHtml(practice?.name || label)}</div>
+            ${meta ? `<div class="suggestion-meta">${escapeHtml(meta)}</div>` : ''}
+        `;
         li.addEventListener('mousedown', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            setSelectedPractice(state.cachedPractices[name]);
+            setSelectedPractice(practice);
         });
         listEl.appendChild(li);
     });
-    listEl.style.display = 'block';
-}
-
-// --- 8. CDB Search Logic ---
-export function buildCdbIndex() {
-    state.cachedCdbIndex = Object.values(state.cachedPractices)
-        .filter(p => p.cdb && p.cdb !== 'N/A')
-        .map(p => ({
-            cdb: p.cdb,
-            ods: p.ods,
-            name: p.name,
-            label: `${p.name} - ${p.cdb}`
-        }));
-}
-
-// --- 8. CDB Search Logic  ---
-export function handleCdbInput() {
-    const inputEl = document.getElementById('cdbSearchInput');
-    const listEl = document.getElementById('cdbSuggestions');
-    if (!inputEl || !listEl) return;
-
-    const query = inputEl.value.trim().toLowerCase();
-    const allCdbItems = state.cachedCdbIndex || [];
-
-    // Show all known CDB items; list is scrollable in the panel.
-    let matches = !query 
-        ? allCdbItems
-        : allCdbItems.filter(item => item.cdb.toLowerCase().includes(query));
-
-    if (matches.length === 0) {
-        listEl.innerHTML = '';
-        listEl.style.display = 'none';
-        return;
-    }
-
-    listEl.innerHTML = '';
-
-    const countHeader = document.createElement('div');
-    countHeader.className = 'suggestion-count';
-    countHeader.textContent = `Total Results: ${matches.length} practices shown`;
-    listEl.appendChild(countHeader);
-    
-    matches.forEach(item => {
-        const li = document.createElement('li');
-        li.textContent = item.label;
-        
-        // --- FIX: Use mousedown to prevent the list from vanishing ---
-        li.addEventListener('mousedown', (e) => {
-            e.stopPropagation(); // Stops the global listener from seeing this click
-            e.preventDefault(); // This stops the "blur" event from hiding the list
-            setSelectedPractice({ name: item.name, ods: item.ods });
-            inputEl.value = item.cdb;
-            listEl.style.display = 'none';
-        });
-        listEl.appendChild(li);
-    });
-    
     listEl.style.display = 'block';
 }
