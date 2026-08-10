@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "BetterLetter Safe Job Completer",
+  "version": "1.9.4",
+  "description": "Safely completes explicitly filtered BetterLetter docman_delete_original jobs.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://app.betterletter.ai/admin_panel/bots/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "BetterLetter Safe Job Completer"
+  },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://app.betterletter.ai/admin_panel/bots/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
