@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Safe Job Completer</title>
+  <style>
+    html { width: 372px; max-width: 372px; overflow-x: hidden; }
+    body { box-sizing: border-box; font: 14px system-ui; margin: 16px; width: 340px; max-width: 340px; color: #09213f; overflow-x: hidden; }
+    h1 { font-size: 17px; margin: 0 0 12px; }
+    label { display: block; font-weight: 650; margin-top: 10px; }
+    input { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 4px; }
+    .fixed { background: #f1f4f8; color: #42526a; }
+    .actions { display: flex; gap: 8px; margin-top: 14px; }
+    button { border: 0; border-radius: 6px; padding: 9px 13px; font-weight: 700; cursor: pointer; }
+    #start { background: #1769e0; color: white; }
+    #stop { background: #d92d20; color: white; }
+    #status { box-sizing: border-box; background: #f5f7fa; border-radius: 6px; line-height: 1.45; margin-top: 12px; max-width: 340px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .warning { color: #8a3b00; font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>BetterLetter Safe Completer</h1>
+  <label>Practice name<input id="practiceName" value="Glenlyn Medical Centre"></label>
+  <label>Practice ODS ID<input id="practiceId" value="H81078"></label>
+  <label>Job type<input class="fixed" value="docman_delete_original" disabled></label>
+  <label>Delay between jobs (seconds)<input id="delaySeconds" type="number" min="2" max="120" value="2"></label>
+  <div class="warning">Start only after checking the filtered dashboard. The run stops on any mismatch or uncertain result.</div>
+  <div class="actions"><button id="start">Start</button><button id="stop">Stop</button></div>
+  <div id="status">Loading…</div>
+  <script src="popup.js"></script>
+</body>
+</html>
