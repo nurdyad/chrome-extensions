@@ -19,7 +19,7 @@ This local Chrome extension processes one paused `docman_delete_original` job at
 
 The separate worker window keeps BetterLetter's automation page visible while you use other Chrome tabs. If that window is minimized or hidden, the extension waits without consuming a completion attempt and resumes after it is restored.
 
-If Chrome freezes or discards the worker for resource management, the extension briefly focuses that worker to wake it, resumes the same verified job state, and returns focus to the window you were using.
+If Chrome freezes or discards the worker for resource management, the extension first tries to wake it by reactivating its tab without moving focus away from the window you are using. Only if that does not resume the worker within a few seconds does it briefly focus the worker window, then return focus to the window you were using. Either way, the same verified job state resumes and no attempt is consumed.
 
 Before either completion control is used, the extension now waits for the owning Phoenix LiveView socket to be connected. A server completion attempt is counted only after Phoenix exposes its `phx-click-loading` delivery signal (or the page has already reached an authoritative completed/navigation result). A disconnected or locally handled no-op click is reloaded and retried without consuming one of the two server attempts. If Phoenix accepts two submissions and the exact fresh job page still reports `paused`, the extension stops because that indicates a BetterLetter job/server issue rather than an unsafe reason to keep clicking.
 

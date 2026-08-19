@@ -70,7 +70,7 @@ async function closeWorkerForRun(snapshot) {
 async function startRunner(message) {
   const practiceName = String(message?.config?.practiceName || "").trim();
   const practiceId = String(message?.config?.practiceId || "").trim().toUpperCase();
-  const delaySeconds = Math.max(2, Math.min(120, Number(message?.config?.delaySeconds) || 2));
+  const delaySeconds = Math.max(1, Math.min(120, Number(message?.config?.delaySeconds) || 1));
   if (!practiceName || !/^[A-Z][A-Z0-9]{4,9}$/.test(practiceId) ||
       message?.config?.jobType !== "docman_delete_original" || !Number.isInteger(message?.sourceTabId)) {
     return { ok: false, error: "The start request was invalid." };
@@ -199,10 +199,26 @@ async function recoverSuspendedWorker(tabId, reason) {
   if (!marked.ok) return;
 
   try {
+    // Activating the tab within its own (unfocused) window can resume a
+    // frozen or discarded tab without stealing OS focus from the window the
+    // user is actively working in. Only steal focus if that gentle wake does
+    // not resolve within a short grace period.
+    await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
+    setTimeout(() => { void escalateWorkerWake(blRunner.runId, tabId, marked.state.recoveryStartedAt); }, 8000);
+  } catch (error) {
+    await stopRunner(`Could not wake the Chrome-${reason} worker: ${error?.message || String(error)}`, blRunner.runId);
+  }
+}
+
+async function escalateWorkerWake(runId, tabId, recoveryStartedAt) {
+  const { blRunner = {} } = await chrome.storage.local.get("blRunner");
+  if (!blRunner.active || blRunner.runId !== runId || blRunner.targetTabId !== tabId ||
+      !blRunner.suspensionRecovery || blRunner.recoveryStartedAt !== recoveryStartedAt) return;
+  try {
     await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
     await chrome.windows.update(blRunner.workerWindowId, { focused: true, state: "normal" });
   } catch (error) {
-    await stopRunner(`Could not wake the Chrome-${reason} worker: ${error?.message || String(error)}`, blRunner.runId);
+    await stopRunner(`Could not wake the Chrome-${blRunner.suspensionReason} worker: ${error?.message || String(error)}`, runId);
   }
 }
 
