@@ -32,8 +32,6 @@ const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
 const UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS = 26000;
 const EXTENSION_ACCESS_RESOLVE_TIMEOUT_MS = 1800;
 const EXTENSION_ACCESS_CACHE_TTL_MS = 2 * 60 * 1000;
-const EXTENSION_USER_MANAGEMENT_STORAGE_KEY = 'extensionUserManagementV1';
-const EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY = 'extensionUserIdentityOverrideV1';
 const BETTERLETTER_IDENTITY_SNAPSHOT_STORAGE_KEY = 'betterletterIdentitySnapshotV1';
 const EXTENSION_ACCESS_SNAPSHOT_STORAGE_KEY = 'extensionAccessStateSnapshotV1';
 const ACCESS_CONTROL_SERVICE_CONFIG_STORAGE_KEY = 'accessControlServiceConfigV1';
@@ -107,15 +105,6 @@ const EXTENSION_FEATURE_CATALOG = [
 ];
 const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => feature.key);
 const EXTENSION_FEATURE_KEY_SET = new Set(EXTENSION_FEATURE_KEYS);
-const OTHER_VIEW_FEATURE_KEYS = [
-    'email_formatter',
-    'linear_create_issue',
-    'linear_trigger',
-    'linear_reconcile',
-    'slack_sync',
-    'workflow_groups',
-    'bookmarklet_tools'
-];
 const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     syncLinearSlackWorkspaceTargets: ['slack_sync'],
     triggerLinearBotJobsRun: ['linear_trigger'],
@@ -1269,10 +1258,6 @@ async function saveStoredExtensionAccessSnapshot(access, checkedAt = Date.now())
     return snapshot;
 }
 
-function normalizeManagedUserRole(rawRole) {
-    return String(rawRole || '').trim().toLowerCase() === 'super_admin' ? 'super_admin' : 'user';
-}
-
 function normalizeManagedFeatureList(rawFeatures = []) {
     if (!Array.isArray(rawFeatures)) return [];
     const unique = new Set();
@@ -1290,187 +1275,7 @@ function buildExtensionFeatureAccessMap(rawFeatures = [], forceAll = false) {
     return Object.fromEntries(EXTENSION_FEATURE_KEYS.map((featureKey) => [featureKey, grantedSet.has(featureKey)]));
 }
 
-function sanitizeManagedUserRecord(rawUser = null, fallbackEmail = '') {
-    const email = normalizeEmail(rawUser?.email || fallbackEmail);
-    if (!email) return null;
 
-    const role = normalizeManagedUserRole(rawUser?.role);
-    const features = role === 'super_admin'
-        ? [...EXTENSION_FEATURE_KEYS]
-        : normalizeManagedFeatureList(rawUser?.features);
-
-    return {
-        email,
-        role,
-        features,
-        createdAt: sanitizeSingleLine(rawUser?.createdAt, 80),
-        updatedAt: sanitizeSingleLine(rawUser?.updatedAt, 80),
-        createdBy: normalizeEmail(rawUser?.createdBy),
-        updatedBy: normalizeEmail(rawUser?.updatedBy)
-    };
-}
-
-function sanitizeExtensionUserManagement(rawState = null) {
-    const users = {};
-    const sourceUsers = rawState?.users && typeof rawState.users === 'object' ? rawState.users : {};
-
-    Object.entries(sourceUsers).forEach(([emailKey, rawUser]) => {
-        const normalizedUser = sanitizeManagedUserRecord(rawUser, emailKey);
-        if (!normalizedUser) return;
-        users[normalizedUser.email] = normalizedUser;
-    });
-
-    return {
-        version: 1,
-        initializedAt: sanitizeSingleLine(rawState?.initializedAt, 80),
-        updatedAt: sanitizeSingleLine(rawState?.updatedAt, 80),
-        users
-    };
-}
-
-async function getStoredExtensionUserManagement() {
-    try {
-        const result = await chrome.storage.local.get([EXTENSION_USER_MANAGEMENT_STORAGE_KEY]);
-        return sanitizeExtensionUserManagement(result?.[EXTENSION_USER_MANAGEMENT_STORAGE_KEY]);
-    } catch (error) {
-        return sanitizeExtensionUserManagement(null);
-    }
-}
-
-async function getStoredExtensionIdentityOverride() {
-    try {
-        const result = await chrome.storage.local.get([EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY]);
-        return normalizeEmail(result?.[EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY]);
-    } catch (error) {
-        return '';
-    }
-}
-
-async function setStoredExtensionIdentityOverride(email) {
-    const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail) {
-        await chrome.storage.local.remove([EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY]);
-        clearExtensionAccessCache();
-        return '';
-    }
-    await chrome.storage.local.set({ [EXTENSION_USER_IDENTITY_OVERRIDE_STORAGE_KEY]: normalizedEmail });
-    clearExtensionAccessCache();
-    return normalizedEmail;
-}
-
-async function saveStoredExtensionUserManagement(rawState) {
-    const sanitizedState = sanitizeExtensionUserManagement(rawState);
-    await chrome.storage.local.set({ [EXTENSION_USER_MANAGEMENT_STORAGE_KEY]: sanitizedState });
-    clearExtensionAccessCache();
-    return sanitizedState;
-}
-
-function getManagedUserFeatureAccess(userRecord = null) {
-    if (!userRecord) return buildExtensionFeatureAccessMap([], false);
-    return buildExtensionFeatureAccessMap(userRecord.features, userRecord.role === 'super_admin');
-}
-
-function listManagedUsers(managementState) {
-    return Object.values(managementState?.users || {})
-        .map((user) => sanitizeManagedUserRecord(user))
-        .filter(Boolean)
-        .sort((a, b) => {
-            if (a.role !== b.role) {
-                return a.role === 'super_admin' ? -1 : 1;
-            }
-            return a.email.localeCompare(b.email);
-        });
-}
-
-function countManagedSuperAdmins(managementState) {
-    return listManagedUsers(managementState).filter((user) => user.role === 'super_admin').length;
-}
-
-function buildResolvedExtensionAccessState(identity, managementState) {
-    const email = normalizeEmail(identity?.email);
-    const detectionSource = sanitizeSingleLine(identity?.source, 120);
-    const users = managementState?.users || {};
-    const initialized = Object.keys(users).length > 0;
-
-    if (!email) {
-        return sanitizeExtensionAccessState({
-            initialized,
-            allowed: false,
-            canBootstrap: !initialized,
-            isSuperAdmin: false,
-            role: '',
-            email: '',
-            reason: initialized
-                ? 'Could not detect the current BetterLetter user email. Enter it manually in the panel, then refresh access.'
-                : 'Could not detect the current BetterLetter user email. Enter it manually in the panel to bootstrap user management.',
-            detectionSource,
-            features: buildExtensionFeatureAccessMap([], false)
-        });
-    }
-
-    if (!initialized) {
-        return sanitizeExtensionAccessState({
-            initialized: false,
-            allowed: false,
-            canBootstrap: true,
-            isSuperAdmin: false,
-            role: '',
-            email,
-            reason: 'No MailroomNavigator super admin is configured yet. Bootstrap yourself first, then manage users from the panel.',
-            detectionSource,
-            features: buildExtensionFeatureAccessMap([], false)
-        });
-    }
-
-    const userRecord = sanitizeManagedUserRecord(users[email], email);
-    if (!userRecord) {
-        return sanitizeExtensionAccessState({
-            initialized: true,
-            allowed: false,
-            canBootstrap: false,
-            isSuperAdmin: false,
-            role: '',
-            email,
-            reason: 'You do not have access to MailroomNavigator. Ask a super admin to grant your BetterLetter email access.',
-            detectionSource,
-            features: buildExtensionFeatureAccessMap([], false)
-        });
-    }
-
-    const features = getManagedUserFeatureAccess(userRecord);
-    const hasAnyFeature = Object.values(features).some(Boolean);
-    const isSuperAdmin = userRecord.role === 'super_admin';
-
-    return sanitizeExtensionAccessState({
-        initialized: true,
-        allowed: isSuperAdmin || hasAnyFeature,
-        canBootstrap: false,
-        isSuperAdmin,
-        role: userRecord.role,
-        email,
-        reason: isSuperAdmin || hasAnyFeature
-            ? ''
-            : 'Your account exists but no features are enabled yet. Ask a super admin to grant at least one feature.',
-        detectionSource,
-        features
-    });
-}
-
-async function resolveExtensionAccessContext(rawPayload = {}, sender = null) {
-    const preferredTabId = typeof sender?.tab?.id === 'number' ? sender.tab.id : null;
-    const forceRefresh = Boolean(rawPayload?.forceRefresh);
-    const identity = await resolveCurrentBetterLetterUserIdentity({ preferredTabId, forceRefresh });
-    const management = await getStoredExtensionUserManagement();
-    const access = buildResolvedExtensionAccessState(identity, management);
-    const cacheKey = `${access.email || 'unknown'}|${preferredTabId || 'any'}|${Object.keys(management.users || {}).length}`;
-    extensionAccessStateCache = {
-        ...(extensionAccessStateCache || {}),
-        cacheKey,
-        access,
-        checkedAt: Date.now()
-    };
-    return { identity, management, access };
-}
 
 function getRequiredFeaturesForAction(action) {
     const requirement = EXTENSION_ACTION_FEATURE_REQUIREMENTS[String(action || '').trim()];
@@ -1482,20 +1287,6 @@ function hasAccessToAnyRequiredFeature(access, requiredFeatures = []) {
     if (!Array.isArray(requiredFeatures) || requiredFeatures.length === 0) return true;
     if (access?.isOwner) return true;
     return requiredFeatures.some((featureKey) => Boolean(access?.features?.[featureKey]));
-}
-
-function serializeManagedUserForUi(userRecord = null) {
-    const sanitizedUser = sanitizeManagedUserRecord(userRecord);
-    if (!sanitizedUser) return null;
-    return {
-        email: sanitizedUser.email,
-        role: sanitizedUser.role,
-        features: sanitizedUser.role === 'super_admin' ? [...EXTENSION_FEATURE_KEYS] : [...sanitizedUser.features],
-        createdAt: sanitizedUser.createdAt,
-        updatedAt: sanitizedUser.updatedAt,
-        createdBy: sanitizedUser.createdBy,
-        updatedBy: sanitizedUser.updatedBy
-    };
 }
 
 async function callJsonService(baseUrl, path, {
@@ -2316,40 +2107,6 @@ function isWithinLocalAlertWindow(timestampMs = Date.now()) {
 function formatMorningCount(value) {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : 'N/A';
-}
-
-function buildMorningDashboardSummaryMessage(summary) {
-    const generatedAt = new Date(summary?.generatedAt || Date.now());
-    const dateLabel = generatedAt.toLocaleDateString(undefined, {
-        weekday: 'short',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-    });
-    const timeLabel = generatedAt.toLocaleTimeString(undefined, {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-    });
-
-    const lines = [
-        `BetterLetter Morning Summary (${dateLabel} ${timeLabel})`,
-        ''
-    ];
-
-    const categories = Array.isArray(summary?.categories) ? summary.categories : [];
-    categories.forEach((item) => {
-        const label = String(item?.label || item?.key || 'Category').trim();
-        const requireAttention = formatMorningCount(item?.requireAttentionCount);
-        lines.push(`${label}: Require Attention ${requireAttention}`);
-    });
-
-    if (categories.length > 0) {
-        lines.push('');
-        lines.push('Source: Bots Dashboard paused filters');
-    }
-
-    return lines.join('\n');
 }
 
 function buildHotkeySummaryTooltipData(summary, errorMessage = '') {
@@ -5384,11 +5141,6 @@ async function hydrateMissingCdbs(limit = 25, preferredTabId = null) {
     return updated;
 }
 
-async function scrapePracticeListViaTab() {
-    // Disabled by design to avoid opening hidden/background tabs in any Chrome window.
-    return [];
-}
-
 async function scrapePracticeListViaSessionTab(preferredTabId = null) {
     const result = await runInExistingBetterLetterTab(async () => {
         try {
@@ -5763,23 +5515,6 @@ async function ensureSidebarHandleForTab(tabId, { forceCollapsed = true } = {}) 
     }
 }
 
-async function removeSidebarPanelFromTab(tabId) {
-    if (typeof tabId !== 'number') return;
-    try {
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => {
-                const root = document.getElementById('bl-allinone-sidebar-panel');
-                if (root) root.remove();
-                const style = document.getElementById('bl-allinone-sidebar-style');
-                if (style) style.remove();
-            }
-        });
-    } catch (e) {
-        // Ignore tabs where scripting is not available.
-    }
-}
-
 // --- 4. LISTENERS ---
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -5851,16 +5586,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 tabId: typeof sender?.tab?.id === 'number' ? sender.tab.id : null
             });
             return { success: Boolean(snapshot?.email) };
-        }
-
-        if (message?.type === 'mailroom_doc_clicked' && message?.data) {
-            const payload = { clickedMailroomDocData: message.data };
-            const senderTabId = sender?.tab?.id;
-            if (typeof senderTabId === 'number' && isBetterLetterUrl(sender?.tab?.url || '')) {
-                payload.targetTabId = senderTabId;
-            }
-            await chrome.storage.local.set(payload);
-            return { success: true };
         }
 
         if (message.action === 'getExtensionAccessState') {

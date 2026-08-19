@@ -54,15 +54,6 @@
       "all_frames": false
     },
     {
-      "matches": [
-        "https://app.betterletter.ai/mailroom/rejected*",
-        "https://app.betterletter.ai/mailroom/preparing*"
-      ],
-      "js": ["mailroom_page_integrator.js"],
-      "run_at": "document_idle",
-      "all_frames": false
-    },
-    {
       "matches": ["https://app.betterletter.ai/admin_panel/practices*"],
       "js": ["password_content.js"],
       "run_at": "document_idle",
