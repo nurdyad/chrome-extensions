@@ -1,24 +1,5 @@
 const $ = (id) => document.getElementById(id);
 
-function dashboardUrl(practiceId) {
-  const url = new URL("https://app.betterletter.ai/admin_panel/bots/dashboard");
-  url.searchParams.set("job_types", "docman_delete_original");
-  url.searchParams.set("practice_ids", practiceId);
-  url.searchParams.set("status", "paused");
-  return url.href;
-}
-
-function isExactDashboard(value, practiceId) {
-  try {
-    const url = new URL(value);
-    return url.origin === "https://app.betterletter.ai" &&
-      url.pathname === "/admin_panel/bots/dashboard" &&
-      url.searchParams.get("job_types") === "docman_delete_original" &&
-      url.searchParams.get("practice_ids") === practiceId &&
-      url.searchParams.get("status") === "paused";
-  } catch { return false; }
-}
-
 async function render() {
   const { blRunner: state = {} } = await chrome.storage.local.get("blRunner");
   if (state.config) {
@@ -28,13 +9,26 @@ async function render() {
   }
   $("status").textContent = [
     `Extension version: ${chrome.runtime.getManifest().version}`,
-    `State: ${state.active ? "RUNNING" : "stopped"}`,
+    `State: ${state.active ? "RUNNING" : state.phase === "starting" ? "STARTING" : "stopped"}`,
+    `Runner mode: ${state.dedicatedWindow === false ? "current tab" : "separate worker window"}`,
+    `Worker page: ${state.workerVisibility || "waiting"}`,
+    `Chrome recovery: ${state.suspensionRecovery ? "waking worker" : "ready"}`,
     `Completed this run: ${state.completedCount || 0}`,
     `Remaining: ${Number.isInteger(state.remainingCount) ? state.remainingCount : "waiting to count"}`,
     `Current document ID: ${state.currentDocumentId || "none"}`,
     `Job status: ${state.currentStatus || "waiting"}`,
     `Job UUID: ${state.currentJob || "none"}`,
+    `Dialog attempts: ${state.dialogAttempts || 0}/2`,
     `Completion attempts: ${state.completionAttempts || 0}/2`,
+    `LiveView connection: ${state.liveViewInfo || "waiting"}`,
+    `LiveView reloads: ${state.liveViewReloads || 0}/2`,
+    `Job page recovery reloads: ${state.detailRecoveryReloads || 0}/2`,
+    `Dashboard recovery reloads: ${state.dashboardRecoveryReloads || 0}/2`,
+    `Phoenix delivery: ${state.lastDispatchPushed == null ? "waiting" : state.lastDispatchPushed ?
+      `push observed, acknowledgement ${state.lastDispatchAcknowledged ? "observed" : "pending/not observed"}` :
+      "push not observed"}`,
+    `Unaccepted delivery checks: ${state.unacceptedDispatches || 0}/2`,
+    `Confirmation controls: ${state.confirmationInfo || "waiting"}`,
     `Message: ${state.message || "Ready"}`
   ].join("\n");
 }
@@ -52,25 +46,20 @@ $("start").addEventListener("click", async () => {
     $("status").textContent = "Open the BetterLetter bots dashboard in the active tab first.";
     return;
   }
-  const blRunner = {
-    active: true, targetTabId: tab.id, runId: crypto.randomUUID(),
-    startedAt: new Date().toISOString(), completedCount: 0, remainingCount: null,
-    currentJob: null, currentDocumentId: null, currentStatus: null,
-    expectedJobUrl: null, openingAt: null, confirmedAt: null, completionAttempts: 0,
-    phase: "dashboard", processed: [], message: "Starting on filtered dashboard",
-    config: { practiceName, practiceId, jobType: "docman_delete_original", delaySeconds,
-      dashboardUrl: dashboardUrl(practiceId) }
-  };
-  await chrome.storage.local.set({ blRunner });
-  if (!isExactDashboard(tab.url, practiceId)) await chrome.tabs.update(tab.id, { url: blRunner.config.dashboardUrl });
-  render();
+  try {
+    $("status").textContent = "Opening a dedicated BetterLetter worker window…";
+    const result = await chrome.runtime.sendMessage({ type: "startRunner", sourceTabId: tab.id,
+      config: { practiceName, practiceId, jobType: "docman_delete_original", delaySeconds } });
+    if (!result?.ok) throw new Error(result?.error || "The background runner did not start.");
+    await render();
+  } catch (error) {
+    $("status").textContent = `Could not start the worker: ${error?.message || String(error)}`;
+  }
 });
 
 $("stop").addEventListener("click", async () => {
-  const { blRunner = {} } = await chrome.storage.local.get("blRunner");
-  await chrome.storage.local.set({ blRunner: { ...blRunner, active: false, currentJob: null,
-    phase: "stopped", message: "Stopped by user" } });
-  render();
+  await chrome.runtime.sendMessage({ type: "stopRunner" });
+  await render();
 });
 
 chrome.storage.onChanged.addListener(render);

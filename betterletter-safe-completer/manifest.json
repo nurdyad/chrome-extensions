@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "BetterLetter Safe Job Completer",
-  "version": "1.9.4",
+  "version": "1.13.1",
   "description": "Safely completes explicitly filtered BetterLetter docman_delete_original jobs.",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "alarms"],
   "host_permissions": ["https://app.betterletter.ai/admin_panel/bots/*"],
   "action": {
     "default_popup": "popup.html",
