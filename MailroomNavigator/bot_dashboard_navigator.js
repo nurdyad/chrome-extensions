@@ -16,8 +16,7 @@
     let metaReanchorTimer = null;
     let navigatorToastEl = null;
     let navigatorToastTimer = null;
-    let uuidResultsPanel = null;
-    let uuidResultsPanelRequestSeq = 0;
+    let uuidBatchCheckRequestSeq = 0;
     let botDashboardRowCache = null;
     let attachListenersTimer = null;
     let botDashboardSelectionPruneTimer = null;
@@ -89,6 +88,9 @@
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     const LINK_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path></svg>';
     const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+    // Shared with panel.js: writing the latest batch here lets the sidebar
+    // panel's UUID Lookup section mirror what was just checked on-page.
+    const UUID_BATCH_RESULTS_STORAGE_KEY = 'uuidBatchCheckLatest';
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -2701,35 +2703,6 @@ ${hiddenBlock}
         };
     }
 
-    function getAnchorElementFromPointerEvent(cell, event) {
-        if (!(cell instanceof Element)) return null;
-
-        if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
-            const pointed = document.elementFromPoint(event.clientX, event.clientY);
-            if (pointed instanceof Element && cell.contains(pointed)) {
-                const interactive = pointed.closest('a, button, [role="button"]');
-                if (interactive && cell.contains(interactive)) return interactive;
-                return pointed;
-            }
-        }
-
-        const hovered = Array.from(cell.querySelectorAll(':hover')).pop();
-        if (hovered instanceof Element) {
-            const interactive = hovered.closest('a, button, [role="button"]');
-            if (interactive && cell.contains(interactive)) return interactive;
-            return hovered;
-        }
-
-        return cell;
-    }
-
-    function getAnchorPointFromPointerEvent(event) {
-        if (!event) return null;
-        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return null;
-        return { clientX: event.clientX, clientY: event.clientY };
-    }
-
-
     function positionMetaPanel(panel, cell, anchorRect) {
         const viewportPadding = 8;
         const cellRect = cell.getBoundingClientRect();
@@ -3814,193 +3787,87 @@ ${hiddenBlock}
         return uuids;
     }
 
-    function ensureUuidResultsPanel() {
-        if (uuidResultsPanel) return uuidResultsPanel;
-
-        uuidResultsPanel = document.createElement('div');
-        uuidResultsPanel.id = 'bl-uuid-results-panel';
-        Object.assign(uuidResultsPanel.style, {
-            position: 'fixed',
-            zIndex: '2147483647',
-            background: '#ffffff',
-            border: '1px solid #d0d5dd',
-            borderRadius: '8px',
-            boxShadow: '0 10px 24px rgba(15, 23, 42, 0.22)',
-            padding: '10px',
-            width: '360px',
-            maxHeight: '420px',
-            overflowY: 'auto',
-            display: 'none',
-            font: '12px/1.4 system-ui, -apple-system, sans-serif',
-            color: '#1f2937'
-        });
-        document.body.appendChild(uuidResultsPanel);
-
-        document.addEventListener('mousedown', (event) => {
-            if (!uuidResultsPanel || uuidResultsPanel.style.display === 'none') return;
-            if (uuidResultsPanel.contains(event.target)) return;
-            if (event.target?.closest?.('[data-bl-uuid-check-trigger="true"]')) return;
-            hideUuidResultsPanel();
-        }, true);
-
-        return uuidResultsPanel;
-    }
-
-    function hideUuidResultsPanel() {
-        if (uuidResultsPanel) uuidResultsPanel.style.display = 'none';
-    }
-
-    function positionUuidResultsPanel(panel, anchorEl) {
-        const viewportPadding = 8;
-        const rect = anchorEl.getBoundingClientRect();
-        panel.style.display = 'block';
-        panel.style.visibility = 'hidden';
-        const panelRect = panel.getBoundingClientRect();
-
-        const maxLeft = Math.max(viewportPadding, window.innerWidth - panelRect.width - viewportPadding);
-        let left = Math.min(Math.max(rect.left, viewportPadding), maxLeft);
-
-        let top = rect.bottom + 4;
-        if (top + panelRect.height > window.innerHeight - viewportPadding) {
-            top = Math.max(viewportPadding, rect.top - panelRect.height - 4);
-        }
-
-        panel.style.left = `${left}px`;
-        panel.style.top = `${top}px`;
-        panel.style.visibility = 'visible';
-    }
-
-    function buildUuidResultRowSkeleton(uuid) {
-        const row = document.createElement('div');
-        Object.assign(row.style, {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '6px 4px',
-            borderBottom: '1px solid #f1f3f5'
-        });
-
-        const info = document.createElement('div');
-        Object.assign(info.style, { flex: '1', minWidth: '0' });
-
-        const uuidLabel = document.createElement('div');
-        uuidLabel.textContent = `${uuid.slice(0, 8)}...${uuid.slice(-6)}`;
-        uuidLabel.title = uuid;
-        Object.assign(uuidLabel.style, { fontFamily: 'monospace', fontSize: '11px', color: '#495057' });
-
-        const statusLabel = document.createElement('div');
-        statusLabel.textContent = 'Checking...';
-        statusLabel.dataset.role = 'status';
-        Object.assign(statusLabel.style, { fontSize: '11px', fontWeight: '600', color: '#868e96' });
-
-        info.append(uuidLabel, statusLabel);
-
-        const actions = document.createElement('div');
-        actions.dataset.role = 'actions';
-        Object.assign(actions.style, { display: 'flex', gap: '4px', flexShrink: '0' });
-        actions.appendChild(createButton({
-            icon: COPY_ICON_SVG,
-            color: '#868e96',
-            title: 'Copy UUID',
-            onClick: (btn) => copyToClipboard(uuid, () => flashButton(btn))
-        }));
-
-        row.append(info, actions);
-        return row;
-    }
-
-    function updateUuidResultRow(row, outcome) {
-        const statusLabel = row.querySelector('[data-role="status"]');
-        const actions = row.querySelector('[data-role="actions"]');
-        if (!statusLabel || !actions) return;
-
-        if (outcome.error) {
-            statusLabel.textContent = outcome.error;
-            statusLabel.style.color = '#e03131';
-            return;
-        }
-
-        const result = outcome.result || {};
-        if (!result.found || !result.status) {
-            statusLabel.textContent = collapseText(result.detail) || 'Not found';
-            statusLabel.style.color = '#e8590c';
-            return;
-        }
-
-        const status = collapseText(result.status).toLowerCase();
-        const prettyStatus = collapseText(result.status) || 'Unknown';
-        statusLabel.textContent = result.documentId ? `${prettyStatus} (Doc ${result.documentId})` : prettyStatus;
-        statusLabel.style.color = status === 'rejected' ? '#e03131' : status === 'released' ? '#2f9e44' : '#1971c2';
-
-        if (result.documentLink) {
-            actions.appendChild(createButton({
-                icon: LINK_ICON_SVG,
-                color: '#495057',
-                title: 'Open document link',
-                onClick: () => openUrlInNewTab(result.documentLink)
-            }));
+    function persistUuidBatchResults(items) {
+        try {
+            chrome.storage.local.set({
+                [UUID_BATCH_RESULTS_STORAGE_KEY]: {
+                    checkedAt: new Date().toISOString(),
+                    items
+                }
+            });
+        } catch (error) {
+            // Ignore: syncing to the sidebar panel is a nice-to-have, not
+            // required for the check itself to run.
         }
     }
 
-    async function runUuidBatchCheck(triggerBtn, uuids) {
-        const panel = ensureUuidResultsPanel();
-        panel.innerHTML = '';
-        triggerBtn.setAttribute('data-bl-uuid-check-trigger', 'true');
+    // No on-page popup: results are checked here but only ever displayed in
+    // the sidebar/floating panel's UUID Lookup section (synced via
+    // chrome.storage). A bottom-right status pill (reusing the same one the
+    // bulk-select feature uses) gives progress feedback, since it stays
+    // visible regardless of mouse position — unlike the hover meta-panel,
+    // which hides as soon as you move the mouse away from the cell.
+    async function runUuidBatchCheck(uuids) {
+        const batchItems = uuids.map((uuid) => ({ uuid, error: null, result: null }));
+        persistUuidBatchResults(batchItems);
 
-        const header = document.createElement('div');
-        Object.assign(header.style, {
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '8px',
-            fontWeight: '700'
-        });
-        const title = document.createElement('span');
-        title.textContent = `Checking ${uuids.length} UUID${uuids.length === 1 ? '' : 's'}...`;
-        const closeBtn = createButton({ label: '✕', color: '#868e96', title: 'Close', onClick: () => hideUuidResultsPanel() });
-        header.append(title, closeBtn);
-        panel.appendChild(header);
-
-        const rowsHost = document.createElement('div');
-        panel.appendChild(rowsHost);
-
-        const rows = new Map();
-        uuids.forEach((uuid) => {
-            const row = buildUuidResultRowSkeleton(uuid);
-            rowsHost.appendChild(row);
-            rows.set(uuid, row);
-        });
-
-        positionUuidResultsPanel(panel, triggerBtn);
-
-        // Sequential, not batched: this hits the local trigger service on
-        // 127.0.0.1, not Phoenix LiveView, so there is no push-timeout risk
-        // here the way there was with bulk row selection.
-        const requestSeq = ++uuidResultsPanelRequestSeq;
+        const requestSeq = ++uuidBatchCheckRequestSeq;
         let completed = 0;
-        for (const uuid of uuids) {
-            if (requestSeq !== uuidResultsPanelRequestSeq) return;
+        let nextIndex = 0;
+        setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
+
+        async function checkOne(uuid, itemIndex) {
             try {
+                // The lookup runs a real SQL query through the local
+                // trigger service's Cloud SQL Proxy connection, which can
+                // legitimately take up to UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS
+                // (26s) server-side, so this client-side timeout must stay
+                // comfortably above that or slow-but-successful lookups get
+                // reported as failed.
                 const response = await sendRuntimeMessage({
                     action: 'lookupUuidStatus',
                     payload: { uuid }
-                }, { timeoutMs: 15000 });
-                if (requestSeq !== uuidResultsPanelRequestSeq) return;
+                }, { timeoutMs: 30000 });
+                if (requestSeq !== uuidBatchCheckRequestSeq) return;
                 if (!response?.success) {
-                    updateUuidResultRow(rows.get(uuid), { error: collapseText(response?.error) || 'Lookup failed' });
+                    const error = collapseText(response?.error) || 'Lookup failed';
+                    batchItems[itemIndex] = { uuid, error, result: null };
                 } else {
-                    updateUuidResultRow(rows.get(uuid), { result: response.result });
+                    batchItems[itemIndex] = { uuid, error: null, result: response.result };
                 }
             } catch (error) {
-                if (requestSeq !== uuidResultsPanelRequestSeq) return;
-                updateUuidResultRow(rows.get(uuid), { error: collapseText(error?.message) || 'Lookup failed' });
+                if (requestSeq !== uuidBatchCheckRequestSeq) return;
+                const message = collapseText(error?.message) || 'Lookup failed';
+                batchItems[itemIndex] = { uuid, error: message, result: null };
             }
+            if (requestSeq !== uuidBatchCheckRequestSeq) return;
             completed += 1;
-            title.textContent = completed < uuids.length
-                ? `Checking ${completed} / ${uuids.length} UUIDs...`
-                : `Checked ${uuids.length} UUID${uuids.length === 1 ? '' : 's'}`;
-            positionUuidResultsPanel(panel, triggerBtn);
+            setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
+            persistUuidBatchResults(batchItems);
         }
+
+        async function worker() {
+            while (nextIndex < uuids.length) {
+                if (requestSeq !== uuidBatchCheckRequestSeq) return;
+                const index = nextIndex;
+                nextIndex += 1;
+                await checkOne(uuids[index], index);
+            }
+        }
+
+        // The local trigger service's SQL pool caps out at 2 concurrent
+        // connections (see automation/linear-trigger-server.mjs), so 2
+        // workers fully uses that capacity without queuing requests behind
+        // it for no benefit — this doubles throughput over strictly
+        // sequential lookups.
+        const workerCount = Math.min(2, uuids.length);
+        await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+        if (requestSeq !== uuidBatchCheckRequestSeq) return;
+        setBotDashboardBulkStatus(`Checked ${uuids.length} UUID${uuids.length === 1 ? '' : 's'} — see the sidebar panel for results.`);
+        window.setTimeout(() => {
+            if (requestSeq === uuidBatchCheckRequestSeq) setBotDashboardBulkStatus('');
+        }, 3500);
     }
 
     function makeUuidBatchCheckAction(rowData) {
@@ -4012,7 +3879,7 @@ ${hiddenBlock}
             icon: `${LINK_ICON_SVG}<span>${label}</span>`,
             color: '#6f42c1',
             title: `Look up document status for ${uuids.length} UUID${uuids.length === 1 ? '' : 's'} found in this status message`,
-            onClick: (btn) => runUuidBatchCheck(btn, uuids)
+            onClick: () => runUuidBatchCheck(uuids)
         });
     }
 
@@ -4035,10 +3902,13 @@ ${hiddenBlock}
 
                 cell.dataset.blMetaAction = 'true';
                 cell.style.borderBottom = '1px dotted #6c757d';
-                cell.addEventListener('mouseenter', (event) => {
-                    const anchorElement = getAnchorElementFromPointerEvent(cell, event);
-                    const anchorPoint = getAnchorPointFromPointerEvent(event);
-                    scheduleMetaPanelForCell(cell, builder, label, anchorElement, anchorPoint);
+                cell.addEventListener('mouseenter', () => {
+                    // Anchor to a fixed spot on the cell (its top) rather than
+                    // the pointer's entry position: on tall multi-line cells
+                    // (e.g. long Status error text), pointer-based anchoring
+                    // made the action buttons jump around distractingly as
+                    // the mouse moved over different lines of text.
+                    scheduleMetaPanelForCell(cell, builder, label, null, null);
                 });
                 cell.addEventListener('mouseleave', () => hideMetaPanel());
             };
