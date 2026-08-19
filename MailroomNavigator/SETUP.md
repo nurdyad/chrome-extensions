@@ -3,7 +3,7 @@
 This document covers:
 
 1. Base extension install (all OS)
-2. Optional automation install (macOS)
+2. Local trigger service install
 3. Optional/manual alternatives for Windows/Linux
 
 ## 1. Base Install (macOS, Windows, Linux)
@@ -12,7 +12,7 @@ This document covers:
 
 - Google Chrome (or Chromium-based browser with extension developer mode)
 - Git
-- Node.js 18+ (required for automation scripts; optional for extension-only usage)
+- Node.js 18+ (required for the local trigger service; optional for extension-only usage)
 
 ### Steps
 
@@ -43,9 +43,6 @@ cp .env.example .env
 ```
 
 2. Edit `.env` and provide real values:
-   - `user_email`, `user_password`
-   - admin auth fields if required in your environment
-   - OTP IMAP mailbox settings
    - `LINEAR_API_KEY`, `LINEAR_TEAM_KEY` (for extension "Create Linear Issue")
    - `SLACK_BOT_TOKEN` (only if you want Slack sync from the Linear Issue panel)
    - optional Access Control settings:
@@ -53,28 +50,24 @@ cp .env.example .env
      - `MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET_TYPE`
      - `MAILROOMNAV_ACCESS_CONTROL_SLACK_TARGET`
      - `MAILROOMNAV_ACCESS_CONTROL_ALERT_COOLDOWN_MINUTES`
-   - optional Superblocks UUID lookup settings:
-     - `SUPERBLOCKS_UUID_LOOKUP_URL`
-     - `SUPERBLOCKS_UUID_LOOKUP_TOKEN`
-     - `SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER`
-     - `SUPERBLOCKS_UUID_LOOKUP_METHOD`
-     - `SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD`
-     - `SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH`
-     - `SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH`
+   - optional Cloud SQL UUID lookup settings:
+     - `MAILROOMNAV_SQL_HOST`
+     - `MAILROOMNAV_SQL_PORT`
+     - `MAILROOMNAV_SQL_DATABASE`
+     - `MAILROOMNAV_SQL_USER`
+     - `MAILROOMNAV_SQL_PASSWORD`
    - optional linear trigger settings
 
 3. Never commit `.env`:
    - `.env` is gitignored
    - keep secrets only on local machine or secret manager
 
-## 3. macOS Full Automation (Recommended)
+## 3. macOS Local Trigger Service
 
 This enables:
 
-- morning session refresh
-- native macOS summary notifications
-- global hotkeys (`Cmd+Shift+9`, `Cmd+Ctrl+9`)
 - `Trigger Linear` local service
+- Cloud SQL-backed practice/UUID lookup and reconcile helpers
 
 ### Install
 
@@ -82,36 +75,26 @@ This enables:
 cd MailroomNavigator/automation
 npm install
 chmod +x *.sh
-./install-morning-login-launchagent.sh --hour 7 --minute 0 --interval 300
 ./install-linear-trigger-launchagent.sh
-./install-global-summary-hotkey.sh
 ```
 
 ### Validate
 
 ```bash
 cd MailroomNavigator/automation
-/bin/bash ./morning-login-runner.sh --force
-./show-live-summary-notification.sh
-./check-global-summary-hotkey.sh
+./check-linear-trigger-service.sh
 curl http://127.0.0.1:4817/health
 ```
 
-## 4. Windows/Linux (Extension + Manual Automation)
+## 4. Windows/Linux (Extension + Manual Service)
 
-The extension works cross-platform, but macOS-specific components do not:
+The extension works cross-platform, but the macOS LaunchAgent installer uses `launchctl`.
 
-- no `launchctl` LaunchAgent
-- no AppKit/Carbon hotkey daemon (`global-summary-hotkey.m`)
-- no `osascript` notification path
-
-You can still run automation manually:
+You can still run the local service manually:
 
 ```bash
 cd MailroomNavigator/automation
 npm install
-node save-auth-local.mjs
-node fetch-dashboard-summary.mjs
 node linear-trigger-server.mjs
 ```
 
@@ -176,7 +159,7 @@ Notes:
 
 - `Hybrid` with `Open Access Mode` is now the default deployment mode for this repo
 - new GitHub installs are not blocked from Navigator, Job Panel, dashboard hover tools, or other browser-side features
-- localhost-backed tools such as `Superblocks UUID Lookup`, `Create Linear Issue`, `Slack Sync`, `Trigger Linear`, and `Reconcile Linear` remain visible, but still require the optional local trigger service when someone wants to use them
+- localhost-backed tools such as `Cloud SQL UUID Lookup`, `Create Linear Issue`, `Slack Sync`, `Trigger Linear`, and `Reconcile Linear` remain visible, but still require the optional local trigger service when someone wants to use them
 - access is matched against the signed-in BetterLetter user email
 - only `nur.siddique@dyad.net` can manage access
 - owner access is always full
@@ -223,25 +206,22 @@ Access requests:
 - the shared access service stores the requester email, recent IPs, request count, requested features, note, and last user agent
 - IPs may reflect a proxy, VPN, or NAT rather than a unique device
 
-## 5.2 Superblocks UUID Lookup Requirements
+## 5.2 Cloud SQL UUID Lookup Requirements
 
-The Job Panel Superblocks field calls the same localhost service on `127.0.0.1:4817`.
+The Job Panel UUID field calls the same localhost service on `127.0.0.1:4817`.
 
 Required local setup:
 
-- `SUPERBLOCKS_UUID_LOOKUP_URL` exists in `MailroomNavigator/.env`
-- the configured URL accepts the UUID field and returns JSON
-- if auth is required, set `SUPERBLOCKS_UUID_LOOKUP_TOKEN`
-- if the UUID/status keys differ from the defaults, set:
-  - `SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD`
-  - `SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH`
-  - `SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH`
+- Cloud SQL Proxy is running on `127.0.0.1:15432`
+- `MAILROOMNAV_SQL_PASSWORD` exists in `MailroomNavigator/.env`
+- the local trigger service has been restarted after `.env` changes
 
 Defaults:
 
-- request method: `POST`
-- request body: `{ "uuid": "<uuid>" }`
-- response status path: `status`
+- host: `127.0.0.1`
+- port: `15432`
+- database: `mailroom_prod`
+- user: `reporting`
 
 ## 6. Upgrade / Reinstall
 
@@ -250,26 +230,21 @@ After pulling updates:
 ```bash
 cd MailroomNavigator/automation
 npm install
-./install-morning-login-launchagent.sh --hour 7 --minute 0 --interval 300
 ./install-linear-trigger-launchagent.sh
-./install-global-summary-hotkey.sh
 ```
 
-## 7. Uninstall Automation (macOS)
+## 7. Uninstall Local Trigger Service (macOS)
 
 ```bash
 cd MailroomNavigator/automation
-./uninstall-morning-login-launchagent.sh
 ./uninstall-linear-trigger-launchagent.sh
-./uninstall-global-summary-hotkey.sh
 ```
 
 ## 8. Troubleshooting Quick Commands
 
 ```bash
 cd MailroomNavigator/automation
-./check-global-summary-hotkey.sh
-tail -f ../logs/morning-login-$(date +%F).log
-tail -f ../logs/live-summary-hotkey-$(date +%F).log
+./check-linear-trigger-service.sh
+tail -f ../logs/linear-trigger-server.log
 curl http://127.0.0.1:4817/health
 ```
