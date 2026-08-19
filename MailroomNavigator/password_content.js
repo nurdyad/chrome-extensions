@@ -2,7 +2,6 @@
 // Provides inline floating helpers to read/copy/convert credential-like fields.
 // Wrapped in an IIFE to keep page scope isolated.
 (() => {
-    console.log('BetterLetter Password Tools: Script injected and running!'); // Diagnostic log at the very top
     let floatingPanel = null;
     let currentInput = null;
     let inputOriginalValues = new WeakMap();
@@ -20,24 +19,6 @@
       }
 
       triggerInputEvents(input); // Trigger one final time after all characters are in
-    }
-
-    function findNearbyLabelText(input) {
-      if (input.id) {
-        const label = document.querySelector(`label[for="${input.id}"]`);
-        if (label) return label.textContent.trim();
-      }
-
-      let parent = input.parentElement;
-      while (parent && parent !== document.body) {
-        const labelLike = parent.querySelector("label, span, h2, h3, legend");
-        if (labelLike && labelLike.textContent.length > 0) {
-          return labelLike.textContent.trim();
-        }
-        parent = parent.parentElement;
-      }
-
-      return "";
     }
 
     function generatePassword(input = null) {

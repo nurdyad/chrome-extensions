@@ -3,7 +3,6 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
-import * as Jobs from './jobs.js';
 import { AuthManagement } from './auth_management.js';
 
 let practiceCacheLoadPromise = null;
@@ -194,10 +193,6 @@ function showView(viewId, { force = false } = {}) {
     });
     const activeBtn = document.getElementById(navIds[resolvedViewId]);
     if (activeBtn) activeBtn.classList.add('active-tab');
-
-    if (resolvedViewId === 'jobManagerView') {
-        Jobs.fetchAndPopulateData();
-    }
 }
 
 async function fetchExtensionAccessState({ forceRefresh = false, allowStale = false } = {}) {
@@ -739,16 +734,6 @@ function copyUrlsToClipboard(urls, label = 'URLs') {
             showToast('Copy failed.');
         })
         .catch(() => showToast('Copy failed.'));
-}
-
-function openUrlForId(baseUrl, id, label = 'ID') {
-    if (!id) {
-        showToast(`No valid ${label}.`);
-        return;
-    }
-
-    const url = `${baseUrl}${id}`;
-    openTabWithTimeout(url);
 }
 
 // --- 2. Global Hide Suggestions ---
@@ -2508,10 +2493,6 @@ async function initializePanel() {
         if (tone === 'success') return 'Success';
         return 'Failed';
     };
-    const formatDocmanToolCount = (value, singular, plural = `${singular}s`) => {
-        const count = Number(value) || 0;
-        return `${count} ${count === 1 ? singular : plural}`;
-    };
     const getDocmanRunHeadline = (run, isActive = false) => {
         if (!run || typeof run !== 'object') return '';
         const actionLabel = getDocmanActionLabel(trimDocmanField(run.action, 40));
@@ -2795,49 +2776,6 @@ async function initializePanel() {
             primaryValue,
             options
         };
-    };
-    const formatDocmanToolRunSummary = (run, isActive = false) => {
-        if (!run || typeof run !== 'object') return '';
-        const actionLabel = getDocmanActionLabel(trimDocmanField(run.action, 40));
-        const practiceLabel = trimDocmanField(run.practiceName, 120) || 'Selected practice';
-        const odsLabel = trimDocmanField(run.odsCode, 16);
-        const practiceSummary = odsLabel ? `${practiceLabel} (${odsLabel})` : practiceLabel;
-        const startedAt = formatDocmanToolTime(run.startedAt);
-        const endedAt = formatDocmanToolTime(run.endedAt);
-        const lines = Array.isArray(run.summaryLines)
-            ? run.summaryLines.map((line) => trimDocmanField(line, 240)).filter(Boolean).slice(0, 8)
-            : [];
-
-        let headline = '';
-        if (isActive || String(run.status || '').toLowerCase() === 'running') {
-            headline = `${actionLabel} for ${practiceSummary} is running${startedAt ? ` since ${startedAt}` : ''}.`;
-        } else if (String(run.status || '').toLowerCase() === 'success') {
-            headline = `${actionLabel} for ${practiceSummary} finished successfully${endedAt ? ` at ${endedAt}` : ''}.`;
-        } else {
-            const reason = trimDocmanField(run.error, 220) || (run.exitCode != null ? `exit code ${run.exitCode}` : 'run failed');
-            headline = `${actionLabel} for ${practiceSummary} failed${endedAt ? ` at ${endedAt}` : ''}: ${reason}`;
-        }
-
-        if (String(run.action || '').trim() == 'onboarding' && trimDocmanField(run.onboardingInputFolderName, 160)) {
-            lines.unshift(`Folder #4: ${trimDocmanField(run.onboardingInputFolderName, 160)}`);
-        }
-        if (String(run.action || '').trim() == 'verify' && Number.isFinite(Number(run.usernamesCount)) && Number(run.usernamesCount) > 0) {
-            lines.unshift(`Checked ${Number(run.usernamesCount)} username${Number(run.usernamesCount) === 1 ? '' : 's'}.`);
-        }
-        if (String(run.action || '').trim() == 'create-group' && trimDocmanField(run.groupName, 120)) {
-            lines.unshift(`Group: ${trimDocmanField(run.groupName, 120)}`);
-        }
-
-        const dedupedLines = [];
-        const seen = new Set();
-        lines.forEach((line) => {
-            const key = line.toLowerCase();
-            if (seen.has(key)) return;
-            seen.add(key);
-            dedupedLines.push(line);
-        });
-
-        return dedupedLines.length ? [headline, ...dedupedLines].join('\n') : headline;
     };
     const fetchDocmanToolRunStatus = async () => {
         const response = await chrome.runtime.sendMessage({
@@ -4402,10 +4340,6 @@ async function initializePanel() {
             : linearSlackTargetsCache.channels
     );
 
-    const hasSlackTargetSuggestionsForType = (targetType) => (
-        getSlackTargetSuggestionsForType(targetType).length > 0
-    );
-
     const isSlackTargetCacheFresh = () => {
         const syncedAtRaw = trimField(linearSlackTargetsCache.syncedAt, 80);
         if (!syncedAtRaw) return false;
@@ -5890,12 +5824,10 @@ ${error?.message || String(error)}`, 'invalid');
                 });
                 if (response && response.practiceCache) {
                     setCachedPractices(response.practiceCache);
-                    console.log('Cache loaded:', Object.keys(response.practiceCache).length);
                     return;
                 }
             }
 
-            console.log('Cache loaded:', cacheSize);
             await tryAutoSelectPracticeFromActiveTab();
         } catch (e) { console.error("Cache load error:", e); }
     }

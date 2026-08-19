@@ -1401,10 +1401,8 @@ const AuthManagement = (() => {
 
   return {
     init,
-    refresh,
     updateContext,
-    render,
   };
 })();
 
-export { AuthManagement, AuditLog };
+export { AuthManagement };

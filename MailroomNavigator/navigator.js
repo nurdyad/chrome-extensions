@@ -1187,10 +1187,6 @@ export async function displayPracticeStatus(options = {}) {
                 rememberLiveCountsForOds(selectedOds, countsForRender);
                 lastRenderedStatusSignatureByOds.set(selectedOds, statusSignature);
             }
-            if (!canPatchCountsOnly) {
-                statusDisplayEl.style.display = 'block';
-            }
-            rememberLiveCountsForOds(selectedOds, countsForRender);
             if (!silent) hideStatus();
 
             // Fetch fresh live counts asynchronously so basic status renders immediately.
