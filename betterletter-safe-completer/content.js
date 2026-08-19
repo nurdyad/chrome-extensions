@@ -2,6 +2,12 @@
   const JOB_TYPE = "docman_delete_original";
   const DASHBOARD = "/admin_panel/bots/dashboard";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const DASHBOARD_STABILIZE_MS = 400;
+  const DASHBOARD_RETURN_SETTLE_MS = 1000;
+  const DETAIL_RETURN_WAIT_MS = 1500;
+  const JOB_STILL_LISTED_WAIT_MS = 2000;
+  const LIVEVIEW_STABLE_SLEEP_MS = 150;
+  const BACKGROUND_NAV_WAIT_MS = 2000;
   let routePath = location.pathname;
   let routeEnteredAt = Date.now();
   let busy = false;
@@ -94,7 +100,7 @@
     if (!control) return null;
     // A reconnect can replace the DOM immediately after phx-connected appears.
     // Require a short stable interval and resolve the element again.
-    await sleep(300);
+    await sleep(LIVEVIEW_STABLE_SLEEP_MS);
     const current = resolveControl();
     return current && current.isConnected && liveViewConnection(current).ready ? current : null;
   }
@@ -565,11 +571,11 @@
       return;
     }
     const body = norm(document.body?.innerText);
-    if (routeAge() < 2000) return patch({ message: "Waiting for dashboard rows to stabilize" });
+    if (routeAge() < DASHBOARD_STABILIZE_MS) return patch({ message: "Waiting for dashboard rows to stabilize" });
     if (current.phase === "returning") {
       const returnedAt = Date.parse(current.returnStartedAt || "");
       const elapsed = Number.isFinite(returnedAt) ? Date.now() - returnedAt : routeAge();
-      if (elapsed < 10000 || routeAge() < 10000) {
+      if (elapsed < DASHBOARD_RETURN_SETTLE_MS || routeAge() < DASHBOARD_RETURN_SETTLE_MS) {
         await patch({ message: "Waiting for the dashboard identity and rows to repopulate after browser Back" });
         return;
       }
@@ -621,7 +627,7 @@
     if (current.currentJob && current.phase === "opening") {
       const openingAt = Date.parse(current.openingAt || "");
       const elapsed = Number.isFinite(openingAt) ? Date.now() - openingAt : Infinity;
-      if (elapsed < 5000) {
+      if (elapsed < BACKGROUND_NAV_WAIT_MS) {
         await patch({ remainingCount,
           message: `Waiting for document ${current.currentDocumentId} to open in this tab` });
         return;
@@ -641,7 +647,7 @@
           return stop(`Document ${current.currentDocumentId} returned to the dashboard before confirmation; no completion was counted.`);
         }
         const elapsed = Date.now() - Date.parse(current.confirmedAt || "");
-        if (Number.isFinite(elapsed) && elapsed < 10000) return patch({ remainingCount, message: `Waiting for dashboard to remove ${current.currentJob}` });
+        if (Number.isFinite(elapsed) && elapsed < JOB_STILL_LISTED_WAIT_MS) return patch({ remainingCount, message: `Waiting for dashboard to remove ${current.currentJob}` });
         if (current.phase !== "returning" || current.currentStatus !== "completed") {
           if (!current.expectedJobUrl) return stop("Cannot verify the selected job because its exact URL is missing.");
           await patch({ phase: "verifying_result", remainingCount,
@@ -714,7 +720,7 @@
     if (!expectedJobUrl || !sameJob(location.href, expectedJobUrl)) return stop("Job URL does not match the dashboard selection.");
     if (current.phase === "returning") {
       const returnStartedAt = Date.parse(current.returnStartedAt || "");
-      if (Number.isFinite(returnStartedAt) && Date.now() - returnStartedAt < 10000) return;
+      if (Number.isFinite(returnStartedAt) && Date.now() - returnStartedAt < DETAIL_RETURN_WAIT_MS) return;
       await patch({ message: "Browser Back did not return to the dashboard; loading the exact filtered dashboard" });
       location.assign(config.dashboardUrl);
       return;
