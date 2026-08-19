@@ -5,7 +5,7 @@ async function render() {
   if (state.config) {
     $("practiceName").value = state.config.practiceName || "";
     $("practiceId").value = state.config.practiceId || "";
-    $("delaySeconds").value = state.config.delaySeconds || 2;
+    $("delaySeconds").value = state.config.delaySeconds || 1;
   }
   $("status").textContent = [
     `Extension version: ${chrome.runtime.getManifest().version}`,
@@ -36,7 +36,7 @@ async function render() {
 $("start").addEventListener("click", async () => {
   const practiceName = $("practiceName").value.trim();
   const practiceId = $("practiceId").value.trim().toUpperCase();
-  const delaySeconds = Math.max(2, Math.min(120, Number($("delaySeconds").value) || 2));
+  const delaySeconds = Math.max(1, Math.min(120, Number($("delaySeconds").value) || 1));
   if (!practiceName || !/^[A-Z][A-Z0-9]{4,9}$/.test(practiceId)) {
     $("status").textContent = "Enter a practice name and valid ODS ID.";
     return;
