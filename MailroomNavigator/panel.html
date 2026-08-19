@@ -9,9 +9,37 @@
   <link rel="stylesheet" href="css/inputs.css">
   <link rel="stylesheet" href="css/status.css">
   <link rel="stylesheet" href="css/auth_management.css">
+  <style>
+    /* Compact mode: only meaningful in the standalone floating window (not the docked sidebar). */
+    body.bl-panel-compact .extension-wrapper > *:not(#compactModeToggleRow):not(#compactSearchBar) {
+      display: none !important;
+    }
+    #compactSearchBar {
+      padding-bottom: 4px;
+    }
+    #compactSearchBar .search-container {
+      margin-bottom: 0;
+    }
+    /* Give the relocated practice-search block and quick-links row the same
+       card treatment as .section-container, so compact mode doesn't look like
+       bare inputs floating with no visual grouping. */
+    body.bl-panel-compact #practiceSearchBlock,
+    body.bl-panel-compact .nav-action-grid {
+      background-color: white;
+      border-radius: var(--border-radius);
+      padding: 10px;
+      box-shadow: var(--box-shadow);
+      border-left: 4px solid var(--primary-color);
+      margin-bottom: 0;
+    }
+  </style>
 </head>
 <body>
-  <div class="extension-wrapper"> 
+  <div class="extension-wrapper">
+    <div class="btn-row" id="compactModeToggleRow" style="justify-content: flex-end; margin-bottom: 8px;">
+      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar">Compact</button>
+    </div>
+    <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;"></div>
     <div id="accessControlNotice" class="validation-badge neutral" style="display: none; margin-bottom: 10px; white-space: pre-wrap;"></div>
     <div id="identityDetectionPanel" class="section-container" style="display: none; margin-bottom: 12px;">
       <h3>BetterLetter Session Required</h3>
@@ -67,7 +95,7 @@
           <span id="liveIndicator" class="live-dot" title="Auto-scan active"></span>
         </h1>
         
-        <div style="margin-bottom: 15px;">
+        <div id="practiceSearchBlock" style="margin-bottom: 15px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
             <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
             <div style="display: flex; gap: 4px;"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice">
@@ -93,19 +121,26 @@
             </div>
           </div>
 
-          <div class="search-container" style="position: relative;">
-            <div class="input-with-button" style="margin-bottom: 0;">
-              <input id="practiceInput" placeholder="Enter Practice Name, ODS or CDB" autocomplete="off">
-              <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
+	          <div class="search-container" style="position: relative;">
+	            <div class="input-with-button" style="margin-bottom: 0;">
+	              <input id="practiceInput" placeholder="Enter Practice Name, ODS or CDB" autocomplete="off">
+	              <button id="resetSettingsBtn" class="btn btn-sm btn-icon" title="Reset">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M2.5 2v6h6M21.5 22v-6h-6"></path>
                   <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2"></path>
                 </svg>
               </button>
-            </div>
-            <ul id="suggestions"></ul>
-          </div>
-        </div>
+	            </div>
+	            <ul id="suggestions"></ul>
+	          </div>
+	          <div id="recentPracticesSection" class="recent-practices-section" hidden>
+	            <div class="recent-practices-head">
+	              <span>Recently viewed</span>
+	              <button id="clearRecentPracticesBtn" type="button" class="recent-practices-clear">Clear</button>
+	            </div>
+	            <div id="recentPracticesList" class="recent-practices-list"></div>
+	          </div>
+	        </div>
 
         <div class="action-grid nav-action-grid">
           <button id="collectionBtn" class="btn btn-sm" disabled>
@@ -133,7 +168,7 @@
             Rejected
           </button>
 
-          <button id="openEhrSettingsBtn" class="btn btn-sm" disabled style="background-color: #6c757d;">
+          <button id="openEhrSettingsBtn" class="btn btn-sm" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2"></rect>
               <line x1="12" y1="8" x2="12" y2="16"></line>
@@ -142,62 +177,62 @@
             Settings
           </button>
 
-          <button id="taskRecipientsBtn" class="btn btn-sm" disabled>
+          <button id="taskRecipientsBtn" class="btn btn-sm" disabled title="Task Recipients">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="8.5" cy="7" r="4"></circle>
               <line x1="20" y1="8" x2="20" y2="14"></line>
               <line x1="23" y1="11" x2="17" y2="11"></line>
             </svg>
-            Task Recipients
+            Recipients
           </button>
         </div>
 
         <div id="status"></div>
 
-        <div id="docmanToolSection" class="section-container docman-quick-actions-section">
-          <div class="docman-quick-actions-head">
-            <h3>Docman Tools</h3>
-          </div>
+	        <div id="statusDisplay"></div>
+
+	        <div class="section-container jobs-section">
+	          <div class="jobs-shell">
+	            <section class="job-panel job-panel-unified">
+	              <div class="job-panel-head">
+	                <label class="job-panel-title" for="botJobsChecklistNav">Bot Jobs</label>
+	                <div class="job-panel-actions">
+	                  <button id="clearBotJobsNavBtn" class="btn btn-sm btn-ghost job-clear-btn" type="button" title="Clear selected bot jobs" disabled>Clear</button>
+	                  <button id="openBotJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn" title="Open selected bot jobs" type="button">Open</button>
+	                </div>
+	              </div>
+	              <div id="botJobsChecklistNav" class="job-checklist">
+	                <label class="job-check-item job-check-all"><input type="checkbox" data-select-all="true"><span class="job-check-text">All jobs</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="generate_output"><span class="job-check-text">Generate Output</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_validate"><span class="job-check-text">Validate</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_import"><span class="job-check-text">Import</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_file"><span class="job-check-text">File</span></label>
+	                <label class="job-check-item" title="Merge Tasks for Same Recipient"><input type="checkbox" value="merge_tasks_for_same_recipient"><span class="job-check-text">Merge Same Recipient</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="publish_tasks"><span class="job-check-text">Publish Tasks</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_review"><span class="job-check-text">Review</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_delete_original"><span class="job-check-text">Delete Original</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_upload"><span class="job-check-text">Upload</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="docman_rejection"><span class="job-check-text">Rejection</span></label>
+	                <label class="job-check-item"><input type="checkbox" value="emis_api_consultation"><span class="job-check-text">EMIS API</span></label>
+	              </div>
+	            </section>
+	          </div>
+	          <div class="jobs-helper-text">Single click selects. Double click opens that job directly. Use <strong>All jobs</strong> for the full set.</div>
+	        </div>
+
+	        <div id="docmanToolSection" class="section-container docman-quick-actions-section">
+	          <div class="docman-quick-actions-head">
+	            <h3>Docman Tools</h3>
+	          </div>
           <div class="docman-quick-actions-grid">
             <button id="runDocmanLoginBtn" class="btn btn-sm docman-primary-action" type="button" disabled>Login</button>
             <button id="runDocmanVerifyBtn" class="btn btn-sm" type="button" disabled>Verify</button>
             <button id="runDocmanCreateGroupBtn" class="btn btn-sm" type="button" disabled>Create Group</button>
             <button id="runDocmanCleanProcessingBtn" class="btn btn-sm" type="button" disabled>Clean Processing</button>
             <button id="runDocmanCleanFilingBtn" class="btn btn-sm" type="button" disabled>Clean Filing</button>
-            <button id="runDocmanOnboardingBtn" class="btn btn-sm" type="button" disabled>Onboarding</button>
-          </div>
-        </div>
-
-        <div id="statusDisplay"></div>
-
-        <div class="section-container jobs-section">
-          <div class="jobs-shell">
-            <section class="job-panel job-panel-unified">
-              <div class="job-panel-head">
-                <label class="job-panel-title" for="botJobsChecklistNav">Bot Jobs</label>
-                <div class="job-panel-actions">
-                  <button id="clearBotJobsNavBtn" class="btn btn-sm btn-ghost job-clear-btn" type="button" title="Clear selected bot jobs" disabled>Clear</button>
-                  <button id="openBotJobsNavBtn" class="btn btn-sm btn-ghost job-open-btn" title="Open selected bot jobs" type="button">Open</button>
-                </div>
-              </div>
-              <div id="botJobsChecklistNav" class="job-checklist">
-                <label class="job-check-item job-check-all"><input type="checkbox" data-select-all="true"><span class="job-check-text">All jobs</span></label>
-                <label class="job-check-item"><input type="checkbox" value="generate_output"><span class="job-check-text">Generate Output</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_validate"><span class="job-check-text">Validate</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_import"><span class="job-check-text">Import</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_file"><span class="job-check-text">File</span></label>
-                <label class="job-check-item" title="Merge Tasks for Same Recipient"><input type="checkbox" value="merge_tasks_for_same_recipient"><span class="job-check-text">Merge Same Recipient</span></label>
-                <label class="job-check-item"><input type="checkbox" value="publish_tasks"><span class="job-check-text">Publish Tasks</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_review"><span class="job-check-text">Review</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_delete_original"><span class="job-check-text">Delete Original</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_upload"><span class="job-check-text">Upload</span></label>
-                <label class="job-check-item"><input type="checkbox" value="docman_rejection"><span class="job-check-text">Rejection</span></label>
-                <label class="job-check-item"><input type="checkbox" value="emis_api_consultation"><span class="job-check-text">EMIS API</span></label>
-              </div>
-            </section>
-          </div>
-          <div class="jobs-helper-text">Single click selects. Double click opens that job directly. Use <strong>All jobs</strong> for the full set.</div>
-        </div>
+	            <button id="runDocmanOnboardingBtn" class="btn btn-sm" type="button" disabled>Onboarding</button>
+	          </div>
+	        </div>
 
       <div id="bookmarkletToolsSection" class="section-container bookmarklet-section" style="margin-top: 12px;">
         <h3>Bookmarklet Tools</h3>
@@ -253,7 +288,7 @@
     <!-- View 2: Job Panel -->
     <div id="jobManagerView" class="job-manager-container view-transition" style="display: none; width: 100%;">
   
-      <div class="section-container">
+      <div class="section-container job-tool-card quick-document-card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <h3 style="margin: 0;">Quick Document Search</h3>
             <span id="pasteStatus" style="font-size: 10px; color: #28a745; font-weight: normal; opacity: 0; transition: opacity 0.3s;">Pasted!</span>
@@ -267,22 +302,47 @@
         </div>
         <div id="manualDocValidation" class="validation-badge neutral">Enter a numeric Document ID.</div>
 
-        <div class="copy-row">
-          <button id="copyJobsUrlBtn" class="btn btn-sm btn-ghost">Copy Jobs URL</button>
-          <button id="copyObanUrlBtn" class="btn btn-sm btn-ghost">Copy Oban URL</button>
-          <button id="copyLogUrlBtn" class="btn btn-sm btn-ghost">Copy Log URL</button>
-          <button id="copyAdminUrlBtn" class="btn btn-sm btn-ghost">Copy Admin URL</button>
-        </div>
-        
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <button id="btnJobs" class="btn btn-sm" style="background: #6c757d;">Jobs</button>
-            <button id="btnOban" class="btn btn-sm" style="background: #fd7e14;">Oban</button>
-            <button id="btnLog" class="btn btn-sm" style="background: #17a2b8;">Log</button>
-            <button id="btnAdmin" class="btn btn-sm" style="background: #007bff;">Admin</button>
+        <div class="quick-action-grid">
+          <div class="quick-action-pair">
+            <button id="btnJobs" class="btn btn-sm quick-action-btn is-jobs" type="button">Jobs</button>
+            <button id="copyJobsUrlBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Jobs URL" aria-label="Copy Jobs URL">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="quick-action-pair">
+            <button id="btnAdmin" class="btn btn-sm quick-action-btn is-admin" type="button">Admin</button>
+            <button id="copyAdminUrlBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Admin URL" aria-label="Copy Admin URL">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="quick-action-pair">
+            <button id="btnLog" class="btn btn-sm quick-action-btn is-log" type="button">Log</button>
+            <button id="copyLogUrlBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Log URL" aria-label="Copy Log URL">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="quick-action-pair">
+            <button id="btnOban" class="btn btn-sm quick-action-btn is-oban" type="button">Oban</button>
+            <button id="copyObanUrlBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Oban URL" aria-label="Copy Oban URL">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="section-container">
+      <div class="section-container job-tool-card single-status-card">
         <h3>Single ID Status Check</h3>
         <label for="jobStatusInput">Job ID:</label>
         <div class="search-container dashboard-id-search">
@@ -292,62 +352,100 @@
           <div id="jobIdAutocompleteResultsContainer" class="custom-autocomplete-results"></div>
         </div>
         <div id="jobStatusValidation" class="validation-badge neutral">Enter a Job ID (UUID or numeric).</div>
-        <div class="copy-row">
-          <button id="copyJobStatusUrlBtn" class="btn btn-sm btn-ghost">Copy Job ID</button>
-          <button id="copyJobStatusLinkBtn" class="btn btn-sm btn-ghost">Copy Job Link</button>
-        </div>
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="openJobStatusBtn" class="btn btn-sm">Open Status</button>
-          <button id="clearJobStatusInputBtn" class="btn btn-sm">Clear</button>
-          <button id="openProblemReviewBtn" class="btn btn-sm" style="grid-column: 1 / -1; background: #0f766e;">Open Problem Review</button>
-        </div>
-      </div>
-
-      <div id="superblocksUuidLookupSection" class="section-container">
-        <h3>UUID Lookup</h3>
-        <label for="superblocksUuidLookupInput">UUID</label>
-        <div class="search-container dashboard-id-search">
-          <div class="input-with-button" style="margin-bottom: 0;">
-            <input id="superblocksUuidLookupInput" placeholder="Paste UUID or fragment..." autocomplete="off">
+        <div class="quick-action-stack">
+          <div class="quick-action-pair">
+            <button id="openJobStatusBtn" class="btn btn-sm quick-action-btn is-status" type="button">Open Status</button>
+            <button id="copyJobStatusLinkBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Job Link" aria-label="Copy Job Link">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
           </div>
-        </div>
-        <div id="superblocksUuidLookupStatus" class="validation-badge neutral">Paste a UUID or UUID fragment to check status.</div>
-      </div>
-
-      <div class="section-container">
-        <h3>Bulk ID Actions</h3>
-        <label for="bulkIdsInput">Paste multiple Document IDs (comma/space/new line)</label>
-        <textarea id="bulkIdsInput" class="bulk-input" placeholder="e.g. 12345, 67890"></textarea>
-        <div id="bulkIdsValidation" class="validation-badge neutral">No IDs detected yet.</div>
-        <div class="bulk-controls">
-          <select id="bulkActionType">
-            <option value="jobs">Jobs</option>
-            <option value="oban">Oban</option>
-            <option value="log">Log</option>
-            <option value="admin">Admin</option>
-          </select>
-          <button id="openBulkActionBtn" class="btn btn-sm">Open All</button>
-          <button id="copyBulkActionBtn" class="btn btn-sm btn-icon-only" title="Copy all links" aria-label="Copy all links">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path>
-              <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path>
+          <div class="quick-action-pair">
+            <button id="openProblemReviewBtn" class="btn btn-sm quick-action-btn is-review" type="button">Open Problem Review</button>
+            <button id="copyJobStatusUrlBtn" class="btn btn-sm quick-copy-btn" type="button" title="Copy Job ID" aria-label="Copy Job ID">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <button id="clearJobStatusInputBtn" class="btn btn-sm quick-secondary-btn" type="button" title="Clear Job ID" aria-label="Clear Job ID">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 6h18"></path>
+              <path d="M8 6V4h8v2"></path>
+              <path d="M19 6l-1 14H6L5 6"></path>
+              <path d="M10 11v5"></path>
+              <path d="M14 11v5"></path>
             </svg>
           </button>
         </div>
       </div>
 
-      <div class="section-container">
-        <h3>Recent IDs</h3>
-        <label>Recent Document IDs</label>
-        <div id="recentDocIdsChips" class="chips-row"></div>
-        <div id="recentDocMetaList" class="recent-id-meta-list"></div>
-        <label style="margin-top: 8px;">Recent Job IDs</label>
-        <div id="recentJobIdsChips" class="chips-row"></div>
-        <div id="recentJobMetaList" class="recent-id-meta-list"></div>
+      <div id="uuidLookupSection" class="section-container">
+        <h3>UUID Lookup</h3>
+        <label for="uuidLookupInput">UUID</label>
+        <div class="search-container dashboard-id-search">
+          <div class="input-with-button" style="margin-bottom: 0;">
+            <input id="uuidLookupInput" placeholder="Paste UUID or fragment..." autocomplete="off">
+          </div>
+        </div>
+        <div id="uuidLookupStatus" class="validation-badge neutral">Paste a UUID or UUID fragment to check status.</div>
+      </div>
+
+      <div id="bulkIdActionsSection" class="section-container collapsible-section is-collapsed">
+        <button id="bulkIdActionsSectionToggle" class="section-toggle-btn" type="button" aria-expanded="false" aria-controls="bulkIdActionsSectionBody">
+          <span class="section-toggle-copy">
+            <span class="section-toggle-title">Bulk ID Actions</span>
+            <span class="section-toggle-subtitle">Open or copy several document links together.</span>
+          </span>
+          <span class="section-toggle-chevron" aria-hidden="true"></span>
+        </button>
+
+        <div id="bulkIdActionsSectionBody" class="section-collapse-body" style="display: none;">
+          <label for="bulkIdsInput">Paste multiple Document IDs (comma/space/new line)</label>
+          <textarea id="bulkIdsInput" class="bulk-input" placeholder="e.g. 12345, 67890"></textarea>
+          <div id="bulkIdsValidation" class="validation-badge neutral">No IDs detected yet.</div>
+          <div class="bulk-controls">
+            <select id="bulkActionType">
+              <option value="jobs">Jobs</option>
+              <option value="oban">Oban</option>
+              <option value="log">Log</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button id="openBulkActionBtn" class="btn btn-sm">Open All</button>
+            <button id="copyBulkActionBtn" class="btn btn-sm btn-icon-only" title="Copy all links" aria-label="Copy all links">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path>
+                <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="recentIdsSection" class="section-container collapsible-section is-collapsed">
+        <button id="recentIdsSectionToggle" class="section-toggle-btn" type="button" aria-expanded="false" aria-controls="recentIdsSectionBody">
+          <span class="section-toggle-copy">
+            <span class="section-toggle-title">Recent IDs</span>
+            <span class="section-toggle-subtitle">Reuse recently opened document and job IDs.</span>
+          </span>
+          <span class="section-toggle-chevron" aria-hidden="true"></span>
+        </button>
+
+        <div id="recentIdsSectionBody" class="section-collapse-body" style="display: none;">
+          <label>Recent Document IDs</label>
+          <div id="recentDocIdsChips" class="chips-row"></div>
+          <div id="recentDocMetaList" class="recent-id-meta-list"></div>
+          <label style="margin-top: 8px;">Recent Job IDs</label>
+          <div id="recentJobIdsChips" class="chips-row"></div>
+          <div id="recentJobMetaList" class="recent-id-meta-list"></div>
+        </div>
       </div>
 
     </div>
@@ -443,19 +541,6 @@
         </label>
         <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger ready.</div>
         </div>
-      </div>
-
-      <div id="gitPublishSection" class="section-container" style="margin-top: 12px;">
-        <h3>GitHub Publish</h3>
-        <label for="gitPublishBranchInput">Branch name</label>
-        <input id="gitPublishBranchInput" type="text" autocomplete="off" placeholder="Preparing suggestion...">
-        <label for="gitPublishCommitInput" style="margin-top: 8px;">Commit message</label>
-        <input id="gitPublishCommitInput" type="text" autocomplete="off" placeholder="Preparing suggestion...">
-        <div class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="prepareGitPublishBtn" class="btn btn-sm btn-ghost" type="button">Prepare</button>
-          <button id="runGitPublishBtn" class="btn btn-sm" type="button" style="background: #0f766e;">Push to GitHub</button>
-        </div>
-        <div id="gitPublishStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Use Prepare to check changed files and fill the branch/commit suggestion.</div>
       </div>
 
       <div id="accessServiceConfigSection" class="section-container" style="display: none; margin-top: 12px;">

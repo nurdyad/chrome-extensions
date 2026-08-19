@@ -75,6 +75,14 @@ export function showStatus(message, type) {
   }
 }
 
+export function hideStatus() {
+  const statusEl = document.getElementById('status');
+  if (!statusEl) return;
+  statusEl.textContent = '';
+  statusEl.className = '';
+  statusEl.style.display = 'none';
+}
+
 function canUseNavigatorClipboardApi() {
     try {
         const protocol = String(globalThis?.location?.protocol || '').toLowerCase();

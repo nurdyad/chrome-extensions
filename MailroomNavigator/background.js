@@ -29,6 +29,7 @@ const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
 const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
+const UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS = 26000;
 const EXTENSION_ACCESS_RESOLVE_TIMEOUT_MS = 1800;
 const EXTENSION_ACCESS_CACHE_TTL_MS = 2 * 60 * 1000;
 const EXTENSION_USER_MANAGEMENT_STORAGE_KEY = 'extensionUserManagementV1';
@@ -128,7 +129,7 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     savePracticeSecretOverride: ['practice_navigator'],
     savePracticeSecretToAdminPanel: ['practice_navigator'],
     undoPracticeSecretSave: ['practice_navigator'],
-    lookupSuperblocksUuidStatus: ['job_panel']
+    lookupUuidStatus: ['job_panel']
 };
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
 
@@ -1051,7 +1052,7 @@ function sanitizeDocmanToolRun(rawRun = null) {
     };
 }
 
-function sanitizeSuperblocksLookupResult(rawLookup = null) {
+function sanitizeUuidLookupResult(rawLookup = null) {
     if (!rawLookup || typeof rawLookup !== 'object') {
         return {
             uuid: '',
@@ -2252,11 +2253,11 @@ async function handleGetDocmanToolRunStatus() {
     }
 }
 
-async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
+async function handleLookupUuidStatus(rawPayload = null) {
     if (isServerlessLiteModeEnabled()) {
         return buildServerlessLiteUnsupportedResponse(
             'UUID Lookup',
-            'UUID lookup needs the local trigger service and Cloud SQL/Superblocks config.'
+            'UUID lookup needs the local trigger service and Cloud SQL config.'
         );
     }
     try {
@@ -2265,8 +2266,9 @@ async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
             throw new Error('Invalid or missing UUID.');
         }
 
-        const { response, payload } = await callLinearTriggerServer(`/superblocks/uuid-status?uuid=${encodeURIComponent(uuid)}`, {
-            method: 'GET'
+        const { response, payload } = await callLinearTriggerServer(`/uuid-status?uuid=${encodeURIComponent(uuid)}`, {
+            method: 'GET',
+            timeoutMs: UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS
         });
 
         if (!response.ok || !payload?.ok) {
@@ -2285,7 +2287,7 @@ async function handleLookupSuperblocksUuidStatus(rawPayload = null) {
 
         return {
             success: true,
-            result: sanitizeSuperblocksLookupResult(payload.lookup)
+            result: sanitizeUuidLookupResult(payload.lookup)
         };
     } catch (error) {
         return {
@@ -5564,12 +5566,28 @@ async function ensureCacheLoaded(preferredTabId = null) {
     await fetchAndCachePracticeList('initial-load', preferredTabId);
 }
 
-function openPanelPopup(hostTabId = null) {
+async function findExistingPanelPopupWindow() {
+    const panelUrlPrefix = chrome.runtime.getURL('panel.html');
+    const windows = await chrome.windows.getAll({ populate: true, windowTypes: ['popup'] });
+    for (const win of windows) {
+        const hasPanelTab = win.tabs?.some((tab) => tab.url && tab.url.startsWith(panelUrlPrefix));
+        if (hasPanelTab) return win;
+    }
+    return null;
+}
+
+async function openPanelPopup(hostTabId = null) {
+    const existing = await findExistingPanelPopupWindow();
+    if (existing) {
+        await chrome.windows.update(existing.id, { focused: true, drawAttention: true });
+        return;
+    }
+
     const url = new URL(chrome.runtime.getURL('panel.html'));
     if (typeof hostTabId === 'number' && Number.isFinite(hostTabId)) {
         url.searchParams.set('hostTabId', String(hostTabId));
     }
-    chrome.windows.create({
+    await chrome.windows.create({
         url: url.toString(),
         type: 'popup',
         width: 330,
@@ -5762,33 +5780,11 @@ async function removeSidebarPanelFromTab(tabId) {
     }
 }
 
-async function showSidebarPanelForTab(tabId) {
-    if (typeof tabId !== 'number') return;
-    try {
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => {
-                const root = document.getElementById('bl-allinone-sidebar-panel');
-                if (!root) return;
-                root.classList.remove('collapsed');
-                const toggleButton = root.querySelector('[data-role="toggle"]');
-                if (toggleButton) {
-                    toggleButton.textContent = '▶';
-                    toggleButton.setAttribute('aria-label', 'Collapse panel');
-                }
-            }
-        });
-    } catch (e) {
-        // Ignore tabs where scripting is not available.
-    }
-}
-
 // --- 4. LISTENERS ---
 
 chrome.action.onClicked.addListener(async (tab) => {
     await setTargetTabId(tab?.id);
-    await ensureSidebarHandleForTab(tab?.id, { forceCollapsed: false });
-    await showSidebarPanelForTab(tab?.id);
+    await openPanelPopup(tab?.id);
     maybeTriggerMorningDashboardAlert(tab?.id, getTabUrl(tab), 'action_click').catch(() => undefined);
 });
 
@@ -5982,8 +5978,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'getDocmanToolRunStatus') {
             return await handleGetDocmanToolRunStatus();
         }
-        if (message.action === 'lookupSuperblocksUuidStatus') {
-            return await handleLookupSuperblocksUuidStatus(message.payload);
+        if (message.action === 'lookupUuidStatus') {
+            return await handleLookupUuidStatus(message.payload);
         }
         if (message.action === 'requestActiveScrape') {
             const data = await fetchAndCachePracticeList(
