@@ -1906,6 +1906,9 @@ async function initializePanel() {
     const manualDocValidation = document.getElementById('manualDocValidation');
     const jobStatusValidation = document.getElementById('jobStatusValidation');
     const uuidLookupStatus = document.getElementById('uuidLookupStatus');
+    const uuidBatchResultsSection = document.getElementById('uuidBatchResultsSection');
+    const uuidBatchResultsTitle = document.getElementById('uuidBatchResultsTitle');
+    const uuidBatchResultsList = document.getElementById('uuidBatchResultsList');
     const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
     const docIdAutocompleteResultsContainer = document.getElementById('docIdAutocompleteResultsContainer');
@@ -2187,6 +2190,15 @@ async function initializePanel() {
             ? 'uuid-status-summary-grid'
             : 'uuid-status-summary-grid has-single-card';
 
+        const statusTagName = !loading && prettyStatus ? 'button' : 'div';
+        const statusInteractiveAttrs = !loading && prettyStatus
+            ? ` type="button" data-copy-value="${escapeHtml(prettyStatus)}" data-copy-label="Document status" title="Copy document status"`
+            : '';
+        const reasonTagName = !loading && prettyReason ? 'button' : 'div';
+        const reasonInteractiveAttrs = !loading && prettyReason
+            ? ` type="button" data-copy-value="${escapeHtml(prettyReason)}" data-copy-label="Rejected reason" title="Copy rejected reason"`
+            : '';
+
         return `
             <div class="uuid-status-card practice-status-card ${loading ? 'is-loading' : ''}">
                 <div class="uuid-status-header">
@@ -2195,22 +2207,81 @@ async function initializePanel() {
                 </div>
                 <div class="uuid-status-main">
                     <div class="practice-status-title">${escapeHtml(displayTitle)}</div>
-                    <div class="practice-status-subtitle uuid-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
+                    ${uuid && !loading
+                        ? `<button type="button" class="practice-status-subtitle uuid-status-subtitle practice-status-meta-item-button" data-copy-value="${escapeHtml(uuid)}" data-copy-label="UUID" title="Copy UUID">${escapeHtml(displaySubtitle)}</button>`
+                        : `<div class="practice-status-subtitle uuid-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>`}
                 </div>
                 <div class="${summaryGridClass}">
-                    <div class="practice-status-summary-card ${statusToneClass}">
+                    <${statusTagName} class="practice-status-summary-card ${statusToneClass}${statusTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${statusInteractiveAttrs}>
                         <span class="practice-status-summary-label">Document Status</span>
                         <span class="practice-status-summary-value">${escapeHtml(loading ? 'Loading' : prettyStatus)}</span>
-                    </div>
+                    </${statusTagName}>
                     ${showReason ? `
-                        <div class="practice-status-summary-card ${reasonToneClass}">
+                        <${reasonTagName} class="practice-status-summary-card ${reasonToneClass}${reasonTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${reasonInteractiveAttrs}>
                             <span class="practice-status-summary-label">Rejected Reason</span>
                             <span class="practice-status-summary-value">${escapeHtml(loading ? 'Checking' : (prettyReason || 'N/A'))}</span>
-                        </div>
+                        </${reasonTagName}>
                     ` : ''}
                 </div>
             </div>
         `;
+    };
+
+    const UUID_BATCH_RESULTS_STORAGE_KEY = 'uuidBatchCheckLatest';
+
+    // Mirrors the batch UUID checks run from the bot dashboard's on-page
+    // panel (bot_dashboard_navigator.js), which writes to the same storage
+    // key. Reuses buildUuidLookupCardHtml so each card matches the look of
+    // the single-UUID lookup above it.
+    const renderUuidBatchResults = (batch) => {
+        if (!uuidBatchResultsSection || !uuidBatchResultsList) return;
+        const items = Array.isArray(batch?.items) ? batch.items : [];
+        if (!items.length) {
+            uuidBatchResultsSection.hidden = true;
+            uuidBatchResultsList.innerHTML = '';
+            return;
+        }
+
+        if (uuidBatchResultsTitle) {
+            const checkedAt = Number.isFinite(Date.parse(batch?.checkedAt)) ? new Date(batch.checkedAt) : null;
+            const when = checkedAt ? checkedAt.toLocaleString() : '';
+            uuidBatchResultsTitle.textContent = `Last batch check (${items.length} UUID${items.length === 1 ? '' : 's'})${when ? ` · ${when}` : ''}`;
+        }
+
+        uuidBatchResultsList.innerHTML = items.map((item) => {
+            if (item?.error) {
+                const uuid = collapseText(item.uuid || '');
+                const subtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'UUID lookup';
+                return `
+                    <div class="uuid-status-card practice-status-card">
+                        <div class="uuid-status-header">
+                            <div class="practice-status-kicker">UUID Lookup</div>
+                        </div>
+                        <div class="uuid-status-main">
+                            <div class="practice-status-title">Lookup failed</div>
+                            <div class="practice-status-subtitle uuid-status-subtitle" title="${escapeHtml(uuid)}">${escapeHtml(subtitle)}</div>
+                        </div>
+                        <div class="uuid-status-summary-grid has-single-card">
+                            <div class="practice-status-summary-card is-danger">
+                                <span class="practice-status-summary-label">Document Status</span>
+                                <span class="practice-status-summary-value">${escapeHtml(collapseText(item.error))}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            return buildUuidLookupCardHtml({ ...(item?.result || {}), uuid: item?.result?.uuid || item?.uuid || '' }, { loading: false });
+        }).join('');
+        uuidBatchResultsSection.hidden = false;
+    };
+
+    const loadUuidBatchResults = async () => {
+        try {
+            const stored = await chrome.storage.local.get(UUID_BATCH_RESULTS_STORAGE_KEY);
+            renderUuidBatchResults(stored?.[UUID_BATCH_RESULTS_STORAGE_KEY] || null);
+        } catch (error) {
+            // Ignore: this mirror view is a nice-to-have, not core panel function.
+        }
     };
 
     const renderUuidLookupLoading = (uuid = '') => {
@@ -5634,16 +5705,34 @@ ${error?.message || String(error)}`, 'invalid');
             setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
         }
     });
-    uuidLookupStatus?.addEventListener('click', (event) => {
-        const target = event.target instanceof Element
-            ? event.target.closest('[data-uuid-open-link]')
-            : null;
-        if (!target) return;
+    const handleUuidCardClick = async (event) => {
+        if (!(event.target instanceof Element)) return;
 
-        event.preventDefault();
-        const url = String(target.getAttribute('data-uuid-open-link') || '').trim();
-        if (!url) return;
-        openTabWithTimeout(url);
+        const openLinkTarget = event.target.closest('[data-uuid-open-link]');
+        if (openLinkTarget) {
+            event.preventDefault();
+            const url = String(openLinkTarget.getAttribute('data-uuid-open-link') || '').trim();
+            if (url) openTabWithTimeout(url);
+            return;
+        }
+
+        const copyTarget = event.target.closest('[data-copy-value]');
+        if (copyTarget) {
+            event.preventDefault();
+            const value = String(copyTarget.getAttribute('data-copy-value') || '').trim();
+            const label = String(copyTarget.getAttribute('data-copy-label') || 'Value').trim();
+            if (!value) return;
+            const copied = await copyTextToClipboard(value);
+            showToast(copied ? `${label} copied.` : `Could not copy ${label.toLowerCase()}.`);
+        }
+    };
+    uuidLookupStatus?.addEventListener('click', handleUuidCardClick);
+    uuidBatchResultsList?.addEventListener('click', handleUuidCardClick);
+    loadUuidBatchResults().catch(() => undefined);
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes[UUID_BATCH_RESULTS_STORAGE_KEY]) {
+            renderUuidBatchResults(changes[UUID_BATCH_RESULTS_STORAGE_KEY].newValue || null);
+        }
     });
     docmanToolStatus?.addEventListener('click', async (event) => {
         const target = event.target instanceof Element
