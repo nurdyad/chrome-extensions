@@ -221,18 +221,3 @@ export function extractNameFromEmail(email) {
       .join(" ")
       .trim();
 }
-
-// Manage active item in dropdown lists (arrow keys)
-export function addActive(activeIdx, items) {
-    if (!items || items.length === 0) return -1;
-    removeActive(items);
-    activeIdx = (activeIdx + items.length) % items.length;
-    items[activeIdx].classList.add("active");
-    return activeIdx;
-}
-
-function removeActive(items) {
-    for (let i = 0; i < items.length; i++) {
-        items[i].classList.remove("active");
-    }
-}
