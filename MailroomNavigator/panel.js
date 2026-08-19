@@ -1,7 +1,7 @@
 // Main panel controller for all three views (Navigator, Job Panel, Others).
 // This file wires DOM events to feature modules and background actions.
 import { state, setCachedPractices } from './state.js';
-import { showToast, showStatus, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
+import { hideStatus, showToast, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
 import * as Jobs from './jobs.js';
 import { AuthManagement } from './auth_management.js';
@@ -35,8 +35,8 @@ const EXTENSION_FEATURE_CATALOG = [
 ];
 const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => feature.key);
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
-const SUPERBLOCKS_LOOKUP_REQUEST_TIMEOUT_MS = 12000;
-const SUPERBLOCKS_LOOKUP_LOADING_DELAY_MS = 120;
+const UUID_LOOKUP_REQUEST_TIMEOUT_MS = 26000;
+const UUID_LOOKUP_LOADING_DELAY_MS = 120;
 const NAVIGATOR_VIEW_FEATURE_KEYS = [
     'practice_navigator',
     'email_formatter',
@@ -358,7 +358,7 @@ function renderExtensionAccessState(access) {
         accessNoticeHideTimer = null;
     }
 
-    notice.style.display = 'block';
+    notice.style.display = 'none';
     if (identityStatus) {
         identityStatus.textContent = [emailLine, extensionAccessState.reason || 'Open a signed-in BetterLetter tab and refresh the panel.', sourceLine]
             .filter(Boolean)
@@ -368,52 +368,34 @@ function renderExtensionAccessState(access) {
     if (extensionAccessState.openAccessMode) {
         notice.classList.remove('invalid');
         notice.classList.add('valid');
-        notice.style.display = 'block';
-        notice.textContent = [
-            emailLine,
-            extensionAccessState.serverlessLiteMode
-                ? 'Serverless Lite is enabled. Browser-only tools are available everywhere, and localhost-only tools are hidden.'
-                : '',
-            extensionAccessState.isOwner
-                ? 'Open access mode enabled. Owner controls are available for this signed-in account.'
-                : (
-                    extensionAccessState.serverlessLiteMode
-                        ? 'Open access mode enabled on this machine. Serverless Lite tools are ready without localhost setup.'
-                        : 'Open access mode enabled on this machine. All MailroomNavigator features are available.'
-                ),
-            !extensionAccessState.email
-                ? 'BetterLetter email is not detected yet, so owner-only management stays hidden until you open a signed-in BetterLetter tab.'
-                : '',
-            sourceLine
-        ].filter(Boolean).join('\n');
+        notice.textContent = '';
+        if (!extensionAccessState.email) {
+            notice.style.display = 'block';
+            notice.textContent = [
+                'BetterLetter email is not detected yet, so owner-only management stays hidden until you open a signed-in BetterLetter tab.',
+                sourceLine
+            ].filter(Boolean).join('\n');
+        }
         if (identityPanel) identityPanel.style.display = 'none';
         if (identityDiagnostics) {
             identityDiagnostics.style.display = 'none';
             identityDiagnostics.textContent = '';
         }
         if (navButtonsRow) navButtonsRow.style.display = '';
-        accessNoticeHideTimer = setTimeout(() => {
-            notice.style.display = 'none';
-        }, 10000);
         return;
     }
 
     if (extensionAccessState.allowed) {
         notice.classList.remove('invalid');
         notice.classList.add('valid');
-        notice.style.display = 'block';
-        notice.textContent = [emailLine, extensionAccessState.isOwner ? 'Owner access granted.' : 'Access granted to assigned MailroomNavigator features.', sourceLine]
-            .filter(Boolean)
-            .join('\n');
+        notice.style.display = 'none';
+        notice.textContent = '';
         if (identityPanel) identityPanel.style.display = 'none';
         if (identityDiagnostics) {
             identityDiagnostics.style.display = 'none';
             identityDiagnostics.textContent = '';
         }
         if (navButtonsRow) navButtonsRow.style.display = '';
-        accessNoticeHideTimer = setTimeout(() => {
-            notice.style.display = 'none';
-        }, 10000);
         return;
     }
 
@@ -567,14 +549,13 @@ function applyExtensionFeatureAccessToUi() {
         !serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
     );
     setElementVisible('linearDraftCopyButtonsRow', serverlessLiteMode);
-    setElementVisible('superblocksUuidLookupSection', !serverlessLiteMode && hasExtensionFeature('job_panel'));
+    setElementVisible('uuidLookupSection', !serverlessLiteMode && hasExtensionFeature('job_panel'));
     setElementVisible(
         'linearTriggerStatus',
         !serverlessLiteMode
             && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
             && Boolean(String(document.getElementById('linearTriggerStatus')?.textContent || '').trim())
     );
-    setElementVisible('gitPublishSection', !serverlessLiteMode);
     setElementVisible('extensionUserManagementSection', !serverlessLiteMode && Boolean(extensionAccessState?.isOwner));
 
     const actionRow = document.getElementById('linearActionButtonsRow');
@@ -796,8 +777,10 @@ async function initializePanel() {
     try {
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
+    await Navigator.initializeRecentPractices();
 
     resizeToFitContent();
+    setupCompactModeToggle();
 
     const linearIssueSection = document.getElementById('linearIssueSection');
     const linearIssueSectionBody = document.getElementById('linearIssueSectionBody');
@@ -805,6 +788,12 @@ async function initializePanel() {
     const extensionUserManagementSection = document.getElementById('extensionUserManagementSection');
     const extensionUserManagementSectionBody = document.getElementById('extensionUserManagementSectionBody');
     const extensionUserManagementSectionToggle = document.getElementById('extensionUserManagementSectionToggle');
+    const bulkIdActionsSection = document.getElementById('bulkIdActionsSection');
+    const bulkIdActionsSectionBody = document.getElementById('bulkIdActionsSectionBody');
+    const bulkIdActionsSectionToggle = document.getElementById('bulkIdActionsSectionToggle');
+    const recentIdsSection = document.getElementById('recentIdsSection');
+    const recentIdsSectionBody = document.getElementById('recentIdsSectionBody');
+    const recentIdsSectionToggle = document.getElementById('recentIdsSectionToggle');
 
     const identityDetectionStatus = document.getElementById('identityDetectionStatus');
     const accessRequestSection = document.getElementById('accessRequestSection');
@@ -820,13 +809,7 @@ async function initializePanel() {
     const saveAccessServiceConfigBtn = document.getElementById('saveAccessServiceConfigBtn');
     const clearAccessServiceConfigBtn = document.getElementById('clearAccessServiceConfigBtn');
     const accessServiceConfigStatus = document.getElementById('accessServiceConfigStatus');
-    const gitPublishSection = document.getElementById('gitPublishSection');
-    const gitPublishBranchInput = document.getElementById('gitPublishBranchInput');
-    const gitPublishCommitInput = document.getElementById('gitPublishCommitInput');
-    const prepareGitPublishBtn = document.getElementById('prepareGitPublishBtn');
-    const runGitPublishBtn = document.getElementById('runGitPublishBtn');
-    const gitPublishStatus = document.getElementById('gitPublishStatus');
-    const superblocksUuidLookupSection = document.getElementById('superblocksUuidLookupSection');
+    const uuidLookupSection = document.getElementById('uuidLookupSection');
     const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
     const managedUserEmailInput = document.getElementById('managedUserEmailInput');
     const managedUserRoleInput = document.getElementById('managedUserRoleInput');
@@ -860,6 +843,12 @@ async function initializePanel() {
         if (sectionKey === 'extensionUserManagementSection') {
             applyCollapsibleSectionUi(extensionUserManagementSection, extensionUserManagementSectionBody, extensionUserManagementSectionToggle, collapsed);
         }
+        if (sectionKey === 'bulkIdActionsSection') {
+            applyCollapsibleSectionUi(bulkIdActionsSection, bulkIdActionsSectionBody, bulkIdActionsSectionToggle, collapsed);
+        }
+        if (sectionKey === 'recentIdsSection') {
+            applyCollapsibleSectionUi(recentIdsSection, recentIdsSectionBody, recentIdsSectionToggle, collapsed);
+        }
         if (persist) savePanelCollapsibleSectionState(collapsibleSectionState).catch(() => undefined);
     };
 
@@ -875,9 +864,31 @@ async function initializePanel() {
             !Boolean(collapsibleSectionState?.extensionUserManagementSection)
         );
     });
+    bulkIdActionsSectionToggle?.addEventListener('click', () => {
+        setCollapsibleSectionCollapsed(
+            'bulkIdActionsSection',
+            !Boolean(collapsibleSectionState?.bulkIdActionsSection)
+        );
+    });
+    recentIdsSectionToggle?.addEventListener('click', () => {
+        setCollapsibleSectionCollapsed(
+            'recentIdsSection',
+            !Boolean(collapsibleSectionState?.recentIdsSection)
+        );
+    });
 
     setCollapsibleSectionCollapsed('linearIssueSection', Boolean(collapsibleSectionState?.linearIssueSection), { persist: false });
     setCollapsibleSectionCollapsed('extensionUserManagementSection', Boolean(collapsibleSectionState?.extensionUserManagementSection), { persist: false });
+    setCollapsibleSectionCollapsed(
+        'bulkIdActionsSection',
+        collapsibleSectionState?.bulkIdActionsSection === undefined ? true : Boolean(collapsibleSectionState.bulkIdActionsSection),
+        { persist: false }
+    );
+    setCollapsibleSectionCollapsed(
+        'recentIdsSection',
+        collapsibleSectionState?.recentIdsSection === undefined ? true : Boolean(collapsibleSectionState.recentIdsSection),
+        { persist: false }
+    );
 
     const getFeatureCatalogForUi = () => Array.isArray(extensionAccessState?.featureCatalog) && extensionAccessState.featureCatalog.length > 0
         ? extensionAccessState.featureCatalog
@@ -1566,6 +1577,7 @@ async function initializePanel() {
         isPracticeWarmupRunning = true;
         syncPracticeCache()
             .then(() => {
+                Navigator.initializeRecentPractices().catch(() => undefined);
                 Navigator.handleNavigatorInput({ showOnEmpty: showOnEmptyAfterLoad });
             })
             .catch(() => undefined)
@@ -1625,7 +1637,8 @@ async function initializePanel() {
             pInput.focus();
         }
         Navigator.clearSelectedPractice();
-        showStatus('Settings reset.', 'success');
+        hideStatus();
+        showToast('Settings reset.');
     });
     
     // E. Global URL Opening Helper
@@ -1886,13 +1899,13 @@ async function initializePanel() {
     // K. JOB PANEL QUICK ACTIONS
     const manualDocIdInput = document.getElementById('manualDocId');
     const jobStatusInput = document.getElementById('jobStatusInput');
-    const superblocksUuidLookupInput = document.getElementById('superblocksUuidLookupInput');
+    const uuidLookupInput = document.getElementById('uuidLookupInput');
     const bulkIdsInput = document.getElementById('bulkIdsInput');
     const bulkActionType = document.getElementById('bulkActionType');
 
     const manualDocValidation = document.getElementById('manualDocValidation');
     const jobStatusValidation = document.getElementById('jobStatusValidation');
-    const superblocksUuidLookupStatus = document.getElementById('superblocksUuidLookupStatus');
+    const uuidLookupStatus = document.getElementById('uuidLookupStatus');
     const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
     const docIdAutocompleteResultsContainer = document.getElementById('docIdAutocompleteResultsContainer');
@@ -1999,12 +2012,12 @@ async function initializePanel() {
     let linearIssueContext = null;
     let linearSlackTargetsCache = { channels: [], users: [], syncedAt: '' };
     let linearSlackTargetSyncPromise = null;
-    let superblocksLookupRequestSeq = 0;
-    let superblocksLookupAbortController = null;
-    let superblocksLookupLoadingTimer = null;
-    let lastSuperblocksLookupUuid = '';
-    const superblocksLookupCache = new Map();
-    const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
+    let uuidLookupRequestSeq = 0;
+    let uuidLookupAbortController = null;
+    let uuidLookupLoadingTimer = null;
+    let lastUuidLookupUuid = '';
+    const uuidLookupCache = new Map();
+    const UUID_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
 
     const setValidationBadge = (el, isValid, neutralText, validText, invalidText) => {
         if (!el) return;
@@ -2021,61 +2034,61 @@ async function initializePanel() {
         }
     };
 
-    const setSuperblocksLookupStatus = (message, tone = 'neutral') => {
-        if (!superblocksUuidLookupStatus) return;
-        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        superblocksUuidLookupStatus.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
-        superblocksUuidLookupStatus.classList.remove('superblocks-lookup-status', 'superblocks-lookup-card-host');
-        superblocksUuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID or UUID fragment to check status.';
+    const setUuidLookupStatus = (message, tone = 'neutral') => {
+        if (!uuidLookupStatus) return;
+        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        uuidLookupStatus.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
+        uuidLookupStatus.classList.remove('uuid-lookup-status', 'uuid-lookup-card-host');
+        uuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID or UUID fragment to check status.';
     };
 
-    const pruneSuperblocksLookupCache = () => {
+    const pruneUuidLookupCache = () => {
         const now = Date.now();
-        superblocksLookupCache.forEach((entry, key) => {
-            if (!entry || (now - Number(entry.cachedAt || 0)) > SUPERBLOCKS_LOOKUP_CACHE_TTL_MS) {
-                superblocksLookupCache.delete(key);
+        uuidLookupCache.forEach((entry, key) => {
+            if (!entry || (now - Number(entry.cachedAt || 0)) > UUID_LOOKUP_CACHE_TTL_MS) {
+                uuidLookupCache.delete(key);
             }
         });
     };
 
-    const getCachedSuperblocksLookup = (uuid) => {
-        pruneSuperblocksLookupCache();
+    const getCachedUuidLookup = (uuid) => {
+        pruneUuidLookupCache();
         const key = String(uuid || '').trim().toLowerCase();
         if (!key) return null;
-        const entry = superblocksLookupCache.get(key);
+        const entry = uuidLookupCache.get(key);
         if (!entry) return null;
         return entry.result || null;
     };
 
-    const rememberSuperblocksLookup = (uuid, result) => {
+    const rememberUuidLookup = (uuid, result) => {
         const key = String(uuid || '').trim().toLowerCase();
         if (!key || !result || typeof result !== 'object') return;
-        superblocksLookupCache.set(key, {
+        uuidLookupCache.set(key, {
             cachedAt: Date.now(),
             result
         });
     };
 
-    const clearSuperblocksLookupLoadingTimer = () => {
-        if (superblocksLookupLoadingTimer !== null) {
-            window.clearTimeout(superblocksLookupLoadingTimer);
-            superblocksLookupLoadingTimer = null;
+    const clearUuidLookupLoadingTimer = () => {
+        if (uuidLookupLoadingTimer !== null) {
+            window.clearTimeout(uuidLookupLoadingTimer);
+            uuidLookupLoadingTimer = null;
         }
     };
 
-    const cancelSuperblocksLookupRequest = () => {
-        clearSuperblocksLookupLoadingTimer();
-        if (superblocksLookupAbortController) {
-            superblocksLookupAbortController.abort();
-            superblocksLookupAbortController = null;
+    const cancelUuidLookupRequest = () => {
+        clearUuidLookupLoadingTimer();
+        if (uuidLookupAbortController) {
+            uuidLookupAbortController.abort();
+            uuidLookupAbortController = null;
         }
     };
 
-    const buildSuperblocksLookupUrl = (uuid) => {
-        return `${LINEAR_TRIGGER_SERVER_BASE_URL}/superblocks/uuid-status?uuid=${encodeURIComponent(uuid)}`;
+    const buildUuidLookupUrl = (uuid) => {
+        return `${LINEAR_TRIGGER_SERVER_BASE_URL}/uuid-status?uuid=${encodeURIComponent(uuid)}`;
     };
 
-    const normalizeSuperblocksLookupError = (message, status = 0) => {
+    const normalizeUuidLookupError = (message, status = 0) => {
         const normalized = collapseText(message);
         if (status === 404 || normalized.toLowerCase() === 'not found.') {
             return 'Local trigger service is running an older version. Restart install-linear-trigger-launchagent.sh (or restart node linear-trigger-server.mjs).';
@@ -2084,8 +2097,8 @@ async function initializePanel() {
         return status ? `Trigger service failed with status ${status}.` : 'UUID lookup failed.';
     };
 
-    const fetchSuperblocksLookupDirect = async (uuid, { signal } = {}) => {
-        const response = await fetch(buildSuperblocksLookupUrl(uuid), {
+    const fetchUuidLookupDirect = async (uuid, { signal } = {}) => {
+        const response = await fetch(buildUuidLookupUrl(uuid), {
             method: 'GET',
             cache: 'no-store',
             signal
@@ -2099,15 +2112,15 @@ async function initializePanel() {
         }
 
         if (!response.ok || !payload?.ok) {
-            throw new Error(normalizeSuperblocksLookupError(payload?.error || rawBody, response.status));
+            throw new Error(normalizeUuidLookupError(payload?.error || rawBody, response.status));
         }
 
         return payload.lookup || {};
     };
 
-    const fetchSuperblocksLookupViaBackground = async (uuid) => {
+    const fetchUuidLookupViaBackground = async (uuid) => {
         const response = await chrome.runtime.sendMessage({
-            action: 'lookupSuperblocksUuidStatus',
+            action: 'lookupUuidStatus',
             payload: { uuid },
             ...getProtectedActionPayload()
         });
@@ -2119,9 +2132,9 @@ async function initializePanel() {
         return response.result || {};
     };
 
-    const fetchSuperblocksLookup = async (uuid, { signal } = {}) => {
+    const fetchUuidLookup = async (uuid, { signal } = {}) => {
         try {
-            return await fetchSuperblocksLookupDirect(uuid, { signal });
+            return await fetchUuidLookupDirect(uuid, { signal });
         } catch (error) {
             if (signal?.aborted || error?.name === 'AbortError') {
                 throw error;
@@ -2130,26 +2143,26 @@ async function initializePanel() {
             if (!(error instanceof TypeError) && !/failed to fetch|networkerror|load failed/i.test(message)) {
                 throw error;
             }
-            return fetchSuperblocksLookupViaBackground(uuid);
+            return fetchUuidLookupViaBackground(uuid);
         }
     };
 
-    let superblocksLookupWarmPromise = null;
-    const warmSuperblocksLookupConnection = async () => {
-        if (superblocksLookupWarmPromise) return superblocksLookupWarmPromise;
-        superblocksLookupWarmPromise = fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}/health`, {
+    let uuidLookupWarmPromise = null;
+    const warmUuidLookupConnection = async () => {
+        if (uuidLookupWarmPromise) return uuidLookupWarmPromise;
+        uuidLookupWarmPromise = fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}/health`, {
             method: 'GET',
             cache: 'no-store'
         }).catch(() => null).finally(() => {
-            superblocksLookupWarmPromise = null;
+            uuidLookupWarmPromise = null;
         });
-        return superblocksLookupWarmPromise;
+        return uuidLookupWarmPromise;
     };
 
-    const buildSuperblocksLookupCardHtml = (result = {}, { loading = false } = {}) => {
-        if (!superblocksUuidLookupStatus) return;
+    const buildUuidLookupCardHtml = (result = {}, { loading = false } = {}) => {
+        if (!uuidLookupStatus) return;
 
-        const uuid = collapseText(result.uuid || superblocksUuidLookupInput?.value || '');
+        const uuid = collapseText(result.uuid || uuidLookupInput?.value || '');
         const documentId = collapseText(result.documentId || '');
         const documentStatus = collapseText(result.status || '');
         const documentLink = collapseText(result.documentLink || result.detail || '');
@@ -2171,18 +2184,18 @@ async function initializePanel() {
         const showReason = Boolean(loading || (normalizedStatus === 'rejected' && rejectionReason));
         const reasonToneClass = rejectionReason ? 'is-warning' : 'is-neutral';
         const summaryGridClass = showReason
-            ? 'superblocks-status-summary-grid'
-            : 'superblocks-status-summary-grid has-single-card';
+            ? 'uuid-status-summary-grid'
+            : 'uuid-status-summary-grid has-single-card';
 
         return `
-            <div class="superblocks-status-card practice-status-card ${loading ? 'is-loading' : ''}">
-                <div class="superblocks-status-header">
+            <div class="uuid-status-card practice-status-card ${loading ? 'is-loading' : ''}">
+                <div class="uuid-status-header">
                     <div class="practice-status-kicker">UUID Lookup</div>
-                    ${documentLink && !loading ? `<button type="button" class="practice-status-chip practice-status-chip-button is-cdb superblocks-status-open-button" data-superblocks-open-link="${escapeHtml(documentLink)}">Open link</button>` : ''}
+                    ${documentLink && !loading ? `<button type="button" class="practice-status-chip practice-status-chip-button is-cdb uuid-status-open-button" data-uuid-open-link="${escapeHtml(documentLink)}">Open link</button>` : ''}
                 </div>
-                <div class="superblocks-status-main">
+                <div class="uuid-status-main">
                     <div class="practice-status-title">${escapeHtml(displayTitle)}</div>
-                    <div class="practice-status-subtitle superblocks-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
+                    <div class="practice-status-subtitle uuid-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>
                 </div>
                 <div class="${summaryGridClass}">
                     <div class="practice-status-summary-card ${statusToneClass}">
@@ -2200,85 +2213,85 @@ async function initializePanel() {
         `;
     };
 
-    const renderSuperblocksLookupLoading = (uuid = '') => {
-        if (!superblocksUuidLookupStatus) return;
-        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        superblocksUuidLookupStatus.classList.add('neutral', 'superblocks-lookup-status', 'superblocks-lookup-card-host');
-        superblocksUuidLookupStatus.innerHTML = buildSuperblocksLookupCardHtml({ uuid }, { loading: true });
+    const renderUuidLookupLoading = (uuid = '') => {
+        if (!uuidLookupStatus) return;
+        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        uuidLookupStatus.classList.add('neutral', 'uuid-lookup-status', 'uuid-lookup-card-host');
+        uuidLookupStatus.innerHTML = buildUuidLookupCardHtml({ uuid }, { loading: true });
     };
 
-    const renderSuperblocksLookupResult = (result = {}) => {
-        if (!superblocksUuidLookupStatus) return;
-        superblocksUuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        superblocksUuidLookupStatus.classList.add('valid', 'superblocks-lookup-status', 'superblocks-lookup-card-host');
-        superblocksUuidLookupStatus.innerHTML = buildSuperblocksLookupCardHtml(result, { loading: false });
+    const renderUuidLookupResult = (result = {}) => {
+        if (!uuidLookupStatus) return;
+        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
+        uuidLookupStatus.classList.add('valid', 'uuid-lookup-status', 'uuid-lookup-card-host');
+        uuidLookupStatus.innerHTML = buildUuidLookupCardHtml(result, { loading: false });
     };
 
-    const runSuperblocksLookup = async ({ force = false } = {}) => {
-        const rawValue = String(superblocksUuidLookupInput?.value || '').trim();
+    const runUuidLookup = async ({ force = false } = {}) => {
+        const rawValue = String(uuidLookupInput?.value || '').trim();
         const uuid = extractUuid(rawValue);
-        const requestSeq = ++superblocksLookupRequestSeq;
+        const requestSeq = ++uuidLookupRequestSeq;
 
         if (!rawValue) {
-            lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
+            lastUuidLookupUuid = '';
+            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
             return '';
         }
 
         if (!uuid) {
-            lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Enter at least 6 UUID characters.', 'invalid');
+            lastUuidLookupUuid = '';
+            setUuidLookupStatus('Enter at least 6 UUID characters.', 'invalid');
             return '';
         }
 
-        if (superblocksUuidLookupInput && superblocksUuidLookupInput.value !== uuid) {
-            superblocksUuidLookupInput.value = uuid;
+        if (uuidLookupInput && uuidLookupInput.value !== uuid) {
+            uuidLookupInput.value = uuid;
         }
 
-        if (!force && uuid === lastSuperblocksLookupUuid) {
+        if (!force && uuid === lastUuidLookupUuid) {
             return uuid;
         }
 
-        lastSuperblocksLookupUuid = uuid;
-        const cachedResult = force ? null : getCachedSuperblocksLookup(uuid);
+        lastUuidLookupUuid = uuid;
+        const cachedResult = force ? null : getCachedUuidLookup(uuid);
         if (cachedResult) {
-            renderSuperblocksLookupResult(cachedResult);
+            renderUuidLookupResult(cachedResult);
             return uuid;
         }
 
-        cancelSuperblocksLookupRequest();
+        cancelUuidLookupRequest();
         const controller = new AbortController();
         let requestTimedOut = false;
-        superblocksLookupAbortController = controller;
-        superblocksLookupLoadingTimer = window.setTimeout(() => {
-            if (requestSeq === superblocksLookupRequestSeq && lastSuperblocksLookupUuid === uuid) {
-                renderSuperblocksLookupLoading(uuid);
+        uuidLookupAbortController = controller;
+        uuidLookupLoadingTimer = window.setTimeout(() => {
+            if (requestSeq === uuidLookupRequestSeq && lastUuidLookupUuid === uuid) {
+                renderUuidLookupLoading(uuid);
             }
-        }, SUPERBLOCKS_LOOKUP_LOADING_DELAY_MS);
+        }, UUID_LOOKUP_LOADING_DELAY_MS);
         const timeoutId = window.setTimeout(() => {
             requestTimedOut = true;
             controller.abort();
-        }, SUPERBLOCKS_LOOKUP_REQUEST_TIMEOUT_MS);
+        }, UUID_LOOKUP_REQUEST_TIMEOUT_MS);
 
         try {
-            const result = await fetchSuperblocksLookup(uuid, { signal: controller.signal });
-            if (requestSeq !== superblocksLookupRequestSeq) return uuid;
-            rememberSuperblocksLookup(uuid, result);
+            const result = await fetchUuidLookup(uuid, { signal: controller.signal });
+            if (requestSeq !== uuidLookupRequestSeq) return uuid;
+            rememberUuidLookup(uuid, result);
             if (!result.found || !result.status) {
-                setSuperblocksLookupStatus(
+                setUuidLookupStatus(
                     String(result.detail || `No document found for ${uuid}.`).trim(),
                     'invalid'
                 );
                 return uuid;
             }
 
-            renderSuperblocksLookupResult(result);
+            renderUuidLookupResult(result);
             return uuid;
         } catch (error) {
-            if (requestSeq !== superblocksLookupRequestSeq) return uuid;
+            if (requestSeq !== uuidLookupRequestSeq) return uuid;
             if (error?.name === 'AbortError' && !requestTimedOut) return uuid;
-            lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus(
+            lastUuidLookupUuid = '';
+            setUuidLookupStatus(
                 requestTimedOut
                     ? 'Local trigger service timed out.'
                     : String(error?.message || 'UUID lookup failed.').trim(),
@@ -2286,10 +2299,10 @@ async function initializePanel() {
             );
             return uuid;
         } finally {
-            clearSuperblocksLookupLoadingTimer();
+            clearUuidLookupLoadingTimer();
             window.clearTimeout(timeoutId);
-            if (superblocksLookupAbortController === controller) {
-                superblocksLookupAbortController = null;
+            if (uuidLookupAbortController === controller) {
+                uuidLookupAbortController = null;
             }
         }
     };
@@ -2370,9 +2383,17 @@ async function initializePanel() {
     ].filter(Boolean));
     const getDocmanActionLabel = (action) => DOCMAN_ACTION_LABELS[action] || 'Docman Tool';
     const isDocmanToolDefaultStatusText = (value) => DOCMAN_TOOL_DEFAULT_STATUS_MESSAGES.has(trimDocmanField(value, 260));
+    const getSelectedDocmanOdsCode = () => String(state.currentSelectedOdsCode || '').trim().toUpperCase();
+    const isConcreteDocmanOdsCode = (value) => /^[A-Z]\d{5}$/.test(String(value || '').trim().toUpperCase());
+    const isDocmanRunForSelectedPractice = (run) => {
+        const selectedOds = getSelectedDocmanOdsCode();
+        if (!isConcreteDocmanOdsCode(selectedOds)) return false;
+        const runOds = trimDocmanField(run?.odsCode, 16).toUpperCase();
+        return runOds === selectedOds;
+    };
     const getDocmanToolDefaultStatusMessage = () => {
-        const odsCode = String(state.currentSelectedOdsCode || '').trim().toUpperCase();
-        if (/^[A-Z]\d{5}$/.test(odsCode)) {
+        const odsCode = getSelectedDocmanOdsCode();
+        if (isConcreteDocmanOdsCode(odsCode)) {
             return 'Choose a Docman action for the selected practice.';
         }
         return 'Select a practice to run Docman tools.';
@@ -2527,7 +2548,7 @@ async function initializePanel() {
         docmanToolStatus.classList.add('docman-tool-status-host');
         if (trimDocmanField(run.action, 40) === 'login') {
             docmanToolStatus.innerHTML = `
-                <div class="docman-tool-status-card docman-tool-status-card-compact is-${tone}">
+                <div class="docman-tool-status-card docman-tool-status-card-compact is-${tone}" data-docman-run-ods="${escapeHtml(odsCode)}">
                     <div class="docman-tool-compact-header">
                         <div class="docman-tool-status-kicker">Docman Login</div>
                         <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
@@ -2551,7 +2572,7 @@ async function initializePanel() {
             return;
         }
         docmanToolStatus.innerHTML = `
-            <div class="docman-tool-status-card is-${tone}">
+            <div class="docman-tool-status-card is-${tone}" data-docman-run-ods="${escapeHtml(odsCode)}">
                 <div class="docman-tool-status-header">
                     <div class="docman-tool-status-kicker">Docman ${escapeHtml(getDocmanActionLabel(trimDocmanField(run.action, 40)))}</div>
                     <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
@@ -2771,14 +2792,24 @@ async function initializePanel() {
         if (Boolean(status.running) && activeRun) {
             docmanToolRunIsBusy = true;
             syncDocmanToolButtons();
-            renderDocmanToolRunStatus(activeRun, { isActive: true });
+            if (isDocmanRunForSelectedPractice(activeRun)) {
+                renderDocmanToolRunStatus(activeRun, { isActive: true });
+            } else {
+                const actionLabel = getDocmanActionLabel(trimDocmanField(activeRun.action, 40));
+                const practiceLabel = trimDocmanField(activeRun.practiceName, 120) || 'another practice';
+                const startedAt = formatDocmanToolTime(activeRun.startedAt);
+                setDocmanToolStatus(
+                    `${actionLabel} is running for ${practiceLabel}${startedAt ? ` since ${startedAt}` : ''}.`,
+                    'neutral'
+                );
+            }
             return true;
         }
 
         docmanToolRunIsBusy = false;
         syncDocmanToolButtons();
 
-        if (lastRun) {
+        if (lastRun && isDocmanRunForSelectedPractice(lastRun)) {
             renderDocmanToolRunStatus(lastRun, { isActive: false });
             return false;
         }
@@ -3164,7 +3195,18 @@ async function initializePanel() {
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
         syncDocmanToolButtons();
-        if (!docmanToolRunIsBusy && isDocmanToolDefaultStatusText(docmanToolStatus?.textContent)) {
+        const displayedRunOds = trimDocmanField(
+            docmanToolStatus?.querySelector('[data-docman-run-ods]')?.getAttribute('data-docman-run-ods'),
+            16
+        ).toUpperCase();
+        const selectedOds = getSelectedDocmanOdsCode();
+        const displayedRunIsForAnotherPractice = displayedRunOds
+            && isConcreteDocmanOdsCode(selectedOds)
+            && displayedRunOds !== selectedOds;
+        if (
+            !docmanToolRunIsBusy
+            && (displayedRunIsForAnotherPractice || isDocmanToolDefaultStatusText(docmanToolStatus?.textContent))
+        ) {
             setDocmanToolStatus(getDocmanToolDefaultStatusMessage(), 'neutral');
         }
     });
@@ -4809,112 +4851,6 @@ async function initializePanel() {
         }
     };
 
-    const setGitPublishStatus = (message, tone = 'neutral') => {
-        if (!gitPublishStatus) return;
-        gitPublishStatus.classList.remove('neutral', 'valid', 'invalid');
-        if (tone === 'valid') gitPublishStatus.classList.add('valid');
-        else if (tone === 'invalid') gitPublishStatus.classList.add('invalid');
-        else gitPublishStatus.classList.add('neutral');
-        gitPublishStatus.textContent = String(message || '').trim();
-    };
-
-    const setGitPublishBusy = (isBusy) => {
-        if (prepareGitPublishBtn) prepareGitPublishBtn.disabled = Boolean(isBusy);
-        if (runGitPublishBtn) {
-            runGitPublishBtn.disabled = Boolean(isBusy);
-            runGitPublishBtn.textContent = isBusy ? 'Publishing...' : 'Push to GitHub';
-        }
-    };
-
-    const requestGitPublishJson = async (path, options = {}) => {
-        const response = await fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}${path}`, {
-            ...options,
-            headers: {
-                ...(options.headers || {}),
-                ...(options.body ? { 'Content-Type': 'application/json' } : {})
-            }
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload?.ok) {
-            throw new Error(trimField(payload?.error, 700) || `Local git service request failed (${response.status}).`);
-        }
-        return payload;
-    };
-
-    const formatGitChangedFiles = (files = []) => {
-        const normalizedFiles = Array.isArray(files)
-            ? files.map((file) => trimField(file, 220)).filter(Boolean)
-            : [];
-        if (!normalizedFiles.length) return 'No local changes found.';
-        const visibleFiles = normalizedFiles.slice(0, 8).map((file) => `- ${file}`);
-        const remainder = normalizedFiles.length > visibleFiles.length
-            ? `\n...and ${normalizedFiles.length - visibleFiles.length} more.`
-            : '';
-        return `${normalizedFiles.length} changed file(s):\n${visibleFiles.join('\n')}${remainder}`;
-    };
-
-    const prepareGitPublish = async () => {
-        if (!gitPublishSection) return;
-        try {
-            setGitPublishBusy(true);
-            setGitPublishStatus('Checking local git changes...', 'neutral');
-            const payload = await requestGitPublishJson('/git/status');
-            const branchName = trimField(payload?.suggestion?.branchName, 180);
-            const commitMessage = trimField(payload?.suggestion?.commitMessage, 180);
-            if (gitPublishBranchInput && branchName) gitPublishBranchInput.value = branchName;
-            if (gitPublishCommitInput && commitMessage) gitPublishCommitInput.value = commitMessage;
-            const changedCount = Number(payload?.changedCount || 0);
-            const tone = changedCount > 0 ? 'neutral' : 'valid';
-            setGitPublishStatus(
-                `${formatGitChangedFiles(payload?.changedFiles)}${payload?.currentBranch ? `\nCurrent branch: ${trimField(payload.currentBranch, 120)}` : ''}`,
-                tone
-            );
-        } catch (error) {
-            setGitPublishStatus(trimField(error?.message, 700) || 'Could not check local git changes.', 'invalid');
-        } finally {
-            setGitPublishBusy(false);
-        }
-    };
-
-    const runGitPublish = async () => {
-        const branchName = trimField(gitPublishBranchInput?.value, 180);
-        const commitMessage = trimField(gitPublishCommitInput?.value, 180);
-        if (!branchName || !commitMessage) {
-            setGitPublishStatus('Branch name and commit message are required.', 'invalid');
-            return;
-        }
-        const confirmed = window.confirm(
-            `Publish current MailroomNavigator changes?\n\nBranch:\n${branchName}\n\nCommit:\n${commitMessage}\n\nThis will switch to main, create the branch, commit, push, then return to main.`
-        );
-        if (!confirmed) return;
-
-        try {
-            setGitPublishBusy(true);
-            setGitPublishStatus('Publishing git changes...', 'neutral');
-            const payload = await requestGitPublishJson('/git/publish', {
-                method: 'POST',
-                body: JSON.stringify({ branchName, commitMessage })
-            });
-            const result = payload?.result || {};
-            const pushedBranch = trimField(result.branchName, 180) || branchName;
-            const commitHash = trimField(result.commitHash, 40);
-            const steps = Array.isArray(result.steps)
-                ? result.steps.map((step) => trimField(step, 80)).filter(Boolean)
-                : [];
-            setGitPublishStatus(
-                `Published successfully.\nBranch: ${pushedBranch}${commitHash ? `\nCommit: ${commitHash}` : ''}${steps.length ? `\n\n${steps.join('\n')}` : ''}`,
-                'valid'
-            );
-            showToast('Git branch pushed.');
-        } catch (error) {
-            const message = trimField(error?.message, 700) || 'Could not publish git changes.';
-            setGitPublishStatus(message, 'invalid');
-            showToast(message);
-        } finally {
-            setGitPublishBusy(false);
-        }
-    };
-
     const triggerLinearBotJobsRun = async () => {
         try {
             const isDryRun = Boolean(triggerLinearDryRunInput?.checked);
@@ -5616,12 +5552,6 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Could not restart local trigger service.');
         });
     });
-    prepareGitPublishBtn?.addEventListener('click', () => {
-        prepareGitPublish().catch(() => undefined);
-    });
-    runGitPublishBtn?.addEventListener('click', () => {
-        runGitPublish().catch(() => undefined);
-    });
     if (!extensionAccessState?.serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
         if (isLinearRunActiveOnLoad) {
@@ -5670,48 +5600,48 @@ ${error?.message || String(error)}`, 'invalid');
         if (event.key === 'Escape') hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
     });
 
-    superblocksUuidLookupInput?.addEventListener('input', () => {
-        superblocksLookupRequestSeq += 1;
-        cancelSuperblocksLookupRequest();
-        const rawValue = String(superblocksUuidLookupInput.value || '').trim();
+    uuidLookupInput?.addEventListener('input', () => {
+        uuidLookupRequestSeq += 1;
+        cancelUuidLookupRequest();
+        const rawValue = String(uuidLookupInput.value || '').trim();
         if (!rawValue) {
-            lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
+            lastUuidLookupUuid = '';
+            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
             return;
         }
 
         if (!extractUuid(rawValue)) {
-            lastSuperblocksLookupUuid = '';
-            setSuperblocksLookupStatus('Enter at least 6 UUID characters.', 'invalid');
+            lastUuidLookupUuid = '';
+            setUuidLookupStatus('Enter at least 6 UUID characters.', 'invalid');
             return;
         }
 
-        runSuperblocksLookup().catch(() => undefined);
+        runUuidLookup().catch(() => undefined);
     });
-    superblocksUuidLookupInput?.addEventListener('focus', () => {
-        warmSuperblocksLookupConnection().catch(() => undefined);
+    uuidLookupInput?.addEventListener('focus', () => {
+        warmUuidLookupConnection().catch(() => undefined);
     });
-    superblocksUuidLookupInput?.addEventListener('keydown', (event) => {
+    uuidLookupInput?.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
             event.preventDefault();
-            runSuperblocksLookup().catch(() => undefined);
+            runUuidLookup().catch(() => undefined);
         }
         if (event.key === 'Escape') {
-            superblocksLookupRequestSeq += 1;
-            cancelSuperblocksLookupRequest();
-            lastSuperblocksLookupUuid = '';
-            superblocksUuidLookupInput.value = '';
-            setSuperblocksLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
+            uuidLookupRequestSeq += 1;
+            cancelUuidLookupRequest();
+            lastUuidLookupUuid = '';
+            uuidLookupInput.value = '';
+            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
         }
     });
-    superblocksUuidLookupStatus?.addEventListener('click', (event) => {
+    uuidLookupStatus?.addEventListener('click', (event) => {
         const target = event.target instanceof Element
-            ? event.target.closest('[data-superblocks-open-link]')
+            ? event.target.closest('[data-uuid-open-link]')
             : null;
         if (!target) return;
 
         event.preventDefault();
-        const url = String(target.getAttribute('data-superblocks-open-link') || '').trim();
+        const url = String(target.getAttribute('data-uuid-open-link') || '').trim();
         if (!url) return;
         openTabWithTimeout(url);
     });
@@ -5859,8 +5789,9 @@ ${error?.message || String(error)}`, 'invalid');
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
     if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
         try {
-            const cache = await syncPracticeCache();
-            const cacheSize = Object.keys(cache || {}).length;
+	            const cache = await syncPracticeCache();
+	            await Navigator.initializeRecentPractices();
+	            const cacheSize = Object.keys(cache || {}).length;
 
             if (cacheSize === 0) {
                 // Compatibility fallback when background returns cache without scrape refresh
@@ -5943,4 +5874,88 @@ function resizeToFitContent() {
   } catch (e) {
     // Ignore resize errors in contexts that disallow script-driven resize.
   }
+}
+
+const COMPACT_PANEL_HEIGHT = 560;
+let compactModeMovedElements = null;
+
+function resizePanelWindow(height) {
+  if (window.top !== window) return;
+  try {
+    window.resizeTo(PANEL_WIDTH, height);
+  } catch (e) {
+    // Ignore resize errors in contexts that disallow script-driven resize.
+  }
+}
+
+// Relocates the existing practice-search block, its quick-link buttons, and
+// the Quick Document Search card (with all their working autocomplete/lookup
+// behavior intact, since moving a DOM node keeps its listeners) into a small
+// standalone bar, instead of building a second copy of that search logic.
+function enterCompactMode() {
+  const bar = document.getElementById('compactSearchBar');
+  const toggleBtn = document.getElementById('compactModeToggleBtn');
+  const practiceSearchBlock = document.getElementById('practiceSearchBlock');
+  const practiceQuickLinks = document.querySelector('.nav-action-grid');
+  const quickDocumentSearchCard = document.querySelector('.quick-document-card');
+  if (!bar || !practiceSearchBlock || !quickDocumentSearchCard) return;
+
+  const toMove = [practiceSearchBlock, practiceQuickLinks, quickDocumentSearchCard].filter(Boolean);
+  compactModeMovedElements = toMove.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
+  toMove.forEach((el) => bar.appendChild(el));
+
+  document.body.classList.add('bl-panel-compact');
+  setElementVisible(bar, true, 'flex');
+  if (toggleBtn) {
+    toggleBtn.textContent = 'Expand';
+    toggleBtn.title = 'Show the full panel';
+  }
+  resizePanelWindow(COMPACT_PANEL_HEIGHT);
+}
+
+function exitCompactMode() {
+  if (!compactModeMovedElements) return;
+  // Restore in reverse order: if two moved elements were originally adjacent
+  // siblings, a later element's recorded nextSibling may point at an earlier
+  // one still sitting in the compact bar. Restoring back-to-front guarantees
+  // that reference is already back in its real parent by the time we need it.
+  [...compactModeMovedElements].reverse().forEach(({ el, parent, nextSibling }) => {
+    if (nextSibling && nextSibling.parentNode === parent) {
+      parent.insertBefore(el, nextSibling);
+    } else {
+      parent.appendChild(el);
+    }
+  });
+  compactModeMovedElements = null;
+
+  document.body.classList.remove('bl-panel-compact');
+  const bar = document.getElementById('compactSearchBar');
+  setElementVisible(bar, false);
+  const toggleBtn = document.getElementById('compactModeToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.textContent = 'Compact';
+    toggleBtn.title = 'Shrink to a small search-only bar';
+  }
+  resizePanelWindow(PANEL_HEIGHT);
+}
+
+function setupCompactModeToggle() {
+  const row = document.getElementById('compactModeToggleRow');
+  const toggleBtn = document.getElementById('compactModeToggleBtn');
+  if (!row || !toggleBtn) return;
+
+  // Compact mode resizes the OS window; that only applies to the standalone
+  // popup, not the docked sidebar iframe (same check resizeToFitContent uses).
+  if (window.top !== window) {
+    setElementVisible(row, false);
+    return;
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    if (compactModeMovedElements) {
+      exitCompactMode();
+    } else {
+      enterCompactMode();
+    }
+  });
 }

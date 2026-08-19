@@ -1,11 +1,10 @@
 import { config as loadDotenv } from "dotenv";
 import { createServer } from "node:http";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import pg from "pg";
 
 /**
@@ -19,7 +18,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 const DEFAULT_ENV_PATH = resolve(REPO_ROOT, ".env");
-const execFileAsync = promisify(execFile);
 const { Pool } = pg;
 loadDotenv({ path: process.env.DOTENV_CONFIG_PATH || DEFAULT_ENV_PATH });
 
@@ -112,43 +110,6 @@ const SLACK_API_BASE_URL = "https://slack.com/api";
 const SLACK_SYNC_MEMBER_ONLY = String(process.env.SLACK_SYNC_MEMBER_ONLY || "1")
   .trim()
   .toLowerCase() !== "0";
-const SUPERBLOCKS_UUID_LOOKUP_URL = sanitizeHttpUrl(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_URL
-    || "",
-);
-const SUPERBLOCKS_UUID_LOOKUP_TOKEN = sanitizeSingleLine(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_TOKEN
-    || "",
-  4096,
-);
-const SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER = sanitizeSingleLine(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER
-    || "Authorization",
-  120,
-) || "Authorization";
-const SUPERBLOCKS_UUID_LOOKUP_METHOD = String(process.env.SUPERBLOCKS_UUID_LOOKUP_METHOD || "POST")
-  .trim()
-  .toUpperCase() === "GET" ? "GET" : "POST";
-const SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD = sanitizeSingleLine(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD
-    || "uuid",
-  120,
-) || "uuid";
-const SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH = sanitizeSingleLine(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH
-    || "status",
-  240,
-);
-const SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH = sanitizeSingleLine(
-  process.env.SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH
-    || "",
-  240,
-);
-const SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS = (() => {
-  const parsed = Number.parseInt(String(process.env.SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS || "12000"), 10);
-  if (!Number.isFinite(parsed)) return 12000;
-  return Math.min(60000, Math.max(1500, parsed));
-})();
 const ACCESS_CONTROL_OWNER_EMAIL = normalizeEmail(
   process.env.MAILROOMNAV_OWNER_EMAIL
     || "nur.siddique@dyad.net",
@@ -188,7 +149,7 @@ const LAST_RUN_STATE_PATH = join(STATE_DIR, "linear-trigger-last-run.json");
 const DOCMAN_LAST_RUN_STATE_PATH = join(STATE_DIR, "docman-tool-last-run.json");
 const BOT_JOBS_REPORTS_DIR = join(STATE_DIR, "reports");
 const SLACK_TARGETS_CACHE_TTL_MS = 10 * 60 * 1000;
-const SUPERBLOCKS_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
+const UUID_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
 const SQL_LOOKUP_ENABLED = String(process.env.MAILROOMNAV_SQL_ENABLED || "1")
   .trim()
   .toLowerCase() !== "0";
@@ -255,6 +216,7 @@ let resolvedLinearWorkflowStateCatalog = null;
 let resolvedLinearIssueLabelCatalog = null;
 const resolvedLinearStateIdCache = new Map();
 const resolvedLinearLabelIdCache = new Map();
+const SQL_CLIENT_ERROR_HANDLER_ATTACHED = Symbol("mailroomnavigatorSqlClientErrorHandlerAttached");
 const accessControlAlertSentAt = new Map();
 let accessControlCache = {
   loadedAt: 0,
@@ -264,8 +226,8 @@ let slackTargetsCache = {
   loadedAt: 0,
   targets: null,
 };
-const superblocksLookupCache = new Map();
-const superblocksLookupInFlight = new Map();
+const uuidLookupCache = new Map();
+const uuidLookupInFlight = new Map();
 let restartRequested = false;
 
 function nowIso() {
@@ -424,6 +386,34 @@ function getSqlPool() {
   return sqlPool;
 }
 
+function ensureSqlClientErrorHandler(client) {
+  if (!client || client[SQL_CLIENT_ERROR_HANDLER_ATTACHED]) return;
+  Object.defineProperty(client, SQL_CLIENT_ERROR_HANDLER_ATTACHED, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+  });
+  client.on("error", (error) => {
+    appendServerLog(`[${nowIso()}] sql client error: ${String(error?.message || error)}`).catch(() => undefined);
+  });
+}
+
+function isTransientSqlConnectionError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  const code = String(error?.code || "").toUpperCase();
+  return Boolean(
+    code === "ECONNRESET"
+    || code === "ECONNREFUSED"
+    || code === "57P01"
+    || message.includes("connection terminated unexpectedly")
+    || message.includes("server closed the connection unexpectedly")
+    || message.includes("terminating connection")
+    || message.includes("connection reset by peer")
+    || message.includes("socket hang up")
+    || message.includes("read econnreset")
+  );
+}
+
 async function runSqlQuery(text, values = [], options = {}) {
   const pool = getSqlPool();
   const timeoutMs = (() => {
@@ -432,6 +422,8 @@ async function runSqlQuery(text, values = [], options = {}) {
     return Math.min(60000, Math.max(1000, parsed));
   })();
   const client = await pool.connect();
+  ensureSqlClientErrorHandler(client);
+  let queryError = null;
   try {
     await client.query("BEGIN READ ONLY");
     await client.query("SELECT set_config($1, $2, true)", ["statement_timeout", String(timeoutMs)]);
@@ -439,6 +431,7 @@ async function runSqlQuery(text, values = [], options = {}) {
     await client.query("COMMIT");
     return result;
   } catch (error) {
+    queryError = error;
     try {
       await client.query("ROLLBACK");
     } catch {
@@ -446,8 +439,45 @@ async function runSqlQuery(text, values = [], options = {}) {
     }
     throw error;
   } finally {
-    client.release();
+    client.release(queryError && isTransientSqlConnectionError(queryError) ? queryError : undefined);
   }
+}
+
+async function resetSqlPoolAfterConnectionError(reason = "") {
+  const stalePool = sqlPool;
+  sqlPool = null;
+  if (!stalePool) return;
+  await appendServerLog(
+    `[${nowIso()}] sql pool reset${reason ? `: ${sanitizeSingleLine(reason, 220)}` : ""}`,
+  ).catch(() => undefined);
+  try {
+    await stalePool.end();
+  } catch (error) {
+    await appendServerLog(
+      `[${nowIso()}] sql pool reset cleanup failed: ${sanitizeSingleLine(error?.message || error, 220)}`,
+    ).catch(() => undefined);
+  }
+}
+
+async function runSqlQueryWithConnectionRetry(text, values = [], options = {}) {
+  const attempts = Math.max(1, Math.min(3, Number.parseInt(String(options?.attempts || "2"), 10) || 2));
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await runSqlQuery(text, values, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isTransientSqlConnectionError(error)) throw error;
+      await appendServerLog(
+        `[${nowIso()}] sql query retry ${attempt + 1}/${attempts} after connection error: ${sanitizeSingleLine(error?.message || error, 220)}`,
+      ).catch(() => undefined);
+      await resetSqlPoolAfterConnectionError(error?.message || error);
+      await delay(150);
+    }
+  }
+
+  throw lastError;
 }
 
 function isPresentSecret(value) {
@@ -755,7 +785,7 @@ function normalizeEmail(value) {
   return normalized;
 }
 
-function normalizeUuidLookupInput(value) {
+function extractUuid(value) {
   const raw = sanitizeSingleLine(value, 240)
     .replace(/(?:…|\.\.\.)$/u, "")
     .trim();
@@ -769,54 +799,6 @@ function normalizeUuidLookupInput(value) {
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
   return /^[0-9a-f-]{6,80}$/.test(partial) ? partial : "";
-}
-
-function extractUuid(value) {
-  return normalizeUuidLookupInput(value);
-}
-
-function getValueByPath(value, path) {
-  const normalizedPath = sanitizeSingleLine(path, 240);
-  if (!normalizedPath) return undefined;
-
-  const segments = normalizedPath
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  if (!segments.length) return undefined;
-
-  let current = value;
-  for (const segment of segments) {
-    if (Array.isArray(current)) {
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) return undefined;
-      current = current[index];
-      continue;
-    }
-
-    if (!current || typeof current !== "object" || !(segment in current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-
-  return current;
-}
-
-function pickFirstPresentValue(value, paths = []) {
-  for (const path of paths) {
-    const candidate = getValueByPath(value, path);
-    if (candidate === undefined || candidate === null) continue;
-    if (typeof candidate === "string") {
-      const normalized = sanitizeSingleLine(candidate, 320);
-      if (normalized) return { path, value: normalized };
-      continue;
-    }
-    if (typeof candidate === "number" || typeof candidate === "boolean") {
-      return { path, value: String(candidate) };
-    }
-  }
-  return { path: "", value: "" };
 }
 
 const ACCESS_CONTROL_FEATURE_CATALOG = [
@@ -1223,6 +1205,7 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
     labels: sanitizeLinearIssueLabelList(rawPayload.labels),
     stateName: sanitizeSingleLine(rawPayload.stateName, 120),
     dedupeKey: sanitizeSingleLine(rawPayload.dedupeKey, 160),
+    jobType: sanitizeSingleLine(rawPayload.jobType, 120),
     slack: sanitizeLinearSlackPayload(rawPayload?.slack),
   };
 }
@@ -1518,6 +1501,7 @@ async function resolveLinearLabelIds(labelNames = []) {
 
 const LINEAR_ISSUE_DEDUPE_MARKER_PREFIX = "BOT_JOBS_DEDUPE:";
 const BOT_JOB_TITLE_PREFIX = "Bot Job Error:";
+const BOT_JOB_SPIKE_TITLE_PREFIX = "Bot Job Spike:";
 const PRACTICE_SUPPORT_TITLE_PREFIX = "Practice Support Ticket:";
 const MAILROOM_REJECTED_TITLE_PREFIX = "Mailroom Rejected:";
 
@@ -1622,6 +1606,92 @@ function extractBotJobTypeFromIssueText(text) {
   return normalizeIssueLookupKey(match?.[1] || "");
 }
 
+function extractBotJobIdFromIssue(issue = {}) {
+  const title = sanitizeSingleLine(issue?.title, 240);
+  const description = String(issue?.description || "");
+  if (!title.toLowerCase().startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase())) return "";
+  const structured = extractIssueStructuredField(description, "Job ID");
+  if (!structured || /^n\/?a$/i.test(structured)) return "";
+  return normalizeIssueLookupKey(structured);
+}
+
+function normalizeIssueListField(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => normalizeIssueLookupKey(part))
+    .filter(Boolean)
+    .sort();
+}
+
+function arraysMatchExactly(left = [], right = []) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function extractBotJobSpikeSignatureFromText(title = "", description = "") {
+  const normalizedTitle = sanitizeSingleLine(title, 240);
+  if (!normalizedTitle.toLowerCase().startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase())) return null;
+
+  const combined = `${normalizedTitle}\n${String(description || "")}`;
+  const rowCountFromTitle = normalizedTitle.match(/\|\s*(\d+)\s+jobs?\s*\|/i)?.[1] || "";
+  const rowCountFromDescription = extractIssueStructuredField(description, "Visible rows on this page").match(/\d+/)?.[0] || "";
+  const documentIds = [...new Set(
+    Array.from(combined.matchAll(/\bdoc\s+(\d{4,})\b/gi))
+      .map((match) => normalizeIssueDocumentId(match?.[1] || ""))
+      .filter(Boolean)
+  )].sort();
+  const jobIds = [...new Set(
+    Array.from(combined.matchAll(/\bjob\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi))
+      .map((match) => normalizeIssueLookupKey(match?.[1] || ""))
+      .filter(Boolean)
+  )].sort();
+
+  return {
+    title: normalizeIssueLookupKey(normalizedTitle),
+    rowCount: rowCountFromDescription || rowCountFromTitle || "",
+    jobTypes: normalizeIssueListField(extractIssueStructuredField(description, "Job types")),
+    practices: normalizeIssueListField(extractIssueStructuredField(description, "Practices")),
+    documentIds,
+    jobIds,
+  };
+}
+
+function botJobSpikeSignaturesMatch(candidateSignature, payloadSignature) {
+  if (!candidateSignature || !payloadSignature) return false;
+  const jobTypesCompatible = !candidateSignature.jobTypes.length
+    || !payloadSignature.jobTypes.length
+    || arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes);
+
+  if (
+    candidateSignature.documentIds.length
+    && payloadSignature.documentIds.length
+    && arraysMatchExactly(candidateSignature.documentIds, payloadSignature.documentIds)
+    && jobTypesCompatible
+  ) {
+    return true;
+  }
+
+  if (
+    candidateSignature.jobIds.length
+    && payloadSignature.jobIds.length
+    && arraysMatchExactly(candidateSignature.jobIds, payloadSignature.jobIds)
+  ) {
+    return true;
+  }
+
+  return Boolean(
+    candidateSignature.title
+    && payloadSignature.title
+    && candidateSignature.title === payloadSignature.title
+    && candidateSignature.rowCount
+    && payloadSignature.rowCount
+    && candidateSignature.rowCount === payloadSignature.rowCount
+    && arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes)
+    && arraysMatchExactly(candidateSignature.practices, payloadSignature.practices)
+  );
+}
+
 function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId) {
   if (!candidate?.id) return false;
 
@@ -1631,12 +1701,20 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
   const normalizedPayloadTitle = sanitizeSingleLine(payload?.title, 240).toLowerCase();
   const payloadIsMailroomRejected = normalizedPayloadTitle.startsWith(MAILROOM_REJECTED_TITLE_PREFIX.toLowerCase());
   const payloadIsBotJob = normalizedPayloadTitle.startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase());
+  const payloadIsBotJobSpike = normalizedPayloadTitle.startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+  const candidateIsBotJob = normalizedCandidateTitle.startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase());
+  const candidateIsBotJobSpike = normalizedCandidateTitle.startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
 
   if (dedupeMarker && candidateDescription.includes(dedupeMarker)) {
     return true;
   }
 
-  if (normalizedPayloadTitle && normalizedCandidateTitle === normalizedPayloadTitle) {
+  if (
+    normalizedPayloadTitle
+    && normalizedCandidateTitle === normalizedPayloadTitle
+    && !payloadIsBotJob
+    && !payloadIsBotJobSpike
+  ) {
     return true;
   }
 
@@ -1648,20 +1726,30 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
     }
   }
 
-  if (payloadIsBotJob && payloadDocumentId) {
+  if (payloadIsBotJob && candidateIsBotJob) {
+    const payloadFailedJobId = normalizeIssueLookupKey(payload?.failedJobId);
+    if (payloadFailedJobId) {
+      const candidateJobId = extractBotJobIdFromIssue(candidate);
+      if (candidateJobId && candidateJobId === payloadFailedJobId) {
+        return true;
+      }
+    }
+  }
+
+  if (payloadIsBotJob && candidateIsBotJob && payloadDocumentId) {
     const candidateDocumentId = normalizeIssueDocumentId(
       extractIssueStructuredField(candidateDescription, "Document ID")
       || candidateTitle
     );
-    const payloadJobType = normalizeIssueLookupKey(payload?.jobType)
-      || extractBotJobTypeFromIssueText(`${payload?.title || ""}\n${payload?.description || ""}`);
-    const candidateJobType = extractBotJobTypeFromIssueText(`${candidateTitle}\n${candidateDescription}`);
+    if (candidateDocumentId && candidateDocumentId === payloadDocumentId) {
+      return true;
+    }
+  }
 
-    if (
-      candidateDocumentId
-      && candidateDocumentId === payloadDocumentId
-      && (!payloadJobType || !candidateJobType || candidateJobType === payloadJobType)
-    ) {
+  if (payloadIsBotJobSpike && candidateIsBotJobSpike) {
+    const payloadSpikeSignature = extractBotJobSpikeSignatureFromText(payload?.title, payload?.description);
+    const candidateSpikeSignature = extractBotJobSpikeSignatureFromText(candidateTitle, candidateDescription);
+    if (botJobSpikeSignaturesMatch(candidateSpikeSignature, payloadSpikeSignature)) {
       return true;
     }
   }
@@ -2316,28 +2404,22 @@ async function runSlackApiRequest(method, body = {}) {
   return payload;
 }
 
-function ensureSuperblocksLookupConfig() {
-  if (!SUPERBLOCKS_UUID_LOOKUP_URL) {
-    throw new Error("SUPERBLOCKS_UUID_LOOKUP_URL is missing in MailroomNavigator/.env.");
-  }
-}
-
-function getCachedSuperblocksLookup(uuid) {
+function getCachedUuidLookup(uuid) {
   const normalizedUuid = extractUuid(uuid);
   if (!normalizedUuid) return null;
-  const cached = superblocksLookupCache.get(normalizedUuid);
+  const cached = uuidLookupCache.get(normalizedUuid);
   if (!cached) return null;
-  if ((Date.now() - Number(cached.cachedAt || 0)) > SUPERBLOCKS_LOOKUP_CACHE_TTL_MS) {
-    superblocksLookupCache.delete(normalizedUuid);
+  if ((Date.now() - Number(cached.cachedAt || 0)) > UUID_LOOKUP_CACHE_TTL_MS) {
+    uuidLookupCache.delete(normalizedUuid);
     return null;
   }
   return cached.result || null;
 }
 
-function rememberSuperblocksLookup(uuid, result) {
+function rememberUuidLookup(uuid, result) {
   const normalizedUuid = extractUuid(uuid);
   if (!normalizedUuid || !result || typeof result !== "object") return;
-  superblocksLookupCache.set(normalizedUuid, {
+  uuidLookupCache.set(normalizedUuid, {
     cachedAt: Date.now(),
     result,
   });
@@ -2358,17 +2440,21 @@ function sanitizeUuidLookupRow(row = {}) {
   };
 }
 
-async function runSqlUuidLookup(uuid, { forceRefresh = false } = {}) {
+async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
+  if (!isSqlLookupConfigured()) {
+    throw new Error("Cloud SQL UUID lookup is not configured. Check MailroomNavigator/.env and start Cloud SQL Proxy.");
+  }
+
   const normalizedUuid = extractUuid(uuid);
   if (!normalizedUuid) {
     throw new Error("Invalid or missing UUID.");
   }
 
   if (!forceRefresh) {
-    const cached = getCachedSuperblocksLookup(normalizedUuid);
+    const cached = getCachedUuidLookup(normalizedUuid);
     if (cached) return cached;
 
-    const inFlight = superblocksLookupInFlight.get(normalizedUuid);
+    const inFlight = uuidLookupInFlight.get(normalizedUuid);
     if (inFlight) return inFlight;
   }
 
@@ -2421,7 +2507,10 @@ async function runSqlUuidLookup(uuid, { forceRefresh = false } = {}) {
       LIMIT 100
     `;
 
-    const result = await runSqlQuery(query, [normalizedUuid], { timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS });
+    const result = await runSqlQueryWithConnectionRetry(query, [normalizedUuid], {
+      timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS,
+      attempts: 2,
+    });
     const matches = (Array.isArray(result?.rows) ? result.rows : [])
       .map(sanitizeUuidLookupRow)
       .filter((row) => row.documentId)
@@ -2461,181 +2550,16 @@ async function runSqlUuidLookup(uuid, { forceRefresh = false } = {}) {
           matchedStatusPath: "cloud_sql.documents.status",
         };
 
-    rememberSuperblocksLookup(normalizedUuid, lookup);
+    rememberUuidLookup(normalizedUuid, lookup);
     return lookup;
   })();
 
-  superblocksLookupInFlight.set(normalizedUuid, runPromise);
+  uuidLookupInFlight.set(normalizedUuid, runPromise);
   try {
     return await runPromise;
   } finally {
-    if (superblocksLookupInFlight.get(normalizedUuid) === runPromise) {
-      superblocksLookupInFlight.delete(normalizedUuid);
-    }
-  }
-}
-
-async function runUuidStatusLookup(uuid, options = {}) {
-  if (isSqlLookupConfigured()) {
-    try {
-      return await runSqlUuidLookup(uuid, options);
-    } catch (error) {
-      if (SUPERBLOCKS_UUID_LOOKUP_URL) {
-        appendServerLog(
-          `[${nowIso()}] sql uuid lookup failed; falling back to Superblocks: ${sanitizeSingleLine(error?.message || error, 300)}`,
-        ).catch(() => undefined);
-        return runSuperblocksUuidLookup(uuid, options);
-      }
-      throw new Error(`Cloud SQL UUID lookup failed: ${sanitizeSingleLine(error?.message || error, 300)}`);
-    }
-  }
-
-  return runSuperblocksUuidLookup(uuid, options);
-}
-
-async function runSuperblocksUuidLookup(uuid, { forceRefresh = false } = {}) {
-  ensureSuperblocksLookupConfig();
-
-  const normalizedUuid = extractUuid(uuid);
-  if (!normalizedUuid) {
-    throw new Error("Invalid or missing UUID.");
-  }
-
-  if (!forceRefresh) {
-    const cached = getCachedSuperblocksLookup(normalizedUuid);
-    if (cached) return cached;
-
-    const inFlight = superblocksLookupInFlight.get(normalizedUuid);
-    if (inFlight) return inFlight;
-  }
-
-  const runPromise = (async () => {
-    const endpoint = new URL(SUPERBLOCKS_UUID_LOOKUP_URL);
-    const headers = {
-      Accept: "application/json",
-    };
-    let body = null;
-
-    if (SUPERBLOCKS_UUID_LOOKUP_TOKEN) {
-      headers[SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER] = SUPERBLOCKS_UUID_LOOKUP_TOKEN_HEADER.toLowerCase() === "authorization"
-        && !/^bearer\s+/i.test(SUPERBLOCKS_UUID_LOOKUP_TOKEN)
-        ? `Bearer ${SUPERBLOCKS_UUID_LOOKUP_TOKEN}`
-        : SUPERBLOCKS_UUID_LOOKUP_TOKEN;
-    }
-
-    if (SUPERBLOCKS_UUID_LOOKUP_METHOD === "GET") {
-      endpoint.searchParams.set(SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD, normalizedUuid);
-    } else {
-      headers["Content-Type"] = "application/json";
-      body = JSON.stringify({ [SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD]: normalizedUuid });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), SUPERBLOCKS_UUID_LOOKUP_TIMEOUT_MS);
-
-    let response;
-    let rawBody = "";
-    try {
-      response = await fetch(endpoint, {
-        method: SUPERBLOCKS_UUID_LOOKUP_METHOD,
-        headers,
-        body,
-        signal: controller.signal,
-      });
-      rawBody = await response.text();
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    let parsedBody = null;
-    try {
-      parsedBody = rawBody ? JSON.parse(rawBody) : null;
-    } catch {
-      parsedBody = null;
-    }
-
-    if (!response.ok) {
-      const bodySnippet = sanitizeSingleLine(
-        parsedBody?.error
-          || parsedBody?.message
-          || rawBody,
-        320,
-      );
-      throw new Error(
-        `Superblocks lookup failed with status ${response.status}${bodySnippet ? `: ${bodySnippet}` : ""}`,
-      );
-    }
-
-    const payload = parsedBody ?? {};
-    const statusPaths = [
-      SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH,
-      "status",
-      "data.status",
-      "result.status",
-      "record.status",
-      "output.status",
-      "outputs.status",
-      "data.result.status",
-      "data.record.status",
-    ].filter(Boolean);
-    const detailPaths = [
-      SUPERBLOCKS_UUID_LOOKUP_DETAIL_PATH,
-      "detail",
-      "message",
-      "data.detail",
-      "data.message",
-      "result.detail",
-      "result.message",
-      "record.detail",
-      "record.message",
-      "error",
-    ].filter(Boolean);
-
-    const { path: matchedStatusPath, value: status } = pickFirstPresentValue(payload, statusPaths);
-    const { value: detailValue } = pickFirstPresentValue(payload, detailPaths);
-    const detail = detailValue || (!status ? sanitizeSingleLine(rawBody, 320) : "");
-
-    const result = {
-      uuid: normalizedUuid,
-      found: Boolean(status),
-      source: "superblocks",
-      status,
-      detail,
-      documentId: pickFirstPresentValue(payload, [
-        "document_id",
-        "data.document_id",
-        "result.document_id",
-        "output.result.0.document_id",
-        "output.FetchDocumentID.0.document_id",
-      ]).value,
-      documentLink: pickFirstPresentValue(payload, [
-        "document_link",
-        "data.document_link",
-        "result.document_link",
-        "output.result.0.document_link",
-        "output.FetchDocumentID.0.document_link",
-      ]).value,
-      rejectionReason: pickFirstPresentValue(payload, [
-        "rejection_reason",
-        "data.rejection_reason",
-        "result.rejection_reason",
-        "output.result.0.rejection_reason",
-        "output.FetchDocumentID.0.rejection_reason",
-      ]).value,
-      matchedStatusPath,
-      checkedAt: nowIso(),
-    };
-
-    rememberSuperblocksLookup(normalizedUuid, result);
-    return result;
-  })();
-
-  superblocksLookupInFlight.set(normalizedUuid, runPromise);
-  try {
-    return await runPromise;
-  } finally {
-    if (superblocksLookupInFlight.get(normalizedUuid) === runPromise) {
-      superblocksLookupInFlight.delete(normalizedUuid);
+    if (uuidLookupInFlight.get(normalizedUuid) === runPromise) {
+      uuidLookupInFlight.delete(normalizedUuid);
     }
   }
 }
@@ -4316,189 +4240,6 @@ function buildExecutablePath(currentPath = "") {
   return ordered.join(delimiter);
 }
 
-const GIT_PUBLISH_MAX_BUFFER = 4 * 1024 * 1024;
-const GIT_PUBLISH_TIMEOUT_MS = 5 * 60 * 1000;
-
-function sanitizeGitBranchName(value) {
-  return sanitizeSingleLine(value, 180)
-    .toLowerCase()
-    .replace(/[^a-z0-9._/-]+/g, "-")
-    .replace(/^[-/.]+/, "")
-    .replace(/[-/.]+$/, "")
-    .slice(0, 120);
-}
-
-function parseGitStatusFiles(rawStatus) {
-  return String(rawStatus || "")
-    .split("\n")
-    .map((line) => line.slice(3).trim())
-    .map((line) => line.replace(/^"|"$/g, ""))
-    .filter(Boolean);
-}
-
-async function runGit(args, { timeout = GIT_PUBLISH_TIMEOUT_MS, allowFailure = false } = {}) {
-  try {
-    const result = await execFileAsync("git", args, {
-      cwd: REPO_ROOT,
-      env: buildChildProcessEnv({ GIT_TERMINAL_PROMPT: "0" }),
-      maxBuffer: GIT_PUBLISH_MAX_BUFFER,
-      timeout,
-    });
-    return {
-      ok: true,
-      stdout: String(result.stdout || ""),
-      stderr: String(result.stderr || ""),
-      code: 0,
-    };
-  } catch (error) {
-    if (allowFailure) {
-      return {
-        ok: false,
-        stdout: String(error?.stdout || ""),
-        stderr: String(error?.stderr || ""),
-        code: Number(error?.code) || 1,
-        error,
-      };
-    }
-    const detail = sanitizeSingleLine(error?.stderr || error?.stdout || error?.message, 600);
-    throw new Error(detail || `git ${args.join(" ")} failed.`);
-  }
-}
-
-async function getGitChangedFiles() {
-  const status = await runGit(["status", "--porcelain"]);
-  return parseGitStatusFiles(status.stdout);
-}
-
-async function getGitCurrentBranch() {
-  const branch = await runGit(["branch", "--show-current"]);
-  return sanitizeSingleLine(branch.stdout, 120) || "unknown";
-}
-
-async function suggestGitPublishDetails() {
-  const timestamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13).replace("T", "-");
-  const changedFiles = await getGitChangedFiles();
-  let branchName = `mailroomnavigator-updates-${timestamp}`;
-  let commitMessage = "Update Mailroom Navigator";
-  const changedSet = new Set(changedFiles.map((file) => file.toLowerCase()));
-  const hasBotDashboard = changedSet.has("bot_dashboard_navigator.js")
-    || changedSet.has("mailroomnavigator/bot_dashboard_navigator.js");
-  const hasInstallGuide = changedSet.has("colleague_install_guide.md")
-    || changedSet.has("mailroomnavigator/colleague_install_guide.md");
-  const hasPublishHelper = changedSet.has("automation/publish-git-change.command")
-    || changedSet.has("mailroomnavigator/automation/publish-git-change.command");
-
-  if (hasBotDashboard) {
-    const diff = await runGit(["diff", "--", "bot_dashboard_navigator.js"], { allowFailure: true });
-    if (/dashboard filters|selectedPractices|selectedJobTypes|selectedStatuses|filterGrid/i.test(diff.stdout)) {
-      branchName = `bot-dashboard-filter-ux-${timestamp}`;
-      commitMessage = "Improve bot dashboard filter UX";
-    } else {
-      branchName = `bot-dashboard-navigator-updates-${timestamp}`;
-      commitMessage = "Update bot dashboard navigator";
-    }
-  }
-
-  if (hasInstallGuide) {
-    if (branchName === `mailroomnavigator-updates-${timestamp}`) {
-      branchName = `colleague-install-guide-${timestamp}`;
-      commitMessage = "Add colleague install guide";
-    } else {
-      commitMessage = `${commitMessage} and install guide`;
-    }
-  }
-
-  if (hasPublishHelper) {
-    if (branchName === `mailroomnavigator-updates-${timestamp}`) {
-      branchName = `git-publish-helper-${timestamp}`;
-      commitMessage = "Add git publish helper";
-    } else if (!/git publish/i.test(commitMessage)) {
-      commitMessage = `${commitMessage} and git publish helper`;
-    }
-  }
-
-  return {
-    currentBranch: await getGitCurrentBranch(),
-    changedFiles,
-    changedCount: changedFiles.length,
-    suggestion: {
-      branchName: sanitizeGitBranchName(branchName),
-      commitMessage: sanitizeSingleLine(commitMessage, 180),
-    },
-  };
-}
-
-async function gitRefExists(refName) {
-  const result = await runGit(["show-ref", "--verify", "--quiet", refName], { allowFailure: true, timeout: 30000 });
-  return result.ok;
-}
-
-async function publishGitChanges({ branchName, commitMessage }) {
-  const cleanBranchName = sanitizeGitBranchName(branchName);
-  const cleanCommitMessage = sanitizeSingleLine(commitMessage, 180);
-  if (!cleanBranchName || cleanBranchName === "main") {
-    throw new Error("Branch name must not be empty or main.");
-  }
-  if (!cleanCommitMessage) {
-    throw new Error("Commit message is required.");
-  }
-
-  const changedFiles = await getGitChangedFiles();
-  if (!changedFiles.length) {
-    throw new Error("No local changes found to publish.");
-  }
-  if (await gitRefExists(`refs/heads/${cleanBranchName}`)) {
-    throw new Error(`Local branch already exists: ${cleanBranchName}`);
-  }
-
-  const timestamp = Date.now();
-  const stashName = `mailroom-publish-helper-${timestamp}`;
-  const originalBranch = await getGitCurrentBranch();
-  const steps = [];
-  let createdBranch = false;
-
-  const record = async (label, args, options = {}) => {
-    const result = await runGit(args, options);
-    steps.push(label);
-    return result;
-  };
-
-  try {
-    await record("Saved local changes", ["stash", "push", "-u", "-m", stashName]);
-    await record("Switched to main", ["switch", "main"]);
-    await record("Created publish branch", ["switch", "-c", cleanBranchName]);
-    createdBranch = true;
-    await record("Restored local changes", ["stash", "pop"]);
-    await record("Staged changes", ["add", "-A"]);
-    const diffCheck = await runGit(["diff", "--cached", "--quiet"], { allowFailure: true, timeout: 30000 });
-    if (diffCheck.ok) {
-      throw new Error("No staged changes to commit.");
-    }
-    await record("Committed changes", ["commit", "-m", cleanCommitMessage]);
-    const commitHash = sanitizeSingleLine((await runGit(["rev-parse", "--short", "HEAD"])).stdout, 40);
-    await record("Pushed branch to origin", ["push", "-u", "origin", cleanBranchName]);
-    await record("Returned to main", ["switch", "main"]);
-    await appendServerLog(
-      `[${nowIso()}] git publish branch=${cleanBranchName} commit=${commitHash || "unknown"} files=${changedFiles.length}`,
-    );
-    return {
-      branchName: cleanBranchName,
-      commitMessage: cleanCommitMessage,
-      commitHash,
-      changedFiles,
-      changedCount: changedFiles.length,
-      originalBranch,
-      steps,
-    };
-  } catch (error) {
-    await appendServerLog(`[${nowIso()}] git publish failed branch=${cleanBranchName}: ${String(error?.message || error)}`);
-    if (createdBranch) {
-      await runGit(["switch", "main"], { allowFailure: true, timeout: 30000 });
-    }
-    throw error;
-  }
-}
-
 function appendDocmanRunTail(run, rawText, channel = "stdout") {
   if (!run || typeof run !== "object") return;
   const prefix = channel === "stderr" ? "[stderr] " : "";
@@ -4989,12 +4730,6 @@ const server = createServer(async (req, res) => {
         slack: {
           configured: Boolean(SLACK_BOT_TOKEN),
         },
-        superblocks: {
-          configured: Boolean(SUPERBLOCKS_UUID_LOOKUP_URL),
-          method: SUPERBLOCKS_UUID_LOOKUP_METHOD,
-          uuidField: SUPERBLOCKS_UUID_LOOKUP_UUID_FIELD,
-          statusPath: SUPERBLOCKS_UUID_LOOKUP_STATUS_PATH,
-        },
         database: getSqlPublicConfig(),
         access: {
           enabled: Boolean(ACCESS_CONTROL_OWNER_EMAIL),
@@ -5282,46 +5017,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (method === "GET" && path === "/git/status") {
-      try {
-        const details = await suggestGitPublishDetails();
-        sendJson(res, 200, origin, {
-          ok: true,
-          ...details,
-          serverTime: nowIso(),
-        });
-      } catch (error) {
-        sendJson(res, 502, origin, {
-          ok: false,
-          error: sanitizeSingleLine(error?.message, 500) || "Could not inspect git status.",
-        });
-      }
-      return;
-    }
-
-    if (method === "POST" && path === "/git/publish") {
-      try {
-        const body = await parseJsonBody(req).catch(() => ({}));
-        const fallback = await suggestGitPublishDetails();
-        const result = await publishGitChanges({
-          branchName: body?.branchName || fallback?.suggestion?.branchName,
-          commitMessage: body?.commitMessage || fallback?.suggestion?.commitMessage,
-        });
-        sendJson(res, 200, origin, {
-          ok: true,
-          result,
-          serverTime: nowIso(),
-        });
-      } catch (error) {
-        sendJson(res, 502, origin, {
-          ok: false,
-          error: sanitizeSingleLine(error?.message, 700) || "Could not publish git changes.",
-        });
-      }
-      return;
-    }
-
-    if (method === "GET" && path === "/superblocks/uuid-status") {
+    if (method === "GET" && path === "/uuid-status") {
       try {
         const lookup = await runUuidStatusLookup(url.searchParams.get("uuid"));
         sendJson(res, 200, origin, {
@@ -5330,7 +5026,7 @@ const server = createServer(async (req, res) => {
         });
       } catch (error) {
         const message = sanitizeSingleLine(error?.message, 320) || "Could not look up UUID status.";
-        const statusCode = /missing in MailroomNavigator\/\.env/i.test(message)
+        const statusCode = /Cloud SQL UUID lookup is not configured/i.test(message)
           ? 503
           : /Invalid or missing UUID/i.test(message)
             ? 400

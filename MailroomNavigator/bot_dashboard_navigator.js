@@ -45,9 +45,24 @@
     const CREATE_ISSUE_TIMEOUT_MS = 30000;
     const DOCMAN_LOGIN_START_TIMEOUT_MS = 15000;
     const BOT_DASHBOARD_ROW_CACHE_TTL_MS = 900;
+    // Max time to wait for a single toggle_job push to be acknowledged
+    // (its phx-click-loading class removed) before giving up on that row
+    // and moving on, so one stuck row can't hang the whole operation.
+    const BOT_DASHBOARD_SELECT_ALL_ACK_TIMEOUT_MS = 5000;
+    const BOT_DASHBOARD_SELECT_ALL_ACK_POLL_MS = 40;
+    // How many toggle_job pushes may be in flight at once. 1 is the safest
+    // (guaranteed not to overload the channel); bump cautiously if LiveView
+    // keeps up, roll back to 1 if push timeouts return.
+    const BOT_DASHBOARD_SELECT_ALL_CONCURRENCY = 2;
     const BOT_JOB_TITLE_PREFIX = 'Bot Job Error:';
     const PRACTICE_SUPPORT_TITLE_PREFIX = 'Practice Support Ticket:';
     const BOT_JOB_DEFAULT_PRIORITY = 3;
+    const DOCUMENTLESS_BOT_JOB_TITLE_SUBJECTS = {
+        docman_validate: 'practice validation',
+        docman_password_update: 'password update',
+        docman_update_password: 'password update',
+        password_update: 'password update'
+    };
     const BOT_JOB_ISSUE_TYPE_LABEL = 'Stuck letters / Manual intervention';
     const BOT_JOB_LETTER_STAGE_LABELS = {
         docman_rejection: 'Bot Job/ docman_rejection',
@@ -226,16 +241,39 @@
         return collapseText(value).toLowerCase();
     }
 
+    function stableHash(text) {
+        let hash = 2166136261;
+        const input = String(text || '');
+        for (let index = 0; index < input.length; index += 1) {
+            hash ^= input.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
+    function computeBotJobStableIdentity(row) {
+        const jobId = collapseText(row?.job_id);
+        if (jobId) return `job:${jobId}`;
+
+        const documentId = collapseText(row?.document_id);
+        if (documentId) return `document:${documentId}`;
+
+        const fallbackParts = [
+            collapseText(row?.practice_code || row?.practice_name),
+            collapseText(row?.job_type),
+            collapseText(row?.added_at),
+            normalizeFingerprint(row?.status_text)
+        ].filter(Boolean);
+        return fallbackParts.length ? `row:${stableHash(fallbackParts.join('|'))}` : '';
+    }
+
     function computeDedupeKey(row) {
         const fingerprint = normalizeFingerprint(row?.status_text);
-        if (row?.job_id) return { kind: 'job_id', key: row.job_id, fingerprint };
-        if (row?.document_id && row?.job_type) {
-            return { kind: 'doc_job_fp', key: `${row.document_id}|${row.job_type}|${fingerprint}`, fingerprint };
-        }
-        if (row?.practice_name && row?.job_type) {
-            return { kind: 'practice_job_fp', key: `${row.practice_name}|${row.job_type}|${fingerprint}`, fingerprint };
-        }
-        return { kind: 'fallback', key: fingerprint, fingerprint };
+        const stableIdentity = computeBotJobStableIdentity(row);
+        if (row?.job_id) return { kind: 'job_id', key: row.job_id, fingerprint, stableIdentity };
+        if (row?.document_id) return { kind: 'document_id', key: stableIdentity || `document:${row.document_id}`, fingerprint, stableIdentity };
+        if (stableIdentity) return { kind: 'row_fingerprint', key: stableIdentity, fingerprint, stableIdentity };
+        return { kind: 'fallback', key: '', fingerprint, stableIdentity: '' };
     }
 
     function computePracticeGroupKey(row, dedupeKey = null) {
@@ -393,9 +431,14 @@
     }
 
     function buildIssueTitleSubject(row) {
-        if (row?.document_id) return row.document_id;
-        if (String(row?.job_type || '').toLowerCase() === 'docman_import') return 'collection-error';
-        return 'unknown-document-id';
+        const documentId = collapseText(row?.document_id);
+        if (documentId) return documentId;
+
+        const jobType = String(row?.job_type || '').trim().toLowerCase();
+        if (jobType === 'docman_import') return 'collection-error';
+        if (DOCUMENTLESS_BOT_JOB_TITLE_SUBJECTS[jobType]) return DOCUMENTLESS_BOT_JOB_TITLE_SUBJECTS[jobType];
+
+        return 'job failure';
     }
 
     function buildIssueTitle(row) {
@@ -980,23 +1023,16 @@ ${hiddenBlock}
 body[data-bl-dashboard-filter-lock="true"] table tbody tr:not([data-bl-filter-visible="true"]) {
     display: none !important;
 }
-body[data-bl-dashboard-bulk-selecting="true"] table tbody {
-    opacity: 0 !important;
-    pointer-events: none !important;
-}
 body[data-bl-dashboard-bulk-selecting="true"] {
     cursor: wait !important;
-}
-body[data-bl-dashboard-bulk-selecting="true"] > *:not(.bl-dashboard-bulk-overlay):not(.bl-dashboard-bulk-status):not(#${BOT_DASHBOARD_FILTER_STYLE_ID}) {
-    opacity: 0 !important;
-    visibility: hidden !important;
 }
 .bl-dashboard-bulk-overlay {
     position: fixed;
     inset: 0;
     z-index: 2147483646;
-    background: #f8fafc;
+    background: transparent;
     pointer-events: all;
+    cursor: wait;
 }
 .bl-dashboard-bulk-status {
     position: fixed;
@@ -1422,25 +1458,96 @@ body[data-bl-dashboard-bulk-selecting="true"] > *:not(.bl-dashboard-bulk-overlay
         return null;
     }
 
-    function runVisibleOnlySelectAllBatch(headerCheckbox) {
-        const entries = getBotDashboardRowEntries({ visibleOnly: false, forceFresh: true });
-        const visibleCheckboxes = entries
-            .filter((entry) => !isHiddenBotDashboardRow(entry.row))
+    function isBotDashboardCheckboxPushPending(checkbox) {
+        return checkbox instanceof HTMLInputElement
+            && (checkbox.classList.contains('phx-click-loading') || checkbox.classList.contains('phx-change-loading'));
+    }
+
+    // Resolves once the checkbox's toggle_job push has been acknowledged by
+    // LiveView (its phx-click-loading class removed), or after a bounded
+    // timeout so one stuck/lost push can't hang the whole operation.
+    function waitForBotDashboardCheckboxSettle(checkbox) {
+        return new Promise((resolve) => {
+            const start = Date.now();
+            const poll = () => {
+                if (!isBotDashboardCheckboxPushPending(checkbox)
+                    || Date.now() - start >= BOT_DASHBOARD_SELECT_ALL_ACK_TIMEOUT_MS) {
+                    resolve();
+                    return;
+                }
+                window.setTimeout(poll, BOT_DASHBOARD_SELECT_ALL_ACK_POLL_MS);
+            };
+            poll();
+        });
+    }
+
+    // Runs the header Select All toggle as one real checkbox click at a
+    // time, waiting for each toggle_job push to be acknowledged by Phoenix
+    // LiveView before clicking the next row, instead of clicking every
+    // visible row synchronously (or in fixed-delay batches). Firing many
+    // real .click() calls without waiting for each one's server round trip
+    // queues up phx-click="toggle_job" pushes faster than LiveView acks
+    // them; once the backlog is older than the channel's push timeout, the
+    // browser reports "push timeout" for every queued push at once, even
+    // though the clicks were spread out client-side. Gating on the actual
+    // ack (rather than a guessed delay) keeps at most one push in flight
+    // and adapts automatically to however long the server actually takes.
+    async function runVisibleOnlySelectAllBatch(headerCheckbox, { onProgress } = {}) {
+        const initialEntries = getBotDashboardRowEntries({ visibleOnly: false, forceFresh: true });
+        const initialVisible = initialEntries.filter((entry) => !isHiddenBotDashboardRow(entry.row));
+        const visibleCheckboxes = initialVisible
             .map((entry) => entry.row.querySelector('input[type="checkbox"]'))
             .filter((rowCheckbox) => rowCheckbox instanceof HTMLInputElement && !rowCheckbox.disabled);
-        const hiddenCheckboxes = entries
-            .filter((entry) => isHiddenBotDashboardRow(entry.row))
-            .map((entry) => entry.row.querySelector('input[type="checkbox"]'))
-            .filter((rowCheckbox) => rowCheckbox instanceof HTMLInputElement);
         const shouldSelect = visibleCheckboxes.some((rowCheckbox) => !rowCheckbox.checked);
 
-        hiddenCheckboxes
-            .filter((rowCheckbox) => rowCheckbox.checked)
-            .forEach((rowCheckbox) => setBotDashboardCheckboxChecked(rowCheckbox, false, { quiet: false }));
+        const hiddenTasks = initialEntries
+            .filter((entry) => isHiddenBotDashboardRow(entry.row))
+            .filter((entry) => entry.row.querySelector('input[type="checkbox"]')?.checked)
+            .map((entry) => computeBotJobStableIdentity(entry.botJobRow))
+            .filter(Boolean)
+            .map((id) => ({ id, checked: false }));
 
-        visibleCheckboxes
-            .filter((rowCheckbox) => rowCheckbox.checked !== shouldSelect)
-            .forEach((rowCheckbox) => setBotDashboardCheckboxChecked(rowCheckbox, shouldSelect, { quiet: false }));
+        const visibleTasks = initialVisible
+            .filter((entry) => {
+                const rowCheckbox = entry.row.querySelector('input[type="checkbox"]');
+                return rowCheckbox instanceof HTMLInputElement && !rowCheckbox.disabled && rowCheckbox.checked !== shouldSelect;
+            })
+            .map((entry) => computeBotJobStableIdentity(entry.botJobRow))
+            .filter(Boolean)
+            .map((id) => ({ id, checked: shouldSelect }));
+
+        const queue = [...hiddenTasks, ...visibleTasks];
+        const total = queue.length;
+        let processed = 0;
+        let nextIndex = 0;
+        onProgress?.(processed, total, shouldSelect);
+
+        async function processTask(task) {
+            // Re-resolve the checkbox from a fresh DOM query every row:
+            // LiveView can re-render/replace row elements mid-operation, so
+            // a checkbox reference captured up front may go stale.
+            const freshEntry = getBotDashboardRowEntries({ visibleOnly: false, forceFresh: true })
+                .find((entry) => computeBotJobStableIdentity(entry.botJobRow) === task.id);
+            const rowCheckbox = freshEntry?.row.querySelector('input[type="checkbox"]');
+            if (rowCheckbox instanceof HTMLInputElement && rowCheckbox.checked !== task.checked) {
+                await waitForBotDashboardCheckboxSettle(rowCheckbox);
+                setBotDashboardCheckboxChecked(rowCheckbox, task.checked, { quiet: false });
+                await waitForBotDashboardCheckboxSettle(rowCheckbox);
+            }
+            processed += 1;
+            onProgress?.(processed, total, shouldSelect);
+        }
+
+        async function runWorker() {
+            while (nextIndex < queue.length) {
+                const task = queue[nextIndex];
+                nextIndex += 1;
+                await processTask(task);
+            }
+        }
+
+        const workerCount = Math.min(BOT_DASHBOARD_SELECT_ALL_CONCURRENCY, queue.length);
+        await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 
         if (headerCheckbox instanceof HTMLInputElement) {
             headerCheckbox.checked = shouldSelect && visibleCheckboxes.length > 0;
@@ -1467,21 +1574,23 @@ body[data-bl-dashboard-bulk-selecting="true"] > *:not(.bl-dashboard-bulk-overlay
 
         waitForNextFrame()
             .then(waitForNextFrame)
-            .then(() => {
-                try {
-                    runVisibleOnlySelectAllBatch(checkbox);
-                    invalidateBotDashboardRowCache();
-                } catch (error) {
-                    console.warn('[BL Navigator] visible-only Select All cleanup failed:', error);
-                } finally {
-                    window.setTimeout(() => {
-                        invalidateBotDashboardRowCache();
-                        runBotDashboardFilterRefresh();
-                        botDashboardBulkSelecting = false;
-                        setBotDashboardBulkStatus('');
-                        setBotDashboardBulkSelectingMask(false);
-                    }, 450);
+            .then(() => runVisibleOnlySelectAllBatch(checkbox, {
+                onProgress: (processed, total, shouldSelect) => {
+                    if (total > 0) {
+                        const verb = shouldSelect ? 'Selecting' : 'Deselecting';
+                        setBotDashboardBulkStatus(`${verb} ${processed} / ${total} visible jobs...`);
+                    }
                 }
+            }))
+            .catch((error) => {
+                console.warn('[BL Navigator] visible-only Select All batch failed:', error);
+            })
+            .finally(() => {
+                invalidateBotDashboardRowCache();
+                runBotDashboardFilterRefresh();
+                botDashboardBulkSelecting = false;
+                setBotDashboardBulkStatus('');
+                setBotDashboardBulkSelectingMask(false);
             });
 
         return true;
@@ -1568,7 +1677,14 @@ body[data-bl-dashboard-bulk-selecting="true"] > *:not(.bl-dashboard-bulk-overlay
             .map((row) => computePracticeGroupKey(row, computeDedupeKey(row)))
             .filter(Boolean);
         const firstGroupKey = groupKeys[0] || `${normalizeGroupKeyPart(pageUrl)}|${normalizeGroupKeyPart(pageScope)}`;
-        const dedupeKey = `bot_dashboard_practice_job_spike|${firstGroupKey}`;
+        const stableIdentityKeys = [...new Set(normalizedRows
+            .map((row) => computeBotJobStableIdentity(row))
+            .filter(Boolean))]
+            .sort();
+        const spikeIdentity = stableIdentityKeys.length
+            ? stableIdentityKeys.join('|')
+            : `${firstGroupKey}|${normalizedRows.length}|${pageScope}`;
+        const dedupeKey = `bot_dashboard_job_set|${normalizedRows.length}|${stableHash(spikeIdentity)}`;
         const hiddenBlock = buildHiddenDedupeBlock([dedupeKey], groupKeys);
         const jobTypes = [...new Set(normalizedRows.map((row) => collapseText(row.job_type)).filter(Boolean))];
         const practices = [...new Set(normalizedRows.map((row) => collapseText(row.practice_name)).filter(Boolean))];

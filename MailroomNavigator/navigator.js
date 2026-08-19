@@ -1,6 +1,6 @@
 // Navigator view logic: practice lookup, quick navigation actions, and practice status rendering.
 import { state, setCurrentSelectedOdsCode } from './state.js';
-import { copyTextToClipboard, showStatus, showToast } from './utils.js';
+import { copyTextToClipboard, hideStatus, showStatus, showToast } from './utils.js';
 
 const ALL_PRACTICES_CODE = 'ALL';
 const ALL_PRACTICES_LABEL = 'All practices';
@@ -14,11 +14,17 @@ const PANEL_HOST_TAB_ID = (() => {
     }
 })();
 const LIVE_COUNT_KEYS = ['preparing', 'edit', 'review', 'coding', 'rejected'];
+const RECENT_PRACTICES_STORAGE_KEY = 'mailroomNavigatorRecentPracticesV1';
+const RECENT_PRACTICES_LIMIT = 6;
 const statusFetchInFlightByOds = new Map();
 const lastKnownLiveCountsByOds = new Map();
 const lastKnownDetailedStatusByOds = new Map();
 const revealedSecretFieldsByOds = new Map();
 const lastRenderedStatusSignatureByOds = new Map();
+let recentPractices = [];
+let recentPracticesLoaded = false;
+let recentPracticesLoadPromise = null;
+let recentPracticesInteractionsBound = false;
 let statusDisplayInteractionsBound = false;
 let lastStatusDisplayInteractionAt = 0;
 const STATUS_DISPLAY_INTERACTION_COOLDOWN_MS = 15000;
@@ -122,11 +128,12 @@ export function normalizePracticeSelection(input) {
   }
   if (input && typeof input === 'object' && typeof input.ods === 'string') {
     const name = typeof input.name === 'string' ? input.name : '';
-    return { name, ods: input.ods, display: `${name} (${input.ods})` };
+    const cdb = String(input.cdb || input.practiceCDB || '').trim();
+    return { name, ods: input.ods, cdb, display: `${name} (${input.ods})` };
   }
   if (typeof input === 'string' && state.cachedPractices[input]) {
     const p = state.cachedPractices[input];
-    return { name: p.name, ods: p.ods, display: input };
+    return { name: p.name, ods: p.ods, cdb: p.cdb || p.practiceCDB || '', display: input };
   }
 
   if (typeof input === 'string') {
@@ -150,6 +157,7 @@ export function normalizePracticeSelection(input) {
       return {
         name: byName.name,
         ods: byName.ods,
+        cdb: byName.cdb || byName.practiceCDB || '',
         display: `${byName.name} (${byName.ods})`
       };
     }
@@ -181,6 +189,9 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
   hidePracticeSuggestions();
 
   setNavigatorButtonsState({ hasConcretePractice, isAllPractices });
+  if (hasConcretePractice) {
+    rememberRecentPractice(normalized);
+  }
   if (triggerStatus) {
     if (hasConcretePractice) {
       displayPracticeStatus({ keepExisting: true, preferCached: true, silent: false });
@@ -215,6 +226,157 @@ export function clearSelectedPractice() {
       hasConcretePractice: false,
       isAllPractices: false
   });
+}
+
+function getPracticeDisplayName(practice) {
+    return String(practice?.name || practice?.practiceName || practice?.displayName || '').trim();
+}
+
+function normalizeRecentPractice(practiceLike) {
+    const normalized = normalizePracticeSelection(practiceLike);
+    const ods = String(normalized?.ods || '').trim().toUpperCase();
+    if (!/^[A-Z]\d{5}$/.test(ods)) return null;
+
+    const cached = findCachedPracticeByOds(ods);
+    const source = practiceLike && typeof practiceLike === 'object' ? practiceLike : {};
+    const name = getPracticeDisplayName(source) || getPracticeDisplayName(cached) || normalized.name || ods;
+    const cdb = String(
+        source.cdb
+        || source.practiceCDB
+        || cached?.cdb
+        || cached?.practiceCDB
+        || normalized.cdb
+        || ''
+    ).trim();
+
+    return {
+        name,
+        ods,
+        cdb,
+        display: `${name} (${ods})`
+    };
+}
+
+function getStorageLocal() {
+    try {
+        if (typeof chrome === 'undefined') return null;
+        return chrome.storage?.local || null;
+    } catch {
+        return null;
+    }
+}
+
+function renderRecentPractices() {
+    const sectionEl = document.getElementById('recentPracticesSection');
+    const listEl = document.getElementById('recentPracticesList');
+    if (!sectionEl || !listEl) return;
+
+    listEl.innerHTML = '';
+    const visiblePractices = recentPractices
+        .map(normalizeRecentPractice)
+        .filter(Boolean)
+        .slice(0, RECENT_PRACTICES_LIMIT);
+
+    if (visiblePractices.length === 0) {
+        sectionEl.hidden = true;
+        return;
+    }
+
+    visiblePractices.forEach((practice) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        const isCurrentPractice = String(state.currentSelectedOdsCode || '').toUpperCase() === practice.ods;
+        button.className = `recent-practice-chip${isCurrentPractice ? ' is-current' : ''}`;
+        button.setAttribute('data-ods', practice.ods);
+        button.title = practice.cdb
+            ? `${practice.name} · ODS ${practice.ods} · CDB ${practice.cdb}`
+            : `${practice.name} · ODS ${practice.ods}`;
+        const metaText = [practice.ods, practice.cdb ? `CDB ${practice.cdb}` : ''].filter(Boolean).join(' · ');
+        button.innerHTML = `
+            <span class="recent-practice-name">${escapeHtml(practice.name)}</span>
+            <span class="recent-practice-meta">${escapeHtml(metaText)}</span>
+        `;
+        button.addEventListener('click', () => {
+            const cachedPractice = findCachedPracticeByOds(practice.ods);
+            setSelectedPractice(cachedPractice || practice, { updateInput: true, triggerStatus: true });
+        });
+        listEl.appendChild(button);
+    });
+
+    sectionEl.hidden = false;
+}
+
+async function saveRecentPractices() {
+    const storage = getStorageLocal();
+    if (!storage) return;
+    try {
+        await storage.set({ [RECENT_PRACTICES_STORAGE_KEY]: recentPractices });
+    } catch {
+        // Recent-practice memory is a convenience only.
+    }
+}
+
+async function ensureRecentPracticesLoaded() {
+    if (recentPracticesLoaded) return recentPractices;
+    if (recentPracticesLoadPromise) return recentPracticesLoadPromise;
+
+    recentPracticesLoadPromise = (async () => {
+        const storage = getStorageLocal();
+        if (!storage) {
+            recentPracticesLoaded = true;
+            renderRecentPractices();
+            return recentPractices;
+        }
+
+        try {
+            const result = await storage.get([RECENT_PRACTICES_STORAGE_KEY]);
+            const stored = result?.[RECENT_PRACTICES_STORAGE_KEY];
+            recentPractices = Array.isArray(stored)
+                ? stored.map(normalizeRecentPractice).filter(Boolean).slice(0, RECENT_PRACTICES_LIMIT)
+                : [];
+        } catch {
+            recentPractices = [];
+        } finally {
+            recentPracticesLoaded = true;
+            recentPracticesLoadPromise = null;
+            renderRecentPractices();
+        }
+
+        return recentPractices;
+    })();
+
+    return recentPracticesLoadPromise;
+}
+
+function rememberRecentPractice(practiceLike) {
+    const selected = normalizeRecentPractice(practiceLike);
+    if (!selected) return;
+
+    const update = async () => {
+        await ensureRecentPracticesLoaded();
+        recentPractices = [
+            selected,
+            ...recentPractices.filter((practice) => String(practice?.ods || '').toUpperCase() !== selected.ods)
+        ].slice(0, RECENT_PRACTICES_LIMIT);
+        renderRecentPractices();
+        await saveRecentPractices();
+    };
+
+    update().catch(() => undefined);
+}
+
+export async function initializeRecentPractices() {
+    if (!recentPracticesInteractionsBound) {
+        document.getElementById('clearRecentPracticesBtn')?.addEventListener('click', async () => {
+            recentPractices = [];
+            renderRecentPractices();
+            await saveRecentPractices();
+            showToast('Recent practices cleared.');
+        });
+        recentPracticesInteractionsBound = true;
+    }
+
+    await ensureRecentPracticesLoaded();
 }
 
 export function hidePracticeSuggestions() {
@@ -1029,9 +1191,7 @@ export async function displayPracticeStatus(options = {}) {
                 statusDisplayEl.style.display = 'block';
             }
             rememberLiveCountsForOds(selectedOds, countsForRender);
-            if (!silent) {
-                showStatus('Practice details loaded.', 'success');
-            }
+            if (!silent) hideStatus();
 
             // Fetch fresh live counts asynchronously so basic status renders immediately.
             if (hasMissingLiveCounts(counts)) {

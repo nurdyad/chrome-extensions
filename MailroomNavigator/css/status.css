@@ -688,7 +688,7 @@
     animation: fadeIn 0.3s ease;
 }
 
-.superblocks-lookup-status {
+.uuid-lookup-status {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -696,7 +696,7 @@
     text-align: left;
 }
 
-.superblocks-lookup-card-host {
+.uuid-lookup-card-host {
     padding: 0;
     background: transparent;
     color: inherit;
@@ -704,15 +704,15 @@
     box-shadow: none;
 }
 
-.superblocks-status-card {
+.uuid-status-card {
     width: 100%;
 }
 
-.superblocks-status-card.is-loading {
+.uuid-status-card.is-loading {
     opacity: 0.94;
 }
 
-.superblocks-status-header {
+.uuid-status-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -720,7 +720,7 @@
     margin-bottom: 4px;
 }
 
-.superblocks-status-main {
+.uuid-status-main {
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -728,28 +728,28 @@
     margin-bottom: 8px;
 }
 
-.superblocks-status-subtitle {
+.uuid-status-subtitle {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 11px;
     line-height: 1.25;
     color: #6b8197;
 }
 
-.superblocks-status-summary-grid {
+.uuid-status-summary-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
 }
 
-.superblocks-status-summary-grid.has-single-card {
+.uuid-status-summary-grid.has-single-card {
     grid-template-columns: minmax(0, 1fr);
 }
 
-.superblocks-status-summary-grid .practice-status-summary-card {
+.uuid-status-summary-grid .practice-status-summary-card {
     padding: 7px 8px;
 }
 
-.superblocks-status-open-button {
+.uuid-status-open-button {
     flex-shrink: 0;
     min-height: 24px;
     padding-inline: 9px;
@@ -775,7 +775,7 @@
     border-color: #f3b6b6;
 }
 
-.superblocks-status-card .practice-status-chip-button.is-cdb {
+.uuid-status-card .practice-status-chip-button.is-cdb {
     cursor: pointer;
 }
 
@@ -1187,12 +1187,12 @@
         align-items: stretch;
     }
 
-    .superblocks-status-header {
+    .uuid-status-header {
         align-items: flex-start;
         flex-direction: column;
     }
 
-    .superblocks-status-summary-grid {
+    .uuid-status-summary-grid {
         grid-template-columns: minmax(0, 1fr);
     }
 

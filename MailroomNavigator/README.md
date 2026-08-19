@@ -88,11 +88,11 @@ Use `SETUP.md` for installation on a new machine.
 
 #### UUID Lookup
 
-- Input: `superblocksUuidLookupInput`
-- Status badge: `superblocksUuidLookupStatus`
+- Input: `uuidLookupInput`
+- Status badge: `uuidLookupStatus`
 - Looks up a full UUID or 6+ character UUID fragment through the local trigger service
-- Uses Cloud SQL/read-replica config when available, with the legacy Superblocks workflow as a fallback
-- Requires local trigger service plus `MAILROOMNAV_SQL_*` database config or `SUPERBLOCKS_UUID_LOOKUP_URL`
+- Uses Cloud SQL/read-replica config through the local trigger service
+- Requires local trigger service plus `MAILROOMNAV_SQL_*` database config
 
 #### Bulk ID Actions
 
@@ -182,9 +182,9 @@ MailroomNavigator/
 ├── manifest.json
 ├── panel.html / panel.js
 ├── background.js
-├── navigator.js / jobs.js / email.js
+├── navigator.js / jobs.js
 ├── bot_dashboard_navigator.js / mailroom_page_integrator.js / password_content.js
-├── bookmarklet_tools.js / bulk_workflow_groups.js
+├── bulk_workflow_groups.js
 ├── offscreen.html / offscreen.js
 ├── state.js / utils.js
 ├── css/
@@ -212,8 +212,6 @@ MailroomNavigator/
 |---|---|
 | `navigator.js` | Practice Navigator behavior: suggestions, practice selection, status rendering, action buttons. |
 | `jobs.js` | Job Panel behavior: ID parsing, autocomplete lists, link generation, bulk actions, recent IDs. |
-| `email.js` | Email formatter logic (convert and name extraction workflows). |
-| `bookmarklet_tools.js` | In-page tools host and modal/panel positioning logic (UUID picker, Docman group names). |
 | `bulk_workflow_groups.js` | In-page automation helper for bulk workflow group creation. |
 
 ### Content / In-Page Scripts
@@ -242,22 +240,12 @@ MailroomNavigator/
 | File | What it does |
 |---|---|
 | `automation/package.json` | Local Node dependencies for automation scripts. |
-| `automation/save-auth-local.mjs` | Playwright + IMAP OTP login flow; saves storage state. |
-| `automation/morning-login-runner.sh` | Morning auth/session refresh runner with verification + notifications. |
-| `automation/install-morning-login-launchagent.sh` | Installs morning runner LaunchAgent (macOS). |
-| `automation/uninstall-morning-login-launchagent.sh` | Removes morning runner LaunchAgent. |
-| `automation/reliability-test.sh` | Repeated forced-run reliability checker. |
-| `automation/fetch-dashboard-summary.mjs` | Reads live Require Attention counts from dashboard tabs. |
-| `automation/show-live-summary-notification.sh` | Runs summary fetch and sends final notification. |
-| `automation/global-summary-hotkey.m` | macOS hotkey daemon (`Cmd+Shift+9`, fallback `Cmd+Ctrl+9`) with menu-bar indicator. |
-| `automation/install-global-summary-hotkey.sh` | Compiles/installs global hotkey LaunchAgent. |
-| `automation/uninstall-global-summary-hotkey.sh` | Removes global hotkey LaunchAgent. |
 | `automation/linear-trigger-server.mjs` | Local HTTP service used by `Trigger Linear` button. |
 | `automation/start-linear-trigger-server.sh` | Runner wrapper for trigger server. |
+| `automation/start-linear-trigger-server.cmd` | Windows runner wrapper for trigger server. |
 | `automation/install-linear-trigger-launchagent.sh` | Installs trigger server LaunchAgent. |
 | `automation/uninstall-linear-trigger-launchagent.sh` | Removes trigger server LaunchAgent. |
-| `automation/check-global-summary-hotkey.sh` | Diagnostic status/log helper for hotkey service. |
-| `automation/README-morning-login.md` | Detailed macOS automation operations reference. |
+| `automation/check-linear-trigger-service.sh` | Diagnostic status/log helper for trigger service. |
 
 ### Generated Local-Only Paths (Not Committed)
 
@@ -265,7 +253,7 @@ MailroomNavigator/
 |---|---|
 | `.env` | Local secrets and machine-specific configuration. |
 | `.automation-state/` | Runtime state/session files (storage state, run markers). |
-| `logs/` | Runtime logs for runner, hotkey daemon, and trigger server. |
+| `logs/` | Runtime logs for the trigger server and Docman helper runs. |
 | `automation/node_modules/` | Installed local dependencies. |
 
 ## Keyboard Shortcuts
@@ -274,24 +262,16 @@ MailroomNavigator/
   - macOS: `Command+Shift+M`
   - others: `Ctrl+Shift+M`
   - action: show live summary tooltip in the active Chrome tab
-- Optional macOS global hotkeys (automation):
-  - `Cmd+Shift+9` (primary)
-  - `Cmd+Ctrl+9` (fallback)
-  - action: trigger live BetterLetter summary from any app
-
 ## Automation Components (Optional)
 
 `MailroomNavigator/automation` provides:
 
-- morning login/session refresh with OTP
-- dashboard summary notifications
 - local trigger server for `Trigger Linear`
-- global hotkey daemon with menu-bar heartbeat
+- Docman helper runners used by the Practice Navigator buttons
 
 See:
 
 - `SETUP.md` (cross-platform install)
-- `automation/README-morning-login.md` (macOS automation detail)
 
 ## Security Notes
 
