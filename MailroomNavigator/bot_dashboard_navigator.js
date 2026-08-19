@@ -76,7 +76,6 @@
         docman_file: 'Bot job/ docman_file'
     };
     const STUCK_LETTERS_PREPARING_LABEL = 'Stuck letters - Preparing';
-    const STUCK_LETTERS_BOT_JOBS_LABEL = 'Stuck letters - Bot jobs';
     const REJECTED_QUEUE_LABELS = ['Rejection', 'Monitoring / Reporting'];
     const HIDDEN_DEDUPE_PREFIX = 'BOT_JOBS_DEDUPE:';
     const GROUP_DEDUPE_PREFIX = 'BOT_JOBS_GROUP:';
@@ -329,45 +328,6 @@
         return markers.length ? `\n\n${markers.join('\n')}` : '';
     }
 
-    function inferEhrLabel(jobType) {
-        const normalized = String(jobType || '').toLowerCase();
-        if (normalized.includes('docman')) return 'Docman';
-        if (normalized.includes('emis')) return 'Emis';
-        if (normalized.includes('sys1') || normalized.includes('systemone')) return 'Sys1';
-        return '';
-    }
-
-    function inferIssueTypeLabel(row) {
-        return String(row?.job_type || '').toLowerCase() === 'docman_import'
-            ? 'Collection'
-            : 'Stuck letters / Manual intervention';
-    }
-
-    function inferSupportTypeLabel(row) {
-        const status = String(row?.status_text || '').toLowerCase();
-        if (
-            status.includes('traceback') ||
-            status.includes('nonetype') ||
-            status.includes('exception') ||
-            status.includes('attribute')
-        ) {
-            return 'Engineering';
-        }
-        if (status.includes('unknown') || status.includes('still erroring')) {
-            return 'Investigation';
-        }
-        return 'Technical';
-    }
-
-    function inferLetterStageLabel(row) {
-        const jobType = String(row?.job_type || '').toLowerCase();
-        if (jobType.startsWith('emis_') || jobType.includes('generate_output')) return 'Coding/Coding';
-        if (jobType === 'docman_import') return '';
-        if (jobType.startsWith('docman_')) return 'Coding/Filing';
-        if (jobType.includes('ocr')) return 'Preparing/OCR';
-        return '';
-    }
-
     function inferPriority(row) {
         const status = String(row?.status_text || '').toLowerCase();
         const attempts = Number(row?.attempts_count || 0);
@@ -380,17 +340,6 @@
         if (attempts >= 4) return 2;
         if (['docman_file', 'docman_validate', 'emis_coding'].includes(jobType)) return 2;
         return BOT_JOB_DEFAULT_PRIORITY;
-    }
-
-    function buildLabels(row) {
-        const labels = [];
-        const ehr = inferEhrLabel(row?.job_type);
-        if (ehr) labels.push(ehr);
-        labels.push(inferIssueTypeLabel(row));
-        labels.push(inferSupportTypeLabel(row));
-        const stage = inferLetterStageLabel(row);
-        if (stage) labels.push(stage);
-        return [...new Set(labels.filter(Boolean))];
     }
 
     function inferBotJobLetterStageLabel(row) {
@@ -406,13 +355,6 @@
             labels.push(stageLabels[0]);
         }
         return labels;
-    }
-
-    function getStuckLettersLinearLabelForCurrentPage() {
-        const path = String(window.location.pathname || '');
-        if (path.includes('/mailroom/preparing')) return STUCK_LETTERS_PREPARING_LABEL;
-        if (path.includes('/admin_panel/bots/dashboard')) return STUCK_LETTERS_BOT_JOBS_LABEL;
-        return '';
     }
 
     function buildAnnotationEditorUrl(documentId) {
@@ -1252,11 +1194,6 @@ body[data-bl-dashboard-bulk-selecting="true"] {
         setBotDashboardCheckboxChecked(checkbox, false, options);
     }
 
-    function checkBotDashboardCheckbox(checkbox) {
-        if (!(checkbox instanceof HTMLInputElement) || checkbox.disabled) return;
-        setBotDashboardCheckboxChecked(checkbox, true);
-    }
-
     function unselectHiddenBotDashboardRows({ quiet = true } = {}) {
         if (!isBotDashboardPage()) return;
         document.querySelectorAll('table tbody tr input[type="checkbox"]:checked').forEach((checkbox) => {
@@ -1963,10 +1900,6 @@ ${hiddenBlock}
             }
         };
         return restrictedToolsAccess;
-    }
-
-    function hasRestrictedFeature(featureKey) {
-        return Boolean(restrictedToolsAccess?.features?.[featureKey]);
     }
 
     function canUseLinearIssueAction() {
