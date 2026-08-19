@@ -16,6 +16,8 @@
     let metaReanchorTimer = null;
     let navigatorToastEl = null;
     let navigatorToastTimer = null;
+    let uuidResultsPanel = null;
+    let uuidResultsPanelRequestSeq = 0;
     let botDashboardRowCache = null;
     let attachListenersTimer = null;
     let botDashboardSelectionPruneTimer = null;
@@ -86,6 +88,7 @@
     const PREPARING_OVER_3H_ISSUE_HOST_ID = 'bl-preparing-over-3h-issue-host';
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     const LINK_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 1 0-7.07-7.07L11 4"></path><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19"></path></svg>';
+    const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
     const HEADER_KEYS = {
         documentid: 'document',
@@ -3798,6 +3801,221 @@ ${hiddenBlock}
         });
     }
 
+    function extractUuidsFromText(text) {
+        const matches = String(text || '').match(UUID_PATTERN) || [];
+        const seen = new Set();
+        const uuids = [];
+        matches.forEach((match) => {
+            const normalized = match.toLowerCase();
+            if (seen.has(normalized)) return;
+            seen.add(normalized);
+            uuids.push(normalized);
+        });
+        return uuids;
+    }
+
+    function ensureUuidResultsPanel() {
+        if (uuidResultsPanel) return uuidResultsPanel;
+
+        uuidResultsPanel = document.createElement('div');
+        uuidResultsPanel.id = 'bl-uuid-results-panel';
+        Object.assign(uuidResultsPanel.style, {
+            position: 'fixed',
+            zIndex: '2147483647',
+            background: '#ffffff',
+            border: '1px solid #d0d5dd',
+            borderRadius: '8px',
+            boxShadow: '0 10px 24px rgba(15, 23, 42, 0.22)',
+            padding: '10px',
+            width: '360px',
+            maxHeight: '420px',
+            overflowY: 'auto',
+            display: 'none',
+            font: '12px/1.4 system-ui, -apple-system, sans-serif',
+            color: '#1f2937'
+        });
+        document.body.appendChild(uuidResultsPanel);
+
+        document.addEventListener('mousedown', (event) => {
+            if (!uuidResultsPanel || uuidResultsPanel.style.display === 'none') return;
+            if (uuidResultsPanel.contains(event.target)) return;
+            if (event.target?.closest?.('[data-bl-uuid-check-trigger="true"]')) return;
+            hideUuidResultsPanel();
+        }, true);
+
+        return uuidResultsPanel;
+    }
+
+    function hideUuidResultsPanel() {
+        if (uuidResultsPanel) uuidResultsPanel.style.display = 'none';
+    }
+
+    function positionUuidResultsPanel(panel, anchorEl) {
+        const viewportPadding = 8;
+        const rect = anchorEl.getBoundingClientRect();
+        panel.style.display = 'block';
+        panel.style.visibility = 'hidden';
+        const panelRect = panel.getBoundingClientRect();
+
+        const maxLeft = Math.max(viewportPadding, window.innerWidth - panelRect.width - viewportPadding);
+        let left = Math.min(Math.max(rect.left, viewportPadding), maxLeft);
+
+        let top = rect.bottom + 4;
+        if (top + panelRect.height > window.innerHeight - viewportPadding) {
+            top = Math.max(viewportPadding, rect.top - panelRect.height - 4);
+        }
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+        panel.style.visibility = 'visible';
+    }
+
+    function buildUuidResultRowSkeleton(uuid) {
+        const row = document.createElement('div');
+        Object.assign(row.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 4px',
+            borderBottom: '1px solid #f1f3f5'
+        });
+
+        const info = document.createElement('div');
+        Object.assign(info.style, { flex: '1', minWidth: '0' });
+
+        const uuidLabel = document.createElement('div');
+        uuidLabel.textContent = `${uuid.slice(0, 8)}...${uuid.slice(-6)}`;
+        uuidLabel.title = uuid;
+        Object.assign(uuidLabel.style, { fontFamily: 'monospace', fontSize: '11px', color: '#495057' });
+
+        const statusLabel = document.createElement('div');
+        statusLabel.textContent = 'Checking...';
+        statusLabel.dataset.role = 'status';
+        Object.assign(statusLabel.style, { fontSize: '11px', fontWeight: '600', color: '#868e96' });
+
+        info.append(uuidLabel, statusLabel);
+
+        const actions = document.createElement('div');
+        actions.dataset.role = 'actions';
+        Object.assign(actions.style, { display: 'flex', gap: '4px', flexShrink: '0' });
+        actions.appendChild(createButton({
+            icon: COPY_ICON_SVG,
+            color: '#868e96',
+            title: 'Copy UUID',
+            onClick: (btn) => copyToClipboard(uuid, () => flashButton(btn))
+        }));
+
+        row.append(info, actions);
+        return row;
+    }
+
+    function updateUuidResultRow(row, outcome) {
+        const statusLabel = row.querySelector('[data-role="status"]');
+        const actions = row.querySelector('[data-role="actions"]');
+        if (!statusLabel || !actions) return;
+
+        if (outcome.error) {
+            statusLabel.textContent = outcome.error;
+            statusLabel.style.color = '#e03131';
+            return;
+        }
+
+        const result = outcome.result || {};
+        if (!result.found || !result.status) {
+            statusLabel.textContent = collapseText(result.detail) || 'Not found';
+            statusLabel.style.color = '#e8590c';
+            return;
+        }
+
+        const status = collapseText(result.status).toLowerCase();
+        const prettyStatus = collapseText(result.status) || 'Unknown';
+        statusLabel.textContent = result.documentId ? `${prettyStatus} (Doc ${result.documentId})` : prettyStatus;
+        statusLabel.style.color = status === 'rejected' ? '#e03131' : status === 'released' ? '#2f9e44' : '#1971c2';
+
+        if (result.documentLink) {
+            actions.appendChild(createButton({
+                icon: LINK_ICON_SVG,
+                color: '#495057',
+                title: 'Open document link',
+                onClick: () => openUrlInNewTab(result.documentLink)
+            }));
+        }
+    }
+
+    async function runUuidBatchCheck(triggerBtn, uuids) {
+        const panel = ensureUuidResultsPanel();
+        panel.innerHTML = '';
+        triggerBtn.setAttribute('data-bl-uuid-check-trigger', 'true');
+
+        const header = document.createElement('div');
+        Object.assign(header.style, {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '8px',
+            fontWeight: '700'
+        });
+        const title = document.createElement('span');
+        title.textContent = `Checking ${uuids.length} UUID${uuids.length === 1 ? '' : 's'}...`;
+        const closeBtn = createButton({ label: '✕', color: '#868e96', title: 'Close', onClick: () => hideUuidResultsPanel() });
+        header.append(title, closeBtn);
+        panel.appendChild(header);
+
+        const rowsHost = document.createElement('div');
+        panel.appendChild(rowsHost);
+
+        const rows = new Map();
+        uuids.forEach((uuid) => {
+            const row = buildUuidResultRowSkeleton(uuid);
+            rowsHost.appendChild(row);
+            rows.set(uuid, row);
+        });
+
+        positionUuidResultsPanel(panel, triggerBtn);
+
+        // Sequential, not batched: this hits the local trigger service on
+        // 127.0.0.1, not Phoenix LiveView, so there is no push-timeout risk
+        // here the way there was with bulk row selection.
+        const requestSeq = ++uuidResultsPanelRequestSeq;
+        let completed = 0;
+        for (const uuid of uuids) {
+            if (requestSeq !== uuidResultsPanelRequestSeq) return;
+            try {
+                const response = await sendRuntimeMessage({
+                    action: 'lookupUuidStatus',
+                    payload: { uuid }
+                }, { timeoutMs: 15000 });
+                if (requestSeq !== uuidResultsPanelRequestSeq) return;
+                if (!response?.success) {
+                    updateUuidResultRow(rows.get(uuid), { error: collapseText(response?.error) || 'Lookup failed' });
+                } else {
+                    updateUuidResultRow(rows.get(uuid), { result: response.result });
+                }
+            } catch (error) {
+                if (requestSeq !== uuidResultsPanelRequestSeq) return;
+                updateUuidResultRow(rows.get(uuid), { error: collapseText(error?.message) || 'Lookup failed' });
+            }
+            completed += 1;
+            title.textContent = completed < uuids.length
+                ? `Checking ${completed} / ${uuids.length} UUIDs...`
+                : `Checked ${uuids.length} UUID${uuids.length === 1 ? '' : 's'}`;
+            positionUuidResultsPanel(panel, triggerBtn);
+        }
+    }
+
+    function makeUuidBatchCheckAction(rowData) {
+        const uuids = extractUuidsFromText(rowData?.status);
+        if (!uuids.length) return null;
+
+        const label = `Check ${uuids.length} UUID${uuids.length === 1 ? '' : 's'}`;
+        return createButton({
+            icon: `${LINK_ICON_SVG}<span>${label}</span>`,
+            color: '#6f42c1',
+            title: `Look up document status for ${uuids.length} UUID${uuids.length === 1 ? '' : 's'} found in this status message`,
+            onClick: (btn) => runUuidBatchCheck(btn, uuids)
+        });
+    }
+
     function attachMetaListeners() {
         const rows = document.querySelectorAll('table tbody tr');
         rows.forEach(row => {
@@ -3876,7 +4094,12 @@ ${hiddenBlock}
                 return actions;
             });
             bindCell('added', (rowData) => [makeCopyAction(rowData.added, 'added date')]);
-            bindCell('status', (rowData) => [makeCopyAction(rowData.status, 'status')]);
+            bindCell('status', (rowData) => {
+                const actions = [makeCopyAction(rowData.status, 'status')];
+                const uuidCheckAction = makeUuidBatchCheckAction(rowData);
+                if (uuidCheckAction) actions.push(uuidCheckAction);
+                return actions;
+            });
 
             row.dataset.blMetaBound = 'true';
         });
