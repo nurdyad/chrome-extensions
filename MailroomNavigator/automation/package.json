@@ -4,13 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "auth:save": "node save-auth-local.mjs",
     "trigger:start": "node linear-trigger-server.mjs"
   },
   "dependencies": {
     "dotenv": "^17.3.1",
-    "imapflow": "^1.2.9",
-    "pg": "^8.22.0",
-    "playwright": "^1.58.2"
+    "pg": "^8.22.0"
   }
 }
