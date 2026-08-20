@@ -840,37 +840,70 @@ label {
     min-height: 86px;
 }
 
+/* View-switcher tabs, styled like the docked sidebar's own collapse handle
+   (see .bl-sidebar-toggle in background.js): small, plain white tabs that
+   protrude from the right edge of the window. Each is an independent
+   position: fixed button, not part of the layout flow, so they never add to
+   the page's width and never need the window to be resized to reach them.
+   They float on top of the content, vertically centered in the viewport,
+   and stay in place while the content scrolls. */
+.panel-body-content {
+    width: 100%;
+}
+
 .global-nav-buttons-row {
+    position: fixed;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 8px;
-    background: white;
-    border-radius: var(--border-radius);
-    padding: 3px;
-    box-shadow: var(--box-shadow);
+    flex-direction: column;
+    width: 24px;
+    margin: 0;
+    background: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+    gap: 6px;
+    z-index: 40;
 }
 
 .global-nav-buttons-row .btn {
-    flex: 1;
-    padding: 6px 8px;
-    font-size: 11px;
-    gap: 4px;
-    background-color: white;
-    color: var(--text-color);
-    border: none;
-    border-bottom: 2px solid transparent;
+    flex: none;
+    width: 100%;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--tab-color, #1f2937);
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    border-right: none;
+    border-radius: 0 8px 8px 0;
+    opacity: 0.65;
+    box-shadow: none;
+    transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
 }
 
 .global-nav-buttons-row .btn:hover {
-    background-color: var(--light-gray);
+    opacity: 1;
+    background: #f3f4f6;
 }
 
 .global-nav-buttons-row .btn.active-tab {
-    background-color: var(--light-gray);
-    color: var(--text-color);
-    border-bottom: 2px solid var(--primary-color);
-    font-weight: 600;
+    opacity: 1;
+    background: #ffffff;
+    border-color: var(--tab-color, #1f2937);
+    transform: translateX(2px);
 }
+
+#navigatorGlobalToggleBtn { --tab-color: #3b82f6; }
+#jobManagerGlobalToggleBtn { --tab-color: #10b981; }
+#emailFormatterGlobalToggleBtn { --tab-color: #9b59b6; }
+#bookmarkletToolsGlobalToggleBtn { --tab-color: #d97706; }
 
 .contextual-buttons-row {
     display: flex;
@@ -888,9 +921,10 @@ label {
     transform: translateY(-1px);
 }
 
-#practiceNavigatorView, 
-#jobManagerView, 
-#emailFormatterView {
+#practiceNavigatorView,
+#jobManagerView,
+#emailFormatterView,
+#bookmarkletToolsView {
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -907,15 +941,6 @@ label {
     border-top: 1px dashed var(--medium-gray);
 }
 
-#navigatorGlobalToggleBtn.active-tab { 
-    color: var(--primary-color); border-bottom-color: var(--primary-color);
-}
-#jobManagerGlobalToggleBtn.active-tab { 
-    color: var(--info-color); border-bottom-color: var(--info-color);
-}
-#emailFormatterGlobalToggleBtn.active-tab { 
-    color: #9b59b6; border-bottom-color: #9b59b6;
-}
 
 @media (max-width: 340px) {
     body {
@@ -926,11 +951,6 @@ label {
     padding: 12px;
     }
     
-    .global-nav-buttons-row .btn {
-    font-size: 12px;
-    padding: 6px;
-    }
-
     .linear-slack-grid {
     grid-template-columns: 1fr;
     }
@@ -980,8 +1000,9 @@ label {
     min-width: 30px;
     height: 30px;
     padding: 0;
-    margin-left: 4px;
+    margin-top: 8px;
     border-radius: 8px;
+    opacity: 1;
 }
 
 #compactModeToggleBtn svg {

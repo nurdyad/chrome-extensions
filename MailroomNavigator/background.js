@@ -5361,140 +5361,367 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
     await chrome.scripting.executeScript({
         target: { tabId },
         func: (panelUrl, hostTabId, shouldForceCollapsed) => {
-            const ROOT_ID = 'bl-allinone-sidebar-panel';
+            // Four fully independent docked panels, one per view, each with
+            // its own toggle handle stacked along the right edge. Opening
+            // one doesn't require opening a shared container first, and
+            // expanding one auto-collapses the others so their (identically
+            // positioned, full-height) content areas never end up stacked
+            // on top of each other.
+            const VIEWS = [
+                { key: 'navigator', view: 'practiceNavigatorView', label: 'Navigator', color: '#3b82f6' },
+                { key: 'jobmanager', view: 'jobManagerView', label: 'Job Panel', color: '#10b981' },
+                { key: 'others', view: 'emailFormatterView', label: 'Others', color: '#9b59b6' },
+                // The bookmarklet tools each get their own independent handle
+                // instead of one shared "Bookmarklet Tools" handle whose
+                // panel then required a second click on one of 4 buttons
+                // inside it; ?tool= tells panel.js to open that tool's
+                // modal immediately instead of showing the launch grid.
+                { key: 'uuidpicker', view: 'bookmarkletToolsView', tool: 'uuidPicker', label: 'UUID Picker', color: '#d97706' },
+                { key: 'workflowgroups', view: 'bookmarkletToolsView', tool: 'workflowGroups', label: 'Custom Workflow', color: '#d97706' },
+                { key: 'docmangroups', view: 'bookmarkletToolsView', tool: 'docmanGroups', label: 'Docman Groups', color: '#d97706' },
+                { key: 'emailformatter', view: 'bookmarkletToolsView', tool: 'emailFormatter', label: 'Email Formatter', color: '#d97706' }
+            ];
             const STYLE_ID = 'bl-allinone-sidebar-style';
+            const DOCK_ID = 'bl-allinone-sidebar-dock';
+            const RAIL_ID = 'bl-allinone-sidebar-handle-rail';
             const PANEL_WIDTH = 360;
-            const HANDLE_WIDTH = 24;
+            const HANDLE_WIDTH = 28;
             const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
-            const buildExpectedSrc = () => `${panelUrl}${panelUrl.includes('?') ? '&' : '?'}hostTabId=${encodeURIComponent(String(hostTabId || ''))}`;
-            const ensureIframeLoaded = (iframeEl) => {
+            // Bump this whenever this injected UI's DOM/CSS structure
+            // changes. mountOne/ensureRailMounted/ensureStyleInjected all
+            // skip rebuilding anything that already has the expected id, so
+            // a host tab left open (not hard-refreshed) across an extension
+            // code change would otherwise keep running whatever markup an
+            // older version of this script left behind - e.g. old handles
+            // positioned relative to their own panel next to a new panel
+            // that assumes an independent rail, producing a stray gap
+            // between them. Bumping this forces a clean rebuild instead.
+            const UI_VERSION = '3';
+            const VERSION_ATTR = 'data-bl-sidebar-ui-version';
+
+            const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
+            const buildExpectedSrc = (view, tool) => {
+                const url = new URL(panelUrl);
+                url.searchParams.set('hostTabId', String(hostTabId || ''));
+                url.searchParams.set('view', view);
+                if (tool) url.searchParams.set('tool', tool);
+                return url.toString();
+            };
+            const ensureIframeLoaded = (iframeEl, view, tool) => {
                 if (!iframeEl) return;
-                const expectedSrc = buildExpectedSrc();
+                const expectedSrc = buildExpectedSrc(view, tool);
                 if (iframeEl.dataset.loadedSrc === expectedSrc && iframeEl.src === expectedSrc) return;
                 iframeEl.src = expectedSrc;
                 iframeEl.dataset.loadedSrc = expectedSrc;
             };
-            const syncToggleUi = (panelEl, toggleButton) => {
-                if (!panelEl || !toggleButton) return;
-                const isCollapsed = panelEl.classList.contains('collapsed');
-                toggleButton.textContent = isCollapsed ? '◀' : '▶';
-                toggleButton.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+            const collapseAllExcept = (keepKey) => {
+                VIEWS.forEach(({ key }) => {
+                    if (key === keepKey) return;
+                    const otherPanel = document.getElementById(rootIdFor(key));
+                    if (otherPanel) otherPanel.classList.add('collapsed');
+                });
+            };
+            const syncRailState = () => {
+                const rail = document.getElementById(RAIL_ID);
+                if (!rail) return;
+                VIEWS.forEach(({ key }) => {
+                    const panelEl = document.getElementById(rootIdFor(key));
+                    const isOpen = Boolean(panelEl && !panelEl.classList.contains('collapsed'));
+                    const button = rail.querySelector(`[data-key="${key}"]`);
+                    if (button) button.classList.toggle('is-open', isOpen);
+                });
+            };
+            const spawnRipple = (button, event) => {
+                const rect = button.getBoundingClientRect();
+                const size = Math.max(rect.width, rect.height) * 2.4;
+                const ripple = document.createElement('span');
+                ripple.className = 'bl-sidebar-toggle-ripple';
+                ripple.style.width = `${size}px`;
+                ripple.style.height = `${size}px`;
+                const originX = (typeof event?.clientX === 'number' ? event.clientX : rect.left + rect.width / 2) - rect.left - size / 2;
+                const originY = (typeof event?.clientY === 'number' ? event.clientY : rect.top + rect.height / 2) - rect.top - size / 2;
+                ripple.style.left = `${originX}px`;
+                ripple.style.top = `${originY}px`;
+                button.appendChild(ripple);
+                ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
             };
 
-            const mountSidebar = () => {
-                if (!document.documentElement) return;
-
-                const existingPanel = document.getElementById(ROOT_ID);
-                if (existingPanel) {
-                    const toggleButton = existingPanel.querySelector('[data-role="toggle"]');
-                    const existingIframe = existingPanel.querySelector('iframe');
-                    if (shouldForceCollapsed) {
-                        existingPanel.classList.add('collapsed');
-                    } else {
-                        existingPanel.classList.remove('collapsed');
-                        ensureIframeLoaded(existingIframe);
-                    }
-                    if (toggleButton) {
-                        syncToggleUi(existingPanel, toggleButton);
-                    }
-                    return;
-                }
-
-                const sidebarCss = `
-                        #${ROOT_ID} {
+            const ensureStyleInjected = () => {
+                if (document.getElementById(STYLE_ID)) return;
+                const EASE = 'cubic-bezier(0.4, 0.0, 0.2, 1)';
+                const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+                const css = `
+                        /* The rail and every panel are flex children of one
+                           shared, position: fixed dock pinned to the
+                           viewport's right edge (no explicit width, so it
+                           shrink-wraps its content). This is deliberate:
+                           earlier versions positioned the rail with a
+                           manually computed "right" offset assuming each
+                           panel was exactly PANEL_WIDTH wide, which could
+                           drift out of sync with the panel's real rendered
+                           position and leave a gap with host-page content
+                           showing through it. Flexbox lays the rail out
+                           immediately adjacent to whatever the panels'
+                           real total width actually is, with zero
+                           arithmetic and no way for the two to disagree. */
+                        #${DOCK_ID} {
                             position: fixed;
                             top: 0;
                             right: 0;
-                            width: ${PANEL_WIDTH}px;
                             height: 100vh;
                             z-index: 2147483647;
-                            background: #f7f8fb;
-                            border-left: 1px solid rgba(15, 23, 42, 0.16);
-                            box-shadow: -10px 0 28px rgba(15, 23, 42, 0.18);
-                            transform: translateX(0);
-                            transition: transform 0.22s ease;
+                            display: flex !important;
+                            flex-direction: row;
+                            align-items: stretch;
+                            pointer-events: none;
                             visibility: visible !important;
                             opacity: 1 !important;
+                        }
+
+                        .bl-allinone-sidebar-root {
+                            position: relative;
+                            flex: 0 0 auto;
+                            width: 0;
+                            height: 100%;
+                            overflow: hidden;
+                            background: #f7f8fb;
+                            border-left: 0 solid rgba(15, 23, 42, 0.16);
+                            box-shadow: none;
+                            transition: width 0.28s ${EASE}, border-left-width 0.28s ${EASE}, box-shadow 0.28s ${EASE};
                             pointer-events: auto;
                         }
 
-                        #${ROOT_ID}.collapsed {
-                            transform: translateX(100%);
+                        .bl-allinone-sidebar-root:not(.collapsed) {
+                            width: ${PANEL_WIDTH}px;
+                            border-left-width: 1px;
+                            box-shadow: -2px 0 4px rgba(15, 23, 42, 0.12), -12px 0 32px rgba(15, 23, 42, 0.2);
                         }
 
-                        #${ROOT_ID} .bl-sidebar-toggle {
-                            position: absolute;
-                            left: -${HANDLE_WIDTH}px;
-                            top: 50%;
-                            transform: translateY(-50%);
-                            width: ${HANDLE_WIDTH}px;
-                            height: 56px;
-                            border: 1px solid rgba(15, 23, 42, 0.16);
-                            border-right: none;
-                            border-radius: 8px 0 0 8px;
-                            background: #ffffff;
-                            color: #1f2937;
-                            cursor: pointer;
-                            font-size: 15px;
-                            font-weight: 700;
-                            line-height: 1;
-                            padding: 0;
-                        }
-
-                        #${ROOT_ID} .bl-sidebar-toggle:hover {
-                            background: #f3f4f6;
-                        }
-
-                        #${ROOT_ID} iframe {
-                            width: 100%;
+                        .bl-allinone-sidebar-root iframe {
+                            /* Fixed at the full panel width regardless of the
+                               wrapper's current (possibly mid-transition)
+                               width, so the iframe document never reflows
+                               during the slide - the wrapper's overflow:
+                               hidden simply reveals more or less of it. */
+                            width: ${PANEL_WIDTH}px;
                             height: 100%;
                             border: 0;
                             display: block;
                             background: #f7f8fb;
                         }
+
+                        .bl-allinone-handle-rail {
+                            position: relative;
+                            flex: 0 0 auto;
+                            height: 100%;
+                            display: flex;
+                            flex-direction: column;
+                            gap: 10px;
+                            padding-top: 64px;
+                            pointer-events: none;
+                        }
+
+                        .bl-sidebar-toggle {
+                            position: relative;
+                            overflow: hidden;
+                            pointer-events: auto;
+                            width: ${HANDLE_WIDTH}px;
+                            min-height: 64px;
+                            box-sizing: border-box;
+                            border: 1px solid rgba(15, 23, 42, 0.16);
+                            border-right: none;
+                            border-radius: 10px 0 0 10px;
+                            background: #ffffff;
+                            color: var(--tab-color, #1f2937);
+                            cursor: pointer;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                            font-size: 11px;
+                            font-weight: 700;
+                            letter-spacing: 0.03em;
+                            line-height: 1;
+                            padding: 10px 0;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+                            transition: background-color 0.2s ${EASE}, color 0.2s ${EASE},
+                                        border-color 0.2s ${EASE}, box-shadow 0.2s ${EASE},
+                                        transform 0.2s ${EASE};
+                        }
+
+                        /* Rotating just the label (not the whole button) so
+                           the button's own box - rounded corners, borders,
+                           ripple - stays unaffected. vertical-rl + a 180deg
+                           flip reads the opposite way of plain vertical-rl
+                           (bottom-to-top instead of top-to-bottom) without
+                           relying on sideways-lr, which has patchier
+                           support. */
+                        .bl-sidebar-toggle-label {
+                            writing-mode: vertical-rl;
+                            text-orientation: mixed;
+                            transform: rotate(180deg);
+                        }
+
+                        .bl-sidebar-toggle:hover:not(.is-open) {
+                            background: color-mix(in srgb, var(--tab-color, #1f2937) 12%, white);
+                            transform: translateX(2px);
+                            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+                        }
+
+                        .bl-sidebar-toggle:active {
+                            transform: translateX(1px) scale(0.97);
+                        }
+
+                        .bl-sidebar-toggle.is-open {
+                            background: var(--tab-color, #1f2937);
+                            border-color: var(--tab-color, #1f2937);
+                            color: #ffffff;
+                            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.32), 0 1px 3px rgba(15, 23, 42, 0.2);
+                            transform: translateX(4px);
+                            animation: bl-sidebar-tab-pop 0.32s ${SPRING};
+                        }
+
+                        .bl-sidebar-toggle.is-open:hover {
+                            background: var(--tab-color, #1f2937);
+                        }
+
+                        @keyframes bl-sidebar-tab-pop {
+                            0% { transform: translateX(0) scale(1); }
+                            55% { transform: translateX(7px) scale(1.06); }
+                            100% { transform: translateX(4px) scale(1); }
+                        }
+
+                        .bl-sidebar-toggle-ripple {
+                            position: absolute;
+                            border-radius: 50%;
+                            background: rgba(15, 23, 42, 0.18);
+                            transform: scale(0);
+                            animation: bl-sidebar-ripple 0.5s ${EASE};
+                            pointer-events: none;
+                        }
+
+                        .bl-sidebar-toggle.is-open .bl-sidebar-toggle-ripple {
+                            background: rgba(255, 255, 255, 0.45);
+                        }
+
+                        @keyframes bl-sidebar-ripple {
+                            to { transform: scale(1); opacity: 0; }
+                        }
                     `;
-                const existingStyleEl = document.getElementById(STYLE_ID);
-                if (existingStyleEl) {
-                    existingStyleEl.textContent = sidebarCss;
-                } else {
-                    const styleEl = document.createElement('style');
-                    styleEl.id = STYLE_ID;
-                    styleEl.textContent = sidebarCss;
-                    document.documentElement.appendChild(styleEl);
+                const styleEl = document.createElement('style');
+                styleEl.id = STYLE_ID;
+                styleEl.textContent = css;
+                document.documentElement.appendChild(styleEl);
+            };
+
+            const ensureDockMounted = () => {
+                let dock = document.getElementById(DOCK_ID);
+                if (!dock) {
+                    dock = document.createElement('div');
+                    dock.id = DOCK_ID;
+                    (document.body || document.documentElement).appendChild(dock);
+                }
+                return dock;
+            };
+
+            const mountOne = ({ key, view, tool, label }) => {
+                const rootId = rootIdFor(key);
+                const existingPanel = document.getElementById(rootId);
+                if (existingPanel) {
+                    const existingIframe = existingPanel.querySelector('iframe');
+                    if (shouldForceCollapsed) {
+                        existingPanel.classList.add('collapsed');
+                    } else {
+                        existingPanel.classList.remove('collapsed');
+                        ensureIframeLoaded(existingIframe, view, tool);
+                    }
+                    return;
                 }
 
                 const panelEl = document.createElement('div');
-                panelEl.id = ROOT_ID;
+                panelEl.id = rootId;
+                panelEl.className = 'bl-allinone-sidebar-root';
                 if (shouldForceCollapsed) {
                     panelEl.classList.add('collapsed');
                 }
 
-                const toggleButton = document.createElement('button');
-                toggleButton.type = 'button';
-                toggleButton.className = 'bl-sidebar-toggle';
-                toggleButton.dataset.role = 'toggle';
-
                 const iframe = document.createElement('iframe');
-                iframe.title = 'BetterLetter Panel';
+                iframe.title = `BetterLetter Panel - ${label}`;
                 iframe.allow = 'clipboard-write';
-                iframe.dataset.pendingSrc = buildExpectedSrc();
+                iframe.dataset.pendingSrc = buildExpectedSrc(view, tool);
                 if (!shouldForceCollapsed) {
-                    ensureIframeLoaded(iframe);
+                    ensureIframeLoaded(iframe, view, tool);
                 }
 
-                toggleButton.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    panelEl.classList.toggle('collapsed');
-                    if (!panelEl.classList.contains('collapsed')) {
-                        ensureIframeLoaded(iframe);
-                    }
-                    syncToggleUi(panelEl, toggleButton);
+                panelEl.append(iframe);
+                ensureDockMounted().appendChild(panelEl);
+            };
+
+            const ensureRailMounted = () => {
+                if (document.getElementById(RAIL_ID)) return;
+
+                const rail = document.createElement('div');
+                rail.id = RAIL_ID;
+                rail.className = 'bl-allinone-handle-rail';
+
+                VIEWS.forEach(({ key, view, tool, label, color }) => {
+                    const toggleButton = document.createElement('button');
+                    toggleButton.type = 'button';
+                    toggleButton.className = 'bl-sidebar-toggle';
+                    toggleButton.dataset.role = 'toggle';
+                    toggleButton.dataset.key = key;
+                    toggleButton.style.setProperty('--tab-color', color);
+                    toggleButton.title = label;
+                    toggleButton.setAttribute('aria-label', label);
+
+                    const labelSpan = document.createElement('span');
+                    labelSpan.className = 'bl-sidebar-toggle-label';
+                    labelSpan.textContent = label;
+                    toggleButton.appendChild(labelSpan);
+
+                    toggleButton.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        spawnRipple(toggleButton, event);
+                        const panelEl = document.getElementById(rootIdFor(key));
+                        if (!panelEl) return;
+                        const willExpand = panelEl.classList.contains('collapsed');
+                        panelEl.classList.toggle('collapsed');
+                        if (willExpand) {
+                            ensureIframeLoaded(panelEl.querySelector('iframe'), view, tool);
+                            collapseAllExcept(key);
+                        }
+                        syncRailState();
+                    });
+
+                    rail.appendChild(toggleButton);
                 });
 
-                syncToggleUi(panelEl, toggleButton);
-                panelEl.append(toggleButton, iframe);
-                (document.body || document.documentElement).appendChild(panelEl);
+                ensureDockMounted().appendChild(rail);
+            };
+
+            const cleanupStaleUi = () => {
+                if (!document.documentElement) return;
+                if (document.documentElement.getAttribute(VERSION_ATTR) === UI_VERSION) return;
+                document.getElementById(STYLE_ID)?.remove();
+                // Removing the dock takes the rail and every panel with it
+                // (they're all its children); the individual lookups below
+                // exist only to catch stray leftovers from older versions
+                // that appended those elements directly to <body> instead.
+                document.getElementById(DOCK_ID)?.remove();
+                document.getElementById(RAIL_ID)?.remove();
+                VIEWS.forEach(({ key }) => document.getElementById(rootIdFor(key))?.remove());
+                document.getElementById('bl-allinone-sidebar-panel')?.remove();
+                document.documentElement.setAttribute(VERSION_ATTR, UI_VERSION);
+            };
+
+            const mountSidebar = () => {
+                if (!document.documentElement) return;
+                cleanupStaleUi();
+                ensureStyleInjected();
+                ensureRailMounted();
+                VIEWS.forEach(mountOne);
+                syncRailState();
             };
 
             if (!document.body && document.readyState === 'loading') {
