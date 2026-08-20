@@ -118,7 +118,7 @@ const EXTENSION_ACTION_FEATURE_REQUIREMENTS = {
     savePracticeSecretOverride: ['practice_navigator'],
     savePracticeSecretToAdminPanel: ['practice_navigator'],
     undoPracticeSecretSave: ['practice_navigator'],
-    lookupUuidStatus: ['job_panel']
+    lookupUuidStatus: ['job_panel', 'bookmarklet_tools']
 };
 const PROTECTED_EXTENSION_ACTIONS = new Set(Object.keys(EXTENSION_ACTION_FEATURE_REQUIREMENTS));
 
