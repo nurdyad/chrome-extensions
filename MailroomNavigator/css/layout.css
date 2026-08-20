@@ -974,6 +974,24 @@ label {
     border: 1px solid #c6ddf4 !important;
 }
 
+#compactModeToggleBtn {
+    flex: 0 0 auto;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0;
+    margin-left: 4px;
+    border-radius: 8px;
+}
+
+#compactModeToggleBtn svg {
+    transition: transform 0.15s ease;
+}
+
+#compactModeToggleBtn.is-expanded svg {
+    transform: rotate(180deg);
+}
+
 .bulk-input {
     width: 100%;
     max-width: 100%;
