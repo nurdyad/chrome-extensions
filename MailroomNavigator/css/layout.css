@@ -131,6 +131,25 @@ label {
   box-shadow: none;
 }
 
+.nav-action-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  color: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-action-count:empty {
+  display: none;
+}
+
 /* This ensures the suggestion list sticks exactly to the input box */
 .search-container {
   position: relative; /* Crucial: This holds the absolute list inside */
@@ -148,37 +167,6 @@ label {
 
 .recent-practices-section[hidden] {
     display: none !important;
-}
-
-.recent-practices-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 6px;
-    color: #365b7d;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-}
-
-.recent-practices-clear {
-    appearance: none;
-    border: 1px solid #c6ddf4;
-    border-radius: 8px;
-    background: #ecf3fb;
-    color: #1f5f99;
-    cursor: pointer;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-    min-height: 22px;
-    padding: 4px 8px;
-}
-
-.recent-practices-clear:hover {
-    background: #eef6ff;
-    border-color: #aed0ef;
 }
 
 .recent-practices-list {
@@ -416,7 +404,7 @@ label {
 
 .quick-action-stack {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 30px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) 34px;
     gap: 5px;
     margin-top: 8px;
     align-items: center;
@@ -426,22 +414,18 @@ label {
 
 .quick-action-pair {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 24px;
-    gap: 3px;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 5px;
     align-items: stretch;
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    padding: 2px;
-    border: 1px solid #d6e6f7;
-    border-radius: 9px;
-    background: #f5f9fe;
 }
 
 .quick-action-btn {
     width: auto;
     min-width: 0;
-    min-height: 26px;
+    min-height: 28px;
     padding: 4px 6px;
     border-radius: 7px;
     font-size: 10px;
@@ -488,38 +472,38 @@ label {
 }
 
 .quick-copy-btn {
-    width: 24px;
-    min-width: 24px;
-    min-height: 26px;
+    width: 34px;
+    min-width: 34px;
+    min-height: 34px;
     padding: 0;
-    border: 1px solid #c6ddf4 !important;
-    border-radius: 7px;
-    background: #ffffff !important;
-    color: #1f5f99 !important;
+    border: 1px solid #dbe4ee !important;
+    border-radius: 8px;
+    background: #f1f5f9 !important;
+    color: #475569 !important;
     box-shadow: none;
 }
 
 .quick-copy-btn svg {
-    width: 12px;
-    height: 12px;
+    width: 18px;
+    height: 18px;
     fill: none;
     stroke: currentColor;
-    stroke-width: 2;
+    stroke-width: 2.25;
     stroke-linecap: round;
     stroke-linejoin: round;
 }
 
 .quick-copy-btn:hover:not(:disabled) {
-    background: #dcecff !important;
-    border-color: #9ec6ef !important;
+    background: #e2e8f0 !important;
+    border-color: #cbd5e1 !important;
     transform: none;
     box-shadow: none;
 }
 
 .quick-secondary-btn {
-    width: 30px;
-    min-width: 30px;
-    min-height: 30px;
+    width: 34px;
+    min-width: 34px;
+    min-height: 34px;
     padding: 0;
     border-radius: 9px;
     background: #eef2f7 !important;
@@ -529,8 +513,8 @@ label {
 }
 
 .quick-secondary-btn svg {
-    width: 14px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
     fill: none;
     stroke: currentColor;
     stroke-width: 2;
@@ -544,12 +528,12 @@ label {
 }
 
 .single-status-card .quick-action-pair {
-    grid-template-columns: minmax(0, 1fr) 24px;
+    grid-template-columns: minmax(0, 1fr) 34px;
 }
 
 .single-status-card .quick-copy-btn {
-    width: 24px;
-    min-width: 24px;
+    width: 34px;
+    min-width: 34px;
 }
 
 @media (max-width: 520px) {
@@ -563,13 +547,12 @@ label {
     }
 
     .quick-action-stack {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) 28px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) 32px;
     }
 
     .quick-action-pair {
-        grid-template-columns: minmax(0, 1fr) 22px;
-        gap: 2px;
-        padding: 2px;
+        grid-template-columns: minmax(0, 1fr) 32px;
+        gap: 4px;
     }
 
     .quick-action-btn {
@@ -579,54 +562,28 @@ label {
     }
 
     .quick-copy-btn {
-        width: 22px;
-        min-width: 22px;
-        min-height: 25px;
+        width: 32px;
+        min-width: 32px;
+        min-height: 30px;
     }
 
     .quick-secondary-btn {
-        width: 28px;
-        min-width: 28px;
-        min-height: 29px;
+        width: 32px;
+        min-width: 32px;
+        min-height: 30px;
+    }
+
+    .single-status-card .quick-action-pair {
+        grid-template-columns: minmax(0, 1fr) 32px;
+    }
+
+    .single-status-card .quick-copy-btn {
+        width: 32px;
+        min-width: 32px;
     }
 }
 
-.docman-quick-actions-section {
-    margin-top: 8px;
-    padding: 8px;
-    border-left-color: #0ea5e9;
-    background: linear-gradient(180deg, #fbfdff 0%, #f2f8fe 100%);
-}
-
-.docman-quick-actions-section h3 {
-    margin-bottom: 8px;
-    font-size: 1em;
-}
-
-.docman-quick-actions-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.docman-quick-actions-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-}
-
-.docman-quick-actions-grid .btn {
-    width: 100%;
-    min-height: 28px;
-    padding: 5px 4px;
-    border-radius: 8px;
-    font-size: 10px;
-    line-height: 1.05;
-    font-weight: 700;
-}
-
-.docman-quick-actions-grid .docman-primary-action {
+.practice-status-docman-grid .docman-primary-action {
     background: linear-gradient(180deg, #1d9ae0 0%, #147cc2 100%) !important;
 }
 

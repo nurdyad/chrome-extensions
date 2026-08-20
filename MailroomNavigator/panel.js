@@ -520,7 +520,6 @@ function applyExtensionFeatureAccessToUi() {
     }
 
     setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
-    setElementVisible('docmanToolSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('docmanToolStatusSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
     setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
@@ -1596,6 +1595,14 @@ async function initializePanel() {
         pInput.addEventListener('blur', () => {
             practiceFocusFromDirectInputPointer = false;
         });
+        pInput.addEventListener('click', () => {
+            // 'focus' only fires on an actual focus change, so a direct click
+            // while the input is already focused (e.g. right after Reset,
+            // which re-focuses the input) would never re-show suggestions
+            // otherwise. Handle that case here, independent of focus timing.
+            Navigator.handleNavigatorInput({ showOnEmpty: true });
+            warmPracticeCache(true);
+        });
     }
 
     warmPracticeCache(false);
@@ -1617,13 +1624,16 @@ async function initializePanel() {
         e.preventDefault();
     });
     resetSettingsBtn?.addEventListener('click', () => {
-        if (pInput) {
-            pInput.value = '';
-            pInput.focus();
-        }
         Navigator.clearSelectedPractice();
         hideStatus();
         showToast('Settings reset.');
+        if (pInput) {
+            pInput.value = '';
+            // Only clear and refocus here; the suggestion list should stay
+            // closed until the user deliberately clicks the input again
+            // (handled by the input's own 'click' listener below).
+            pInput.focus();
+        }
     });
     
     // E. Global URL Opening Helper
@@ -1922,12 +1932,6 @@ async function initializePanel() {
     const openBulkActionBtn = document.getElementById('openBulkActionBtn');
     const copyBulkActionBtn = document.getElementById('copyBulkActionBtn');
 
-    const runDocmanLoginBtn = document.getElementById('runDocmanLoginBtn');
-    const runDocmanVerifyBtn = document.getElementById('runDocmanVerifyBtn');
-    const runDocmanCreateGroupBtn = document.getElementById('runDocmanCreateGroupBtn');
-    const runDocmanCleanProcessingBtn = document.getElementById('runDocmanCleanProcessingBtn');
-    const runDocmanCleanFilingBtn = document.getElementById('runDocmanCleanFilingBtn');
-    const runDocmanOnboardingBtn = document.getElementById('runDocmanOnboardingBtn');
     const docmanToolStatus = document.getElementById('docmanToolStatus');
     const runUuidPickerToolBtn = document.getElementById('runUuidPickerToolBtn');
     const runListDocmanGroupsToolBtn = document.getElementById('runListDocmanGroupsToolBtn');
@@ -2429,14 +2433,9 @@ async function initializePanel() {
         if (Number.isNaN(date.getTime())) return trimDocmanField(value, 80);
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     };
-    const getDocmanActionButtons = () => ([
-        runDocmanLoginBtn,
-        runDocmanVerifyBtn,
-        runDocmanCreateGroupBtn,
-        runDocmanCleanProcessingBtn,
-        runDocmanCleanFilingBtn,
-        runDocmanOnboardingBtn
-    ].filter(Boolean));
+    const getDocmanActionButtons = () => Array.from(
+        document.querySelectorAll('#statusDisplay [data-docman-action]')
+    );
     const getDocmanActionLabel = (action) => DOCMAN_ACTION_LABELS[action] || 'Docman Tool';
     const isDocmanToolDefaultStatusText = (value) => DOCMAN_TOOL_DEFAULT_STATUS_MESSAGES.has(trimDocmanField(value, 260));
     const getSelectedDocmanOdsCode = () => String(state.currentSelectedOdsCode || '').trim().toUpperCase();
@@ -3201,6 +3200,10 @@ async function initializePanel() {
             runBtn.textContent = 'Start Onboarding';
         });
     };
+
+    document.addEventListener('mailroomNavigator:statusDisplayRendered', () => {
+        syncDocmanToolButtons();
+    });
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
         syncDocmanToolButtons();
@@ -5748,22 +5751,32 @@ ${error?.message || String(error)}`, 'invalid');
         copyUrlsToClipboard(urls, 'URLs');
     });
 
-    runDocmanLoginBtn?.addEventListener('click', () => {
-        startPracticeScopedDocmanAction('login').catch(() => undefined);
-    });
-    runDocmanVerifyBtn?.addEventListener('click', openDocmanVerifyModal);
-    runDocmanCreateGroupBtn?.addEventListener('click', openDocmanCreateGroupModal);
-    runDocmanCleanProcessingBtn?.addEventListener('click', () => {
-        startPracticeScopedDocmanAction('clean-processing').catch(() => undefined);
-    });
-    runDocmanCleanFilingBtn?.addEventListener('click', () => {
-        startPracticeScopedDocmanAction('clean-filing').catch(() => undefined);
-    });
-    runDocmanOnboardingBtn?.addEventListener('click', () => {
-        openDocmanOnboardingModal().catch((error) => {
-            console.error('Docman onboarding modal failed:', error);
-            showToast('Docman onboarding failed to open.');
-        });
+    Navigator.setDocmanActionHandler((action) => {
+        switch (action) {
+            case 'login':
+                startPracticeScopedDocmanAction('login').catch(() => undefined);
+                break;
+            case 'verify':
+                openDocmanVerifyModal();
+                break;
+            case 'create-group':
+                openDocmanCreateGroupModal();
+                break;
+            case 'clean-processing':
+                startPracticeScopedDocmanAction('clean-processing').catch(() => undefined);
+                break;
+            case 'clean-filing':
+                startPracticeScopedDocmanAction('clean-filing').catch(() => undefined);
+                break;
+            case 'onboarding':
+                openDocmanOnboardingModal().catch((error) => {
+                    console.error('Docman onboarding modal failed:', error);
+                    showToast('Docman onboarding failed to open.');
+                });
+                break;
+            default:
+                break;
+        }
     });
     runUuidPickerToolBtn?.addEventListener('click', openUuidPickerModal);
     runListDocmanGroupsToolBtn?.addEventListener('click', openDocmanGroupsModal);
@@ -5789,16 +5802,19 @@ ${error?.message || String(error)}`, 'invalid');
     document.addEventListener("mousedown", (e) => {
         // List of all inputs that should NOT hide the dropdown when clicked
         const safeInputs = [
-            'practiceInput', 
             'manualDocId',
             'jobStatusInput'
         ];
 
         const isInput = safeInputs.includes(e.target.id);
         const isList = e.target.closest('ul') || e.target.closest('.custom-autocomplete-results');
+        // .search-container wraps just the practice input, its reset button,
+        // and the suggestion list, not the label/icon row or recent-practice
+        // chips above/below it, so clicks there still close the dropdown.
+        const isWithinPracticeSearch = e.target.closest('.search-container');
 
         // ONLY hide if the click was NOT on an input and NOT on the list itself
-        if (!isInput && !isList) {
+        if (!isInput && !isList && !isWithinPracticeSearch) {
             hideSuggestions();
         }
     });
