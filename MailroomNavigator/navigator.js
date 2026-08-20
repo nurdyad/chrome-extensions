@@ -14,8 +14,14 @@ const PANEL_HOST_TAB_ID = (() => {
     }
 })();
 const LIVE_COUNT_KEYS = ['preparing', 'edit', 'review', 'coding', 'rejected'];
+// Preparing/Rejected counts show as a badge on the nav-action buttons instead
+// of taking up room in the practice status card's own metrics grid.
+const NAV_ACTION_BADGE_TARGETS = [
+    ['preparing', 'preparingBtn'],
+    ['rejected', 'rejectedBtn']
+];
 const RECENT_PRACTICES_STORAGE_KEY = 'mailroomNavigatorRecentPracticesV1';
-const RECENT_PRACTICES_LIMIT = 6;
+const RECENT_PRACTICES_LIMIT = 5;
 const statusFetchInFlightByOds = new Map();
 const lastKnownLiveCountsByOds = new Map();
 const lastKnownDetailedStatusByOds = new Map();
@@ -24,10 +30,19 @@ const lastRenderedStatusSignatureByOds = new Map();
 let recentPractices = [];
 let recentPracticesLoaded = false;
 let recentPracticesLoadPromise = null;
-let recentPracticesInteractionsBound = false;
 let statusDisplayInteractionsBound = false;
 let lastStatusDisplayInteractionAt = 0;
 const STATUS_DISPLAY_INTERACTION_COOLDOWN_MS = 15000;
+let docmanActionHandler = null;
+
+const DOCMAN_ACTION_BUTTONS = [
+    ['login', 'Login', true, '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line>'],
+    ['verify', 'Verify', false, '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'],
+    ['create-group', 'Create Group', false, '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line>'],
+    ['clean-processing', 'Clean Processing', false, '<polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>'],
+    ['clean-filing', 'Clean Filing', false, '<polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line>'],
+    ['onboarding', 'Onboarding', false, '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><polyline points="17 11 19 13 23 9"></polyline>']
+];
 
 function withPreferredTabId(message = {}) {
     return typeof PANEL_HOST_TAB_ID === 'number'
@@ -41,6 +56,10 @@ function rememberStatusDisplayInteraction() {
 
 export function shouldPauseStatusAutoRefresh() {
     return Date.now() - lastStatusDisplayInteractionAt < STATUS_DISPLAY_INTERACTION_COOLDOWN_MS;
+}
+
+export function setDocmanActionHandler(handler) {
+    docmanActionHandler = typeof handler === 'function' ? handler : null;
 }
 
 function emitPracticeSelectionChanged(detail = {}) {
@@ -219,6 +238,7 @@ export function clearSelectedPractice() {
   setNavigatorButtonsState({ hasConcretePractice: false, isAllPractices: false });
   const statusDisplayEl = document.getElementById('statusDisplay');
   if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+  clearNavActionCountBadges();
   hidePracticeSuggestions();
   emitPracticeSelectionChanged({
       odsCode: '',
@@ -366,16 +386,6 @@ function rememberRecentPractice(practiceLike) {
 }
 
 export async function initializeRecentPractices() {
-    if (!recentPracticesInteractionsBound) {
-        document.getElementById('clearRecentPracticesBtn')?.addEventListener('click', async () => {
-            recentPractices = [];
-            renderRecentPractices();
-            await saveRecentPractices();
-            showToast('Recent practices cleared.');
-        });
-        recentPracticesInteractionsBound = true;
-    }
-
     await ensureRecentPracticesLoaded();
 }
 
@@ -402,13 +412,7 @@ export function setNavigatorButtonsState(stateOrEnabled) {
         ['rejectedBtn', allowBroadActions],
         ['usersBtn', hasConcretePractice],
         ['openEhrSettingsBtn', hasConcretePractice],
-        ['taskRecipientsBtn', hasConcretePractice],
-        ['runDocmanLoginBtn', hasConcretePractice],
-        ['runDocmanVerifyBtn', hasConcretePractice],
-        ['runDocmanCreateGroupBtn', hasConcretePractice],
-        ['runDocmanCleanProcessingBtn', hasConcretePractice],
-        ['runDocmanCleanFilingBtn', hasConcretePractice],
-        ['runDocmanOnboardingBtn', hasConcretePractice]
+        ['taskRecipientsBtn', hasConcretePractice]
     ].forEach(([id, enabled]) => {
         const el = document.getElementById(id);
         if (el) el.disabled = !enabled;
@@ -813,6 +817,17 @@ function ensureStatusDisplayInteractions() {
     };
 
     statusDisplayEl.addEventListener('click', async (event) => {
+        const docmanActionTarget = event.target instanceof Element
+            ? event.target.closest('[data-docman-action]')
+            : null;
+        if (docmanActionTarget) {
+            if (docmanActionTarget.disabled) return;
+            rememberStatusDisplayInteraction();
+            const action = String(docmanActionTarget.getAttribute('data-docman-action') || '').trim();
+            if (action && docmanActionHandler) docmanActionHandler(action);
+            return;
+        }
+
         const toggleTarget = event.target instanceof Element
             ? event.target.closest('[data-secret-toggle]')
             : null;
@@ -965,6 +980,11 @@ function ensureStatusDisplayInteractions() {
     statusDisplayInteractionsBound = true;
 }
 
+function renderPracticeStatusHtml(statusDisplayEl, status, counts) {
+    statusDisplayEl.innerHTML = buildPracticeStatusHtml(status, counts);
+    document.dispatchEvent(new CustomEvent('mailroomNavigator:statusDisplayRendered'));
+}
+
 function buildPracticeStatusHtml(status, counts) {
     const displayName = formatStatusValue(
         status?.name || status?.practiceName || status?.practiceCDB || status?.odsCode,
@@ -975,8 +995,6 @@ function buildPracticeStatusHtml(status, counts) {
     const serviceLevel = formatStatusValue(status?.serviceLevel);
     const practiceCdbRaw = formatOptionalStatusValue(status?.practiceCDB);
     const practiceCdb = practiceCdbRaw || 'N/A';
-    const collectionQuota = formatStatusValue(status?.collectionQuota);
-    const collectedToday = formatStatusValue(status?.collectedToday);
     const totalLive = getLiveTotal(counts);
     const metaItems = [
         buildMetaItemHtml('ODS', odsCode, 'is-primary', { copyValue: status?.odsCode, copyLabel: 'ODS' }),
@@ -985,23 +1003,16 @@ function buildPracticeStatusHtml(status, counts) {
         buildMetaItemHtml('Service', serviceLevel, getServiceChipClass(serviceLevel))
     ].join('');
 
-    const summaryCards = [
-        ['Active', totalLive, 'is-primary'],
-        ['Quota', collectionQuota, ''],
-        ['Collected', collectedToday, '']
-    ].map(([label, value, toneClass]) => `
-        <div class="practice-status-summary-card ${toneClass}">
-            <span class="practice-status-summary-label">${escapeHtml(label)}</span>
-            <span class="practice-status-summary-value"${label === 'Active' ? ' data-live-total' : ''}>${escapeHtml(String(value))}</span>
+    const activeMetricCardHtml = `
+        <div class="practice-status-metric is-primary" data-live-metric-card="active">
+            <span class="practice-status-metric-label">Active</span>
+            <span class="practice-status-metric-value" data-live-total>${escapeHtml(String(totalLive))}</span>
         </div>
-    `).join('');
-
-    const metricCards = [
-        ['preparing', 'Preparing'],
+    `;
+    const metricCards = activeMetricCardHtml + [
         ['edit', 'Edit'],
         ['review', 'Review'],
-        ['coding', 'Coding'],
-        ['rejected', 'Rejected']
+        ['coding', 'Coding']
     ].map(([key, label]) => `
         <div class="practice-status-metric ${getMetricToneClass(key, counts?.[key])}" data-live-metric-card="${key}">
             <span class="practice-status-metric-label">${escapeHtml(label)}</span>
@@ -1030,6 +1041,15 @@ function buildPracticeStatusHtml(status, counts) {
         ])
     ].join('');
 
+    const docmanActionButtonsHtml = DOCMAN_ACTION_BUTTONS.map(([action, label, isPrimary, iconPaths]) => `
+        <button type="button" class="btn btn-sm${isPrimary ? ' docman-primary-action' : ''}" data-docman-action="${action}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                ${iconPaths}
+            </svg>
+            ${escapeHtml(label)}
+        </button>
+    `).join('');
+
     return `
         <div class="status-info-box practice-status-card practice-status-card-compact" data-status-ods="${escapeHtml(status.odsCode || '')}">
             <div class="practice-status-hero">
@@ -1043,15 +1063,18 @@ function buildPracticeStatusHtml(status, counts) {
                         ${metaItems}
                     </div>
                 </div>
-                <div class="practice-status-summary-strip">
-                    ${summaryCards}
-                </div>
             </div>
             <div class="practice-status-section-head">
                 <span class="practice-status-section-caption">Live mailroom counts</span>
             </div>
             <div class="practice-status-metrics">
                 ${metricCards}
+            </div>
+            <div class="practice-status-section-head practice-status-docman-head">
+                <span class="practice-status-section-caption">Docman Tools</span>
+            </div>
+            <div class="action-grid nav-action-grid practice-status-docman-grid">
+                ${docmanActionButtonsHtml}
             </div>
             <details class="practice-status-ehr-details">
                 <summary class="practice-status-ehr-summary">
@@ -1066,7 +1089,21 @@ function buildPracticeStatusHtml(status, counts) {
     `;
 }
 
+function applyNavActionCountBadges(counts) {
+    NAV_ACTION_BADGE_TARGETS.forEach(([key, buttonId]) => {
+        const badgeEl = document.querySelector(`#${buttonId} [data-nav-action-count]`);
+        if (!badgeEl) return;
+        const parsed = parseCountNumber(counts?.[key]);
+        badgeEl.textContent = parsed === null ? '' : String(parsed);
+    });
+}
+
+function clearNavActionCountBadges() {
+    applyNavActionCountBadges(null);
+}
+
 function applyLiveCountsToStatusDisplay(counts) {
+    applyNavActionCountBadges(counts);
     LIVE_COUNT_KEYS.forEach((key) => {
         const el = document.querySelector(`#statusDisplay [data-live-count="${key}"]`);
         if (!el) return;
@@ -1134,7 +1171,7 @@ export async function displayPracticeStatus(options = {}) {
                 normalizeLiveCounts(lastKnownLiveCountsByOds.get(selectedOds)),
                 fallbackCounts
             );
-            statusDisplayEl.innerHTML = buildPracticeStatusHtml(cachedStatus, immediateCounts);
+            renderPracticeStatusHtml(statusDisplayEl, cachedStatus, immediateCounts);
             statusDisplayEl.style.display = 'block';
         } else if (!keepExisting && shouldRenderImmediateSnapshot) {
             statusDisplayEl.style.display = 'none';
@@ -1182,7 +1219,7 @@ export async function displayPracticeStatus(options = {}) {
             if (canPatchCountsOnly) {
                 applyLiveCountsToStatusDisplay(countsForRender);
             } else {
-                statusDisplayEl.innerHTML = buildPracticeStatusHtml(response.status, countsForRender);
+                renderPracticeStatusHtml(statusDisplayEl, response.status, countsForRender);
                 statusDisplayEl.style.display = 'block';
                 rememberLiveCountsForOds(selectedOds, countsForRender);
                 lastRenderedStatusSignatureByOds.set(selectedOds, statusSignature);
@@ -1230,8 +1267,11 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
         ].some((value) => String(value || '').toLowerCase().includes(query));
     };
 
-    // Show all practices when empty (if explicitly requested), and filter by name, ODS, or CDB while typing.
-    let matches = allPractices.filter(practiceMatchesQuery);
+    // With no typed query, only suggest active practices (deactivated ones
+    // are still findable by typing their name/ODS/CDB explicitly).
+    let matches = query
+        ? allPractices.filter(practiceMatchesQuery)
+        : allPractices.filter(({ practice }) => practice?.active);
 
     const shouldShowAllPractices = !query || ALL_PRACTICES_LABEL.toLowerCase().includes(query);
 
@@ -1256,13 +1296,20 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
 
     matches.forEach(({ label, practice }) => {
         const li = document.createElement('li');
-        const meta = [
+        const odsCdb = [
             practice?.ods ? `ODS ${practice.ods}` : '',
             practice?.cdb || practice?.practiceCDB ? `CDB ${practice.cdb || practice.practiceCDB}` : ''
         ].filter(Boolean).join(' · ');
+        const quotaCollected = [
+            practice?.collectionQuota ? `Quota ${practice.collectionQuota}` : '',
+            practice?.collectedToday ? `Collected ${practice.collectedToday}` : ''
+        ].filter(Boolean).join(' · ');
         li.innerHTML = `
-            <div class="suggestion-main">${escapeHtml(practice?.name || label)}</div>
-            ${meta ? `<div class="suggestion-meta">${escapeHtml(meta)}</div>` : ''}
+            <div class="suggestion-top-row">
+                <span class="suggestion-main">${escapeHtml(practice?.name || label)}</span>
+                ${odsCdb ? `<span class="suggestion-ods-cdb">${escapeHtml(odsCdb)}</span>` : ''}
+            </div>
+            ${quotaCollected ? `<div class="suggestion-meta">${escapeHtml(quotaCollected)}</div>` : ''}
         `;
         li.addEventListener('mousedown', (e) => {
             e.preventDefault();

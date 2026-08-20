@@ -80,13 +80,6 @@
     color: #6b8197;
 }
 
-.practice-status-summary-strip {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-    margin-top: 2px;
-}
-
 .practice-status-meta-grid {
     flex-shrink: 0;
     width: 146px;
@@ -226,7 +219,7 @@
 
 .practice-status-section-head {
     display: flex;
-    justify-content: flex-end;
+    justify-content: flex-start;
     margin-bottom: 6px;
 }
 
@@ -237,12 +230,30 @@
 
 .practice-status-metrics {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
 }
 
 .practice-status-section-head-details {
     margin-top: 10px;
+}
+
+.practice-status-docman-head {
+    margin-top: 10px;
+}
+
+.practice-status-docman-grid {
+    margin-bottom: 0;
+}
+
+.practice-status-docman-grid.nav-action-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.practice-status-docman-grid.nav-action-grid .btn,
+.practice-status-docman-grid.nav-action-grid .btn:nth-child(4),
+.practice-status-docman-grid.nav-action-grid .btn:nth-child(5) {
+    grid-column: span 1;
 }
 
 .practice-status-credentials-list {
@@ -422,6 +433,19 @@
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(245, 248, 252, 0.92) 100%);
 }
 
+.practice-status-metric.is-primary {
+    background: linear-gradient(180deg, #eef6ff 0%, #dfeeff 100%);
+    border-color: #bfd8f3;
+}
+
+.practice-status-metric.is-primary .practice-status-metric-label {
+    color: #3b6ea5;
+}
+
+.practice-status-metric.is-primary .practice-status-metric-value {
+    color: #1f5f99;
+}
+
 .practice-status-metric.is-info {
     background: linear-gradient(180deg, #eef6ff 0%, #e0efff 100%);
     border-color: #bfd8f3;
@@ -492,29 +516,12 @@
     font-size: 9px;
 }
 
-.practice-status-card-compact .practice-status-summary-strip {
-    gap: 5px;
-}
-
-.practice-status-card-compact .practice-status-summary-card {
-    padding: 5px;
-    border-radius: 9px;
-}
-
-.practice-status-card-compact .practice-status-summary-label {
-    font-size: 7px;
-}
-
-.practice-status-card-compact .practice-status-summary-value {
-    font-size: 13px;
-}
-
 .practice-status-card-compact .practice-status-section-head {
     margin-bottom: 4px;
 }
 
 .practice-status-card-compact .practice-status-metrics {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 5px;
 }
 
@@ -1182,6 +1189,10 @@
     }
 
     .practice-status-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .practice-status-docman-grid.nav-action-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
