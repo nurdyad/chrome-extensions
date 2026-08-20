@@ -5332,6 +5332,15 @@ async function openPanelPopup(hostTabId = null) {
     const existing = await findExistingPanelPopupWindow();
     if (existing) {
         await chrome.windows.update(existing.id, { focused: true, drawAttention: true });
+        // Reusing an existing window just refocuses it (no reload), so it
+        // won't re-check the saved compact-mode preference on its own; tell
+        // it to sync explicitly so clicking the icon always reflects that
+        // preference, not just whatever state this window was left in.
+        const panelUrlPrefix = chrome.runtime.getURL('panel.html');
+        const panelTab = existing.tabs?.find((tab) => tab.url && tab.url.startsWith(panelUrlPrefix));
+        if (panelTab?.id) {
+            chrome.tabs.sendMessage(panelTab.id, { type: 'BL_SYNC_COMPACT_MODE' }).catch(() => undefined);
+        }
         return;
     }
 
