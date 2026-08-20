@@ -131,10 +131,6 @@
 	            <ul id="suggestions"></ul>
 	          </div>
 	          <div id="recentPracticesSection" class="recent-practices-section" hidden>
-	            <div class="recent-practices-head">
-	              <span>Recently viewed</span>
-	              <button id="clearRecentPracticesBtn" type="button" class="recent-practices-clear">Clear</button>
-	            </div>
 	            <div id="recentPracticesList" class="recent-practices-list"></div>
 	          </div>
 	        </div>
@@ -155,6 +151,7 @@
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
             Preparing
+            <span class="nav-action-count" data-nav-action-count></span>
           </button>
 
           <button id="rejectedBtn" class="btn btn-sm" disabled>
@@ -163,6 +160,7 @@
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
             Rejected
+            <span class="nav-action-count" data-nav-action-count></span>
           </button>
 
           <button id="openEhrSettingsBtn" class="btn btn-sm" disabled>
@@ -215,20 +213,6 @@
 	            </section>
 	          </div>
 	          <div class="jobs-helper-text">Single click selects. Double click opens that job directly. Use <strong>All jobs</strong> for the full set.</div>
-	        </div>
-
-	        <div id="docmanToolSection" class="section-container docman-quick-actions-section">
-	          <div class="docman-quick-actions-head">
-	            <h3>Docman Tools</h3>
-	          </div>
-          <div class="docman-quick-actions-grid">
-            <button id="runDocmanLoginBtn" class="btn btn-sm docman-primary-action" type="button" disabled>Login</button>
-            <button id="runDocmanVerifyBtn" class="btn btn-sm" type="button" disabled>Verify</button>
-            <button id="runDocmanCreateGroupBtn" class="btn btn-sm" type="button" disabled>Create Group</button>
-            <button id="runDocmanCleanProcessingBtn" class="btn btn-sm" type="button" disabled>Clean Processing</button>
-            <button id="runDocmanCleanFilingBtn" class="btn btn-sm" type="button" disabled>Clean Filing</button>
-	            <button id="runDocmanOnboardingBtn" class="btn btn-sm" type="button" disabled>Onboarding</button>
-	          </div>
 	        </div>
 
       <div id="bookmarkletToolsSection" class="section-container bookmarklet-section" style="margin-top: 12px;">

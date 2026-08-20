@@ -82,6 +82,7 @@
     const REJECTED_PRACTICE_ISSUE_HOST_ID = 'bl-rejected-practice-issue-host';
     const BOT_DASHBOARD_PAGE_ISSUE_HOST_ID = 'bl-bot-dashboard-page-issue-host';
     const BOT_DASHBOARD_PRACTICE_FILTER_HOST_ID = 'bl-bot-dashboard-practice-filter-host';
+    const BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID = 'bl-bot-dashboard-filter-toggle-host';
     const BOT_DASHBOARD_FILTER_STYLE_ID = 'bl-bot-dashboard-filter-style';
     const PREPARING_OVER_3H_ISSUE_HOST_ID = 'bl-preparing-over-3h-issue-host';
     const COPY_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
@@ -599,6 +600,31 @@ ${hiddenBlock}
     function getBotDashboardJobTypeModeStorageKey() {
         const pageKey = `${window.location.pathname}${window.location.search}`;
         return `blBotDashboardJobTypeMode:${pageKey}`;
+    }
+
+    function getBotDashboardFilterPanelExpandedStorageKey() {
+        const pageKey = `${window.location.pathname}${window.location.search}`;
+        return `blBotDashboardFilterPanelExpanded:${pageKey}`;
+    }
+
+    function loadBotDashboardFilterPanelExpanded() {
+        try {
+            return window.sessionStorage.getItem(getBotDashboardFilterPanelExpandedStorageKey()) === 'true';
+        } catch {
+            return false;
+        }
+    }
+
+    function saveBotDashboardFilterPanelExpanded(expanded) {
+        try {
+            if (expanded) {
+                window.sessionStorage.setItem(getBotDashboardFilterPanelExpandedStorageKey(), 'true');
+            } else {
+                window.sessionStorage.removeItem(getBotDashboardFilterPanelExpandedStorageKey());
+            }
+        } catch {
+            // Keep the panel usable for the current render even if storage is unavailable.
+        }
     }
 
     function loadHiddenBotDashboardPractices() {
@@ -3037,6 +3063,223 @@ ${hiddenBlock}
         return null;
     }
 
+    function findBotDashboardPracticeDropdownAnchor() {
+        const heading = findBotDashboardPageIssueAnchor();
+        const headingTop = heading instanceof HTMLElement ? heading.getBoundingClientRect().top : -Infinity;
+        const isOwnToggle = (element) => element.closest(`#${BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID}`);
+        // Strips a trailing chevron/arrow glyph (if the dropdown renders one as
+        // a text character rather than an icon) before comparing the label.
+        const normalizeDropdownLabel = (text) => collapseText(text).toLowerCase().replace(/[^a-z ]+$/i, '').trim();
+
+        // Primary: match the control showing the default "Show all practices"
+        // label directly, regardless of what tag/role it's built from (this is
+        // a custom LiveView dropdown, not necessarily a <select> or
+        // role="combobox" element). An inner text span and its outer clickable
+        // box can both match this exact text; prefer the largest box that's
+        // still dropdown-sized (not a full-width row wrapper) so we anchor
+        // beside the visible control, not nested inside its label text.
+        const textMatches = Array.from(document.querySelectorAll('div, button, span, select, a'))
+            .filter((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && !isOwnToggle(element)
+                && normalizeDropdownLabel(element.textContent || '') === 'show all practices');
+        if (textMatches.length > 0) {
+            const dropdownSized = textMatches.filter((element) => {
+                const rect = element.getBoundingClientRect();
+                return rect.width <= 500 && rect.height <= 80;
+            });
+            const pool = dropdownSized.length > 0 ? dropdownSized : textMatches;
+            pool.sort((a, b) => {
+                const rectA = a.getBoundingClientRect();
+                const rectB = b.getBoundingClientRect();
+                return (rectB.width * rectB.height) - (rectA.width * rectA.height);
+            });
+            return pool[0];
+        }
+
+        // Fallback: once a specific practice is selected, the label above no
+        // longer reads "Show all practices". Match by position instead: the
+        // topmost combobox-like control between the page heading and the
+        // status tabs row. Pick the smallest matching element, not just the
+        // first one in document order, since a large ancestor wrapping the
+        // whole page section also contains this text further down inside it.
+        const statusCandidates = Array.from(document.querySelectorAll('button, a, div, span'))
+            .filter((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && element.getBoundingClientRect().top > headingTop
+                && /completed successfully/i.test(collapseText(element.textContent || '')));
+        statusCandidates.sort((a, b) => {
+            const rectA = a.getBoundingClientRect();
+            const rectB = b.getBoundingClientRect();
+            return (rectA.width * rectA.height) - (rectB.width * rectB.height);
+        });
+        const statusElement = statusCandidates[0] || null;
+        const statusTop = statusElement instanceof HTMLElement ? statusElement.getBoundingClientRect().top : Infinity;
+
+        const candidates = Array.from(document.querySelectorAll('select, button, [role="combobox"], [aria-haspopup="listbox"]'))
+            .filter((element) => element instanceof HTMLElement
+                && element.offsetParent !== null
+                && !isOwnToggle(element))
+            .filter((element) => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 180 && rect.height >= 24 && rect.top > headingTop && rect.top < statusTop;
+            })
+            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+
+        return candidates[0] || null;
+    }
+
+    let botDashboardAnchorDebugLogged = false;
+    function debugLogBotDashboardDropdownCandidates() {
+        if (botDashboardAnchorDebugLogged) return;
+        botDashboardAnchorDebugLogged = true;
+        try {
+            const heading = findBotDashboardPageIssueAnchor();
+            const headingTop = heading instanceof HTMLElement ? heading.getBoundingClientRect().top : -Infinity;
+            const info = Array.from(document.querySelectorAll('body *'))
+                .filter((element) => element instanceof HTMLElement
+                    && element.offsetParent !== null
+                    && element.children.length <= 3
+                    && /practice/i.test(collapseText(element.textContent || '')))
+                .filter((element) => {
+                    const rect = element.getBoundingClientRect();
+                    return rect.top > headingTop - 20 && rect.top < headingTop + 300;
+                })
+                .map((element) => {
+                    const rect = element.getBoundingClientRect();
+                    return {
+                        tag: element.tagName,
+                        role: element.getAttribute('role') || '',
+                        text: collapseText(element.textContent || '').slice(0, 60),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                        top: Math.round(rect.top),
+                        html: element.outerHTML.slice(0, 300)
+                    };
+                });
+            const selects = Array.from(document.querySelectorAll('select')).map((element) => {
+                const rect = element.getBoundingClientRect();
+                const style = getComputedStyle(element);
+                return {
+                    optionCount: element.options.length,
+                    selectedText: element.options[element.selectedIndex]?.text || '',
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                    top: Math.round(rect.top),
+                    visible: element.offsetParent !== null,
+                    display: style.display,
+                    opacity: style.opacity
+                };
+            });
+            const statusCandidates = Array.from(document.querySelectorAll('button, a, div, span'))
+                .filter((element) => element instanceof HTMLElement
+                    && element.offsetParent !== null
+                    && element.getBoundingClientRect().top > headingTop
+                    && /completed successfully/i.test(collapseText(element.textContent || '')));
+            statusCandidates.sort((a, b) => {
+                const rectA = a.getBoundingClientRect();
+                const rectB = b.getBoundingClientRect();
+                return (rectA.width * rectA.height) - (rectB.width * rectB.height);
+            });
+            const statusElement = statusCandidates[0] || null;
+            const statusTop = statusElement instanceof HTMLElement ? statusElement.getBoundingClientRect().top : Infinity;
+            console.log(
+                '[MailroomNavigator] filter-toggle anchor not found. Nearby "practice" elements:\n'
+                + JSON.stringify(info, null, 2)
+            );
+            console.log(
+                '[MailroomNavigator] all <select> elements on page:\n'
+                + JSON.stringify(selects, null, 2)
+            );
+            console.log(
+                '[MailroomNavigator] headingTop=' + headingTop
+                + ' statusTop=' + statusTop
+                + ' statusElement.tag=' + (statusElement?.tagName || 'none')
+                + ' statusElement.html=' + (statusElement ? statusElement.outerHTML.slice(0, 200) : 'none')
+            );
+        } catch (error) {
+            console.log('[MailroomNavigator] filter-toggle anchor debug failed:', error);
+        }
+    }
+
+    // Walks up from a deeply-nested control (e.g. a <select> inside a fixed-width
+    // wrapper with no room to its right) to find the ancestor that is itself a
+    // direct child of a flex row. Inserting a sibling after that ancestor lets
+    // it flow inline using the row's own gap, instead of wrapping to a new line
+    // because the immediate wrapper was already full width.
+    function findFlexRowInsertionPoint(element) {
+        let node = element;
+        while (node && node.parentElement && node.parentElement !== document.body) {
+            const parentDisplay = getComputedStyle(node.parentElement).display;
+            if (parentDisplay === 'flex' || parentDisplay === 'inline-flex') {
+                return node;
+            }
+            node = node.parentElement;
+        }
+        return element;
+    }
+
+    function attachBotDashboardFilterToggleButton() {
+        const existingHost = document.getElementById(BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID);
+        if (!isBotDashboardPage()) {
+            existingHost?.remove();
+            botDashboardAnchorDebugLogged = false;
+            return null;
+        }
+
+        const anchor = findBotDashboardPracticeDropdownAnchor();
+        if (!anchor?.parentElement) {
+            existingHost?.remove();
+            debugLogBotDashboardDropdownCandidates();
+            return null;
+        }
+
+        const host = existingHost || document.createElement('div');
+        host.id = BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID;
+        Object.assign(host.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            marginLeft: '10px',
+            verticalAlign: 'middle'
+        });
+
+        const isActive = hasActiveBotDashboardFilters();
+        const isExpanded = loadBotDashboardFilterPanelExpanded();
+
+        let button = host.querySelector('button');
+        if (!button) {
+            button = createButton({
+                label: '',
+                color: '#eff6ff',
+                title: 'Show or hide the extension\'s practice/job type/status filters',
+                onClick: () => {
+                    saveBotDashboardFilterPanelExpanded(!loadBotDashboardFilterPanelExpanded());
+                    attachBotDashboardPracticeFilterPanel();
+                }
+            });
+            host.appendChild(button);
+        }
+
+        button.textContent = isExpanded
+            ? 'Hide Filters'
+            : `Filters${isActive ? ' (active)' : ''}`;
+        Object.assign(button.style, {
+            color: isActive ? '#1d4ed8' : '#334155',
+            background: isExpanded ? '#dbeafe' : '#eff6ff',
+            border: `1px solid ${isActive ? '#93c5fd' : '#cbd5e1'}`,
+            borderRadius: '6px',
+            padding: '5px 10px',
+            fontSize: '12px'
+        });
+
+        const insertionPoint = findFlexRowInsertionPoint(anchor);
+        if (host.parentElement !== insertionPoint.parentElement || host.previousElementSibling !== insertionPoint) {
+            insertionPoint.insertAdjacentElement('afterend', host);
+        }
+
+        return host;
+    }
+
     function renderBotDashboardPracticeFilterPanel(host, { force = false } = {}) {
         const practiceCounts = getBotDashboardPracticeCounts();
         const hiddenPractices = loadHiddenBotDashboardPractices();
@@ -3535,10 +3778,24 @@ ${hiddenBlock}
         if (!isBotDashboardPage()) {
             existingHost?.remove();
             updateBotDashboardFilterLock(false);
+            document.getElementById(BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID)?.remove();
             return;
         }
 
         applyBotDashboardPracticeFilters();
+
+        // The full panel is tall (search boxes + scrollable lists per filter),
+        // so by default it stays collapsed behind a small toggle placed next to
+        // the page's own practice dropdown. If that dropdown can't be found,
+        // fail open (always show the panel) rather than hiding filters with no
+        // way to reach them.
+        const toggleHost = attachBotDashboardFilterToggleButton();
+        const shouldShowPanel = !toggleHost || loadBotDashboardFilterPanelExpanded();
+        if (!shouldShowPanel) {
+            existingHost?.remove();
+            return;
+        }
+
         const placement = findBotDashboardPracticeFilterPlacement();
         if (!placement?.parent) {
             existingHost?.remove();
