@@ -5361,9 +5361,9 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
     await chrome.scripting.executeScript({
         target: { tabId },
         func: (panelUrl, hostTabId, shouldForceCollapsed) => {
-            // Four fully independent docked panels, one per view, each with
-            // its own toggle handle stacked along the right edge. Opening
-            // one doesn't require opening a shared container first, and
+            // Independent docked panels, one per view, each with its own
+            // toggle handle stacked along the right edge. Opening one
+            // doesn't require opening a shared container first, and
             // expanding one auto-collapses the others so their (identically
             // positioned, full-height) content areas never end up stacked
             // on top of each other.
@@ -5371,15 +5371,15 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 { key: 'navigator', view: 'practiceNavigatorView', label: 'Navigator', color: '#3b82f6' },
                 { key: 'jobmanager', view: 'jobManagerView', label: 'Job Panel', color: '#10b981' },
                 { key: 'others', view: 'emailFormatterView', label: 'Others', color: '#9b59b6' },
-                // The bookmarklet tools each get their own independent handle
-                // instead of one shared "Bookmarklet Tools" handle whose
-                // panel then required a second click on one of 4 buttons
-                // inside it; ?tool= tells panel.js to open that tool's
-                // modal immediately instead of showing the launch grid.
+                // UUID Picker is used often enough on its own to warrant a
+                // dedicated handle that opens straight to it (?tool= tells
+                // panel.js to trigger that tool's modal immediately instead
+                // of showing the launch grid). Custom Workflow/Docman
+                // Groups/Email Formatter share one handle and its launch
+                // grid instead, since splitting all four out separately
+                // wasn't worth 4 handles for tools used less often.
                 { key: 'uuidpicker', view: 'bookmarkletToolsView', tool: 'uuidPicker', label: 'UUID Picker', color: '#d97706' },
-                { key: 'workflowgroups', view: 'bookmarkletToolsView', tool: 'workflowGroups', label: 'Custom Workflow', color: '#d97706' },
-                { key: 'docmangroups', view: 'bookmarkletToolsView', tool: 'docmanGroups', label: 'Docman Groups', color: '#d97706' },
-                { key: 'emailformatter', view: 'bookmarkletToolsView', tool: 'emailFormatter', label: 'Email Formatter', color: '#d97706' }
+                { key: 'bookmarklettools', view: 'bookmarkletToolsView', label: 'Bookmarklet Tools', color: '#d97706' }
             ];
             const STYLE_ID = 'bl-allinone-sidebar-style';
             const DOCK_ID = 'bl-allinone-sidebar-dock';
@@ -5396,7 +5396,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '3';
+            const UI_VERSION = '8';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -5404,6 +5404,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 const url = new URL(panelUrl);
                 url.searchParams.set('hostTabId', String(hostTabId || ''));
                 url.searchParams.set('view', view);
+                url.searchParams.set('sidebarUiVersion', UI_VERSION);
                 if (tool) url.searchParams.set('tool', tool);
                 return url.toString();
             };
@@ -5447,7 +5448,6 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             };
 
             const ensureStyleInjected = () => {
-                if (document.getElementById(STYLE_ID)) return;
                 const EASE = 'cubic-bezier(0.4, 0.0, 0.2, 1)';
                 const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
                 const css = `
@@ -5608,10 +5608,20 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             to { transform: scale(1); opacity: 0; }
                         }
                     `;
-                const styleEl = document.createElement('style');
-                styleEl.id = STYLE_ID;
+                // Always refresh the stylesheet's content, even if the tag
+                // already exists from an earlier injection - a host tab
+                // left open across a code change would otherwise keep
+                // running whatever CSS an older version of this script
+                // last wrote here. Rewriting a <style> tag's text is cheap
+                // and has no listeners/state to lose, unlike the DOM
+                // elements below which are genuinely only built once.
+                let styleEl = document.getElementById(STYLE_ID);
+                if (!styleEl) {
+                    styleEl = document.createElement('style');
+                    styleEl.id = STYLE_ID;
+                    document.documentElement.appendChild(styleEl);
+                }
                 styleEl.textContent = css;
-                document.documentElement.appendChild(styleEl);
             };
 
             const ensureDockMounted = () => {
