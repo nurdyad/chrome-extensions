@@ -11,21 +11,24 @@
   <link rel="stylesheet" href="css/auth_management.css">
   <style>
     /* Compact mode: only meaningful in the standalone floating window (not the
-       docked sidebar). The toggle button now lives inside the Navigator/Job
-       Panel/Others row instead of its own dedicated row, so that row stays
-       visible too, but everything else inside it (the actual tabs) hides. */
-    body.bl-panel-compact .extension-wrapper > *:not(.global-nav-buttons-row):not(#compactSearchBar) {
+       docked sidebar). The toggle button lives inside the floating tab dock
+       (position: fixed, right edge) instead of its own dedicated row, so that
+       dock stays visible too, but everything else inside it (the actual
+       tabs) and the view content area hide. */
+    body.bl-panel-compact .extension-wrapper > *:not(.panel-body-layout):not(#compactSearchBar) {
+      display: none !important;
+    }
+    body.bl-panel-compact .panel-body-content {
       display: none !important;
     }
     body.bl-panel-compact .global-nav-buttons-row > *:not(#compactModeToggleBtn) {
       display: none !important;
     }
     body.bl-panel-compact .global-nav-buttons-row {
-      justify-content: flex-end;
+      width: auto;
       box-shadow: none;
       background: none;
       padding: 0;
-      margin-bottom: 8px;
     }
     /* body/.extension-wrapper both default to min-height: 750px for the full
        panel; that would make the dynamic compact-mode resize (which measures
@@ -33,6 +36,23 @@
     body.bl-panel-compact,
     body.bl-panel-compact .extension-wrapper {
       min-height: 0;
+    }
+    /* Single-view mode: set when this panel is loaded inside one of the
+       docked per-view sidebars (background.js mounts one independent
+       toggle handle per view, each pointing its own iframe at
+       panel.html?view=<id>). The in-panel tab dock would be redundant and
+       confusing here since switching views means using a different docked
+       handle on the host page, not a tab inside this iframe. */
+    body.bl-panel-single-view .global-nav-buttons-row {
+      display: none !important;
+    }
+    /* Single-tool mode: set when this docked panel is one of the individual
+       bookmarklet-tool handles (UUID Picker, Custom Workflow, Docman
+       Groups, Email Formatter), which opens that tool's modal immediately
+       on load. The launch grid of all 4 buttons would be redundant here
+       since this handle is already scoped to one tool. */
+    body.bl-panel-single-tool .bookmarklet-launch-grid {
+      display: none !important;
     }
     #compactSearchBar {
       padding-bottom: 4px;
@@ -140,32 +160,38 @@
         <button id="refreshAccessRequestBtn" class="btn btn-sm btn-ghost" type="button">Refresh Access</button>
       </div>
     </div>
-    <!-- Top-level view switcher: Navigator / Job Panel / Others -->
+    <!-- Top-level view switcher: independent binder-style tabs floating
+         over the right edge of the window (position: fixed), separate from
+         the content flow so the window never needs to be widened to reach
+         them. -->
+    <div class="panel-body-layout">
     <div class="btn-row global-nav-buttons-row">
-      <button id="navigatorGlobalToggleBtn" class="btn active-tab">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle" data-role="toggle" aria-label="Navigator" title="Navigator">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"></circle>
           <line x1="12" y1="8" x2="12" y2="12"></line>
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
-        Navigator
       </button>
-      <button id="jobManagerGlobalToggleBtn" class="btn">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button type="button" id="jobManagerGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Job Panel" title="Job Panel">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
           <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
         </svg>
-        Job Panel
       </button>
-      <button id="emailFormatterGlobalToggleBtn" class="btn">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Others" title="Others">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="7" height="7" rx="1"></rect>
           <rect x="14" y="3" width="7" height="7" rx="1"></rect>
           <rect x="3" y="14" width="7" height="7" rx="1"></rect>
           <path d="M14 17h7"></path>
           <path d="M17.5 14v7"></path>
         </svg>
-        Others
+      </button>
+      <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Bookmarklet Tools" title="Bookmarklet Tools">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        </svg>
       </button>
       <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -177,6 +203,7 @@
       </button>
     </div>
 
+    <div class="panel-body-content">
     <!-- View 1: Practice Navigator -->
     <div id="practiceNavigatorView" class="view-transition">
       <div id="practiceNavigatorCoreSection">
@@ -306,50 +333,6 @@
 	          </div>
 	          <div class="jobs-helper-text">Single click selects. Double click opens that job directly. Use <strong>All jobs</strong> for the full set.</div>
 	        </div>
-
-      <div id="bookmarkletToolsSection" class="section-container bookmarklet-section" style="margin-top: 12px;">
-        <h3>Bookmarklet Tools</h3>
-        <label>Quick tools and active-tab helpers</label>
-        <div class="bookmarklet-launch-grid">
-          <button id="runUuidPickerToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
-              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
-              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
-              <path d="M14 17h7"></path>
-              <path d="M17.5 14v7"></path>
-            </svg>
-            <span>UUID Picker</span>
-          </button>
-          <button id="runWorkflowGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 6h13"></path>
-              <path d="M8 12h13"></path>
-              <path d="M8 18h13"></path>
-              <path d="M3 6h.01"></path>
-              <path d="M3 12h.01"></path>
-              <path d="M3 18h.01"></path>
-            </svg>
-            <span>Custom Workflow</span>
-          </button>
-          <button id="runListDocmanGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
-              <circle cx="9" cy="7" r="4"></circle>
-              <path d="M20 8v6"></path>
-              <path d="M23 11h-6"></path>
-            </svg>
-            <span>Docman Groups</span>
-          </button>
-          <button id="runEmailFormatterToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-              <path d="m22 7-8.97 5.7a2 2 0 0 1-2.06 0L2 7"></path>
-            </svg>
-            <span>Email Formatter</span>
-          </button>
-        </div>
-      </div>
 
         <div id="docmanToolStatusSection" class="section-container docman-tool-results-section" style="margin-top: 12px;">
           <h3>Docman Activity</h3>
@@ -677,6 +660,55 @@
         <div id="extensionManagedUsersList" class="recent-id-meta-list" style="margin-top: 12px;"></div>
         </div>
       </div>
+    </div>
+
+    <!-- View 4: Bookmarklet Tools -->
+    <div id="bookmarkletToolsView" class="view-transition" style="display: none;">
+      <div id="bookmarkletToolsSection" class="section-container bookmarklet-section">
+        <h3>Bookmarklet Tools</h3>
+        <label>Quick tools and active-tab helpers</label>
+        <div class="bookmarklet-launch-grid">
+          <button id="runUuidPickerToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+              <path d="M14 17h7"></path>
+              <path d="M17.5 14v7"></path>
+            </svg>
+            <span>UUID Picker</span>
+          </button>
+          <button id="runWorkflowGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 6h13"></path>
+              <path d="M8 12h13"></path>
+              <path d="M8 18h13"></path>
+              <path d="M3 6h.01"></path>
+              <path d="M3 12h.01"></path>
+              <path d="M3 18h.01"></path>
+            </svg>
+            <span>Custom Workflow</span>
+          </button>
+          <button id="runListDocmanGroupsToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M20 8v6"></path>
+              <path d="M23 11h-6"></path>
+            </svg>
+            <span>Docman Groups</span>
+          </button>
+          <button id="runEmailFormatterToolBtn" class="btn btn-sm bookmarklet-launch-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+              <path d="m22 7-8.97 5.7a2 2 0 0 1-2.06 0L2 7"></path>
+            </svg>
+            <span>Email Formatter</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    </div>
     </div>
 
   </div>
