@@ -25,8 +25,8 @@ const BETTERLETTER_TAB_PATTERN = `${BETTERLETTER_ORIGIN}/*`;
 const LIVE_COUNTS_CACHE_TTL_MS = 45 * 1000;
 const PRACTICE_EHR_SETTINGS_CACHE_TTL_MS = 2 * 60 * 1000;
 const LIVE_COUNTS_TEMP_TAB_COOLDOWN_MS = 30 * 1000;
-const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 6500;
-const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 5200;
+const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 4500;
+const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 3200;
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
 const UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS = 26000;
@@ -4593,7 +4593,7 @@ async function fetchLiveMailroomCountsViaHiddenFrame(odsCode) {
                     lastSignature = signature;
                 }
 
-                await wait(240);
+                await wait(150);
                 const next = readCountsFromDoc(frame.contentDocument);
                 best = mergeCounts(best, next);
             }
@@ -5868,23 +5868,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 await chrome.storage.local.set({ practiceCache, cacheTimestamp: Date.now() });
             }
 
-            // Return fast using cached live counts, and refresh counts in background.
+            // Live counts and EHR settings are independent lookups, so fetch them
+            // concurrently instead of one after another (previously ehrSettings
+            // only started once the live-counts wait had fully finished).
+            const isConcreteOds = /^[A-Z]\d{5}$/.test(normalizedOds);
+            const liveCountsPromise = isConcreteOds
+                ? withTimeout(resolveLiveMailroomCountsByOds(normalizedOds, { allowTempTab: false }), 800)
+                : Promise.resolve(null);
+            const ehrSettingsPromise = sqlPractice
+                ? Promise.resolve({ ...createEmptyPracticeEhrSettings(), ...sqlPractice, practiceCdb: sqlPractice.practiceCDB || sqlPractice.cdb || '' })
+                : isConcreteOds
+                ? fetchPracticeEhrSettingsByOds(normalizedOds, preferredTabId)
+                : Promise.resolve(createEmptyPracticeEhrSettings());
+
             let liveMailroomCounts = getCachedLiveCounts(normalizedOds, LIVE_COUNTS_CACHE_TTL_MS * 4) || createEmptyLiveCounts();
-            if (/^[A-Z]\d{5}$/.test(normalizedOds)) {
-                const liveCountsPromise = resolveLiveMailroomCountsByOds(normalizedOds, { allowTempTab: false });
-                const quickCounts = await withTimeout(liveCountsPromise, 800);
-                if (quickCounts && hasAnyLiveCounts(quickCounts)) {
-                    liveMailroomCounts = mergeLiveCounts(liveMailroomCounts, quickCounts);
-                }
+            const [quickCounts, ehrSettingsResolved] = await Promise.all([liveCountsPromise, ehrSettingsPromise]);
+            if (quickCounts && hasAnyLiveCounts(quickCounts)) {
+                liveMailroomCounts = mergeLiveCounts(liveMailroomCounts, quickCounts);
             }
 
             const looksInvalidCdb = !p?.cdb || p.cdb.trim().toLowerCase() === (p?.name || '').trim().toLowerCase();
-            let ehrSettings = sqlPractice
-                ? { ...createEmptyPracticeEhrSettings(), ...sqlPractice, practiceCdb: sqlPractice.practiceCDB || sqlPractice.cdb || '' }
-                : /^[A-Z]\d{5}$/.test(normalizedOds)
-                ? await fetchPracticeEhrSettingsByOds(normalizedOds, preferredTabId)
-                : createEmptyPracticeEhrSettings();
-            ehrSettings = await applyPracticeSecretOverrides(normalizedOds, ehrSettings);
+            let ehrSettings = await applyPracticeSecretOverrides(normalizedOds, ehrSettingsResolved);
 
             const resolvedPracticeCdb = String(ehrSettings.practiceCdb || p?.cdb || '').trim();
             if (p && looksInvalidCdb && resolvedPracticeCdb) {

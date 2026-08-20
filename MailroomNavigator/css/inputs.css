@@ -239,11 +239,31 @@ input[readonly] {
     background-color: #eaf4ff;
 }
 
+#suggestions li .suggestion-top-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 #suggestions li .suggestion-main,
-#suggestions li .suggestion-meta {
+#suggestions li .suggestion-meta,
+#suggestions li .suggestion-ods-cdb {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+#suggestions li .suggestion-main {
+    min-width: 0;
+    margin-bottom: 0;
+    font-weight: 600;
+}
+
+#suggestions li .suggestion-ods-cdb {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #64748b;
 }
 
 #suggestions li .suggestion-meta {
