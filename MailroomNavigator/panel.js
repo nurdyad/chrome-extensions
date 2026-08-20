@@ -19,6 +19,35 @@ const PANEL_HOST_TAB_ID = (() => {
         return null;
     }
 })();
+// Set when this panel is loaded inside one of the docked per-view sidebars
+// (each view gets its own independent host-page toggle handle, see
+// ensureSidebarPanelMounted in background.js) rather than the standalone
+// popup window. Locks this instance to a single view and hides the
+// in-panel tab switcher, since switching views means using a different
+// docked handle instead.
+const PANEL_FORCED_VIEW_ID = (() => {
+    try {
+        const rawValue = String(new URLSearchParams(window.location.search).get('view') || '').trim();
+        const validViewIds = ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView', 'bookmarkletToolsView'];
+        return validViewIds.includes(rawValue) ? rawValue : null;
+    } catch (error) {
+        return null;
+    }
+})();
+// Set alongside PANEL_FORCED_VIEW_ID when this docked panel is one of the
+// individual bookmarklet-tool handles (UUID Picker, Custom Workflow, Docman
+// Groups, Email Formatter each get their own handle rather than one shared
+// "Bookmarklet Tools" handle whose launch grid needed a second click).
+// Triggers that tool's modal immediately and hides the launch grid.
+const PANEL_FORCED_TOOL_ID = (() => {
+    try {
+        const rawValue = String(new URLSearchParams(window.location.search).get('tool') || '').trim();
+        const validToolIds = ['uuidPicker', 'workflowGroups', 'docmanGroups', 'emailFormatter'];
+        return validToolIds.includes(rawValue) ? rawValue : null;
+    } catch (error) {
+        return null;
+    }
+})();
 
 const EXTENSION_FEATURE_CATALOG = [
     { key: 'practice_navigator', label: 'Navigator', description: 'Practice Navigator, practice links, live counts, and related admin pages.' },
@@ -36,22 +65,19 @@ const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => featur
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const UUID_LOOKUP_REQUEST_TIMEOUT_MS = 26000;
 const UUID_LOOKUP_LOADING_DELAY_MS = 120;
-const NAVIGATOR_VIEW_FEATURE_KEYS = [
-    'practice_navigator',
-    'email_formatter',
-    'workflow_groups',
-    'bookmarklet_tools'
-];
+const NAVIGATOR_VIEW_FEATURE_KEYS = ['practice_navigator'];
 const LINEAR_VIEW_FEATURE_KEYS = [
     'linear_create_issue',
     'linear_trigger',
     'linear_reconcile',
     'slack_sync'
 ];
+const BOOKMARKLET_VIEW_FEATURE_KEYS = ['bookmarklet_tools', 'email_formatter', 'workflow_groups'];
 const VIEW_FEATURE_REQUIREMENTS = {
     practiceNavigatorView: NAVIGATOR_VIEW_FEATURE_KEYS,
     jobManagerView: ['job_panel'],
-    emailFormatterView: LINEAR_VIEW_FEATURE_KEYS
+    emailFormatterView: LINEAR_VIEW_FEATURE_KEYS,
+    bookmarkletToolsView: BOOKMARKLET_VIEW_FEATURE_KEYS
 };
 
 function buildDefaultFeatureAccess() {
@@ -112,6 +138,7 @@ function getAvailableViewIds() {
 }
 
 function getInitialAccessibleViewId() {
+    if (PANEL_FORCED_VIEW_ID && canAccessView(PANEL_FORCED_VIEW_ID)) return PANEL_FORCED_VIEW_ID;
     return getAvailableViewIds()[0] || '';
 }
 
@@ -176,15 +203,16 @@ function showView(viewId, { force = false } = {}) {
     const resolvedViewId = force
         ? (VIEW_FEATURE_REQUIREMENTS[viewId] ? viewId : fallbackViewId)
         : (canAccessView(viewId) ? viewId : fallbackViewId);
-    ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView'].forEach(id => {
+    ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView', 'bookmarkletToolsView'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = (resolvedViewId && id === resolvedViewId) ? 'block' : 'none';
     });
-    
+
     const navIds = {
         'practiceNavigatorView': 'navigatorGlobalToggleBtn',
         'jobManagerView': 'jobManagerGlobalToggleBtn',
-        'emailFormatterView': 'emailFormatterGlobalToggleBtn'
+        'emailFormatterView': 'emailFormatterGlobalToggleBtn',
+        'bookmarkletToolsView': 'bookmarkletToolsGlobalToggleBtn'
     };
     
     Object.values(navIds).forEach(btnId => {
@@ -334,7 +362,8 @@ function renderExtensionAccessState(access) {
     const views = [
         document.getElementById('practiceNavigatorView'),
         document.getElementById('jobManagerView'),
-        document.getElementById('emailFormatterView')
+        document.getElementById('emailFormatterView'),
+        document.getElementById('bookmarkletToolsView')
     ];
 
     extensionAccessState = normalizePanelAccessState(access);
@@ -506,7 +535,8 @@ function applyExtensionFeatureAccessToUi() {
     const navButtonMap = {
         practiceNavigatorView: document.getElementById('navigatorGlobalToggleBtn'),
         jobManagerView: document.getElementById('jobManagerGlobalToggleBtn'),
-        emailFormatterView: document.getElementById('emailFormatterGlobalToggleBtn')
+        emailFormatterView: document.getElementById('emailFormatterGlobalToggleBtn'),
+        bookmarkletToolsView: document.getElementById('bookmarkletToolsGlobalToggleBtn')
     };
 
     Object.entries(navButtonMap).forEach(([viewId, button]) => {
@@ -521,7 +551,6 @@ function applyExtensionFeatureAccessToUi() {
 
     setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
     setElementVisible('docmanToolStatusSection', hasExtensionFeature('practice_navigator'));
-    setElementVisible('bookmarkletToolsSection', hasAnyExtensionFeature(['bookmarklet_tools', 'email_formatter', 'workflow_groups']));
     setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runEmailFormatterToolBtn', hasExtensionFeature('email_formatter'));
@@ -759,6 +788,13 @@ async function initializePanel() {
     if (panelInitializationStarted) return;
     panelInitializationStarted = true;
     try {
+    if (PANEL_FORCED_VIEW_ID) {
+        document.body.classList.add('bl-panel-single-view');
+    }
+    if (PANEL_FORCED_TOOL_ID) {
+        document.body.classList.add('bl-panel-single-tool');
+    }
+
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
     await Navigator.initializeRecentPractices();
@@ -1425,6 +1461,7 @@ async function initializePanel() {
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView', { force: true }));
     document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView', { force: true }));
     document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView', { force: true }));
+    document.getElementById("bookmarkletToolsGlobalToggleBtn")?.addEventListener("click", () => showView('bookmarkletToolsView', { force: true }));
     const accessUiInitPromise = initializeAccessUi();
     accessUiInitPromise.catch((error) => {
         console.error('Failed to initialize MailroomNavigator access UI:', error);
@@ -5827,7 +5864,20 @@ ${error?.message || String(error)}`, 'invalid');
         await tryAutoSelectPracticeFromActiveTab();
     }
 
-    showView('practiceNavigatorView', { force: true });
+    showView(PANEL_FORCED_VIEW_ID || 'practiceNavigatorView', { force: true });
+
+    if (PANEL_FORCED_TOOL_ID === 'uuidPicker' && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
+        openUuidPickerModal();
+    } else if (PANEL_FORCED_TOOL_ID === 'docmanGroups' && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
+        openDocmanGroupsModal();
+    } else if (PANEL_FORCED_TOOL_ID === 'emailFormatter' && (hasExtensionFeature('email_formatter') || extensionAccessState === null)) {
+        openEmailFormatterModal();
+    } else if (PANEL_FORCED_TOOL_ID === 'workflowGroups' && (hasExtensionFeature('workflow_groups') || extensionAccessState === null)) {
+        openWorkflowGroupsModal().catch((error) => {
+            console.error('Failed to open workflow groups modal:', error);
+            showToast('Workflow Groups failed to open.');
+        });
+    }
 
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
     if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
