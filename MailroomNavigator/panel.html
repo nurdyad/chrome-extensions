@@ -10,9 +10,29 @@
   <link rel="stylesheet" href="css/status.css">
   <link rel="stylesheet" href="css/auth_management.css">
   <style>
-    /* Compact mode: only meaningful in the standalone floating window (not the docked sidebar). */
-    body.bl-panel-compact .extension-wrapper > *:not(#compactModeToggleRow):not(#compactSearchBar) {
+    /* Compact mode: only meaningful in the standalone floating window (not the
+       docked sidebar). The toggle button now lives inside the Navigator/Job
+       Panel/Others row instead of its own dedicated row, so that row stays
+       visible too, but everything else inside it (the actual tabs) hides. */
+    body.bl-panel-compact .extension-wrapper > *:not(.global-nav-buttons-row):not(#compactSearchBar) {
       display: none !important;
+    }
+    body.bl-panel-compact .global-nav-buttons-row > *:not(#compactModeToggleBtn) {
+      display: none !important;
+    }
+    body.bl-panel-compact .global-nav-buttons-row {
+      justify-content: flex-end;
+      box-shadow: none;
+      background: none;
+      padding: 0;
+      margin-bottom: 8px;
+    }
+    /* body/.extension-wrapper both default to min-height: 750px for the full
+       panel; that would make the dynamic compact-mode resize (which measures
+       actual content height) never report less than 750px. Drop it here. */
+    body.bl-panel-compact,
+    body.bl-panel-compact .extension-wrapper {
+      min-height: 0;
     }
     #compactSearchBar {
       padding-bottom: 4px;
@@ -20,9 +40,9 @@
     #compactSearchBar .search-container {
       margin-bottom: 0;
     }
-    /* Give the relocated practice-search block and quick-links row the same
-       card treatment as .section-container, so compact mode doesn't look like
-       bare inputs floating with no visual grouping. */
+    /* Give the relocated practice-search block the same card treatment as
+       .section-container, so compact mode doesn't look like a bare input
+       floating with no visual grouping. */
     body.bl-panel-compact #practiceSearchBlock,
     body.bl-panel-compact .nav-action-grid {
       background-color: white;
@@ -32,14 +52,76 @@
       border-left: 4px solid var(--primary-color);
       margin-bottom: 0;
     }
+    /* Nested inside an accordion body, the outer accordion already provides
+       the card look, so drop the nav-action-grid's own card styling there to
+       avoid a card-within-a-card. */
+    body.bl-panel-compact .compact-accordion-body .nav-action-grid {
+      background: none;
+      padding: 0;
+      box-shadow: none;
+      border-left: none;
+    }
+    .compact-accordion {
+      background-color: white;
+      border-radius: var(--border-radius);
+      box-shadow: var(--box-shadow);
+      border-left: 4px solid var(--primary-color);
+      overflow: hidden;
+    }
+    .compact-accordion-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 8px 10px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-color);
+      text-align: left;
+    }
+    .compact-accordion-toggle svg {
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+    .compact-accordion-toggle.is-expanded svg {
+      transform: rotate(180deg);
+    }
+    .compact-accordion-body {
+      padding: 0 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .compact-accordion-body[hidden] {
+      display: none;
+    }
   </style>
 </head>
 <body>
   <div class="extension-wrapper">
-    <div class="btn-row" id="compactModeToggleRow" style="justify-content: flex-end; margin-bottom: 8px;">
-      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar">Compact</button>
+    <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">
+      <div id="compactPracticeToolsAccordion" class="compact-accordion" hidden>
+        <button type="button" id="compactPracticeToolsToggle" class="compact-accordion-toggle">
+          <span>Practice Tools</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <div id="compactPracticeToolsBody" class="compact-accordion-body" hidden></div>
+      </div>
+      <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
+        <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
+          <span>Quick Document Search</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <div id="compactQuickDocBody" class="compact-accordion-body" hidden></div>
+      </div>
     </div>
-    <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;"></div>
     <div id="accessControlNotice" class="validation-badge neutral" style="display: none; margin-bottom: 10px; white-space: pre-wrap;"></div>
     <div id="identityDetectionPanel" class="section-container" style="display: none; margin-bottom: 12px;">
       <h3>BetterLetter Session Required</h3>
@@ -84,6 +166,14 @@
           <path d="M17.5 14v7"></path>
         </svg>
         Others
+      </button>
+      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 14 10 14 10 20"></polyline>
+          <polyline points="20 10 14 10 14 4"></polyline>
+          <line x1="14" y1="10" x2="21" y2="3"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
       </button>
     </div>
 
@@ -134,6 +224,8 @@
 	            <div id="recentPracticesList" class="recent-practices-list"></div>
 	          </div>
 	        </div>
+
+        <div id="practiceIdentityStrip" class="practice-identity-strip"></div>
 
         <div class="action-grid nav-action-grid">
           <button id="collectionBtn" class="btn btn-sm" disabled>
