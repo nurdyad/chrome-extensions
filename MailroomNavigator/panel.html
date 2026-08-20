@@ -136,17 +136,47 @@
       display: none !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions {
-      display: grid !important;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      display: flex !important;
+      flex-direction: column !important;
       gap: 8px;
       padding: 10px 12px !important;
       overflow-x: hidden !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-actions:empty {
+      display: none !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-toolbar {
+      display: flex !important;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+      margin-bottom: 8px;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-filter-grid {
+      display: grid !important;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      width: 100%;
+      min-width: 0;
+      margin: 0 0 10px 0;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions .bookmarklet-tool-btn {
       width: 100%;
       min-width: 0;
       padding-inline: 6px;
     }
+    body.bl-panel-single-tool .bookmarklet-tool-toolbar .bookmarklet-tool-btn {
+      width: auto;
+      min-width: 0;
+      flex: 0 0 auto;
+      height: 30px;
+      padding-inline: 9px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-filter-grid .bookmarklet-tool-input,
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions .bookmarklet-tool-input {
       grid-column: 1 / -1;
       width: 100%;
@@ -566,6 +596,7 @@
         <div id="uuidBatchResultsSection" class="uuid-batch-results-section" hidden style="margin-top: 10px;">
           <div class="uuid-batch-results-head" style="font-weight: 700; font-size: 12px; margin-bottom: 6px;">
             <span id="uuidBatchResultsTitle">Last batch check</span>
+            <button id="uuidBatchResultsClearBtn" class="uuid-batch-results-clear-btn" type="button">Clear</button>
           </div>
           <div id="uuidBatchResultsList" style="display: flex; flex-direction: column; gap: 8px;"></div>
         </div>

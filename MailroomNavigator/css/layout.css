@@ -1203,6 +1203,24 @@ body.bl-panel-single-view .job-manager-container {
     padding: 8px 12px 0 12px;
 }
 
+.bookmarklet-tool-modal-actions:empty {
+    display: none;
+}
+
+.bookmarklet-tool-toolbar,
+.bookmarklet-tool-filter-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.bookmarklet-tool-filter-grid {
+    margin-top: 8px;
+}
+
 .bookmarklet-tool-modal-body {
     padding: 10px 12px 12px 12px;
     overflow: auto;
@@ -1323,6 +1341,59 @@ body.bl-panel-single-view .job-manager-container {
     background: #f1f8ff;
 }
 
+.uuid-picker-lookup-panel {
+    border: 1px solid #d7e4f0;
+    border-radius: 10px;
+    background: #fbfdff;
+    padding: 8px;
+    margin-bottom: 8px;
+}
+
+.uuid-picker-lookup-title {
+    color: #1f456b;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.uuid-picker-lookup-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.uuid-picker-lookup-status {
+    margin-top: 8px;
+}
+
+.uuid-picker-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.uuid-picker-row-content {
+    min-width: 0;
+}
+
+.uuid-picker-row-lookup-btn {
+    min-width: 68px;
+    height: 30px;
+    padding-inline: 8px;
+}
+
+.uuid-picker-batch-results {
+    margin-top: 10px;
+}
+
+.uuid-picker-batch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .bookmarklet-tool-item-main {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 11px;
@@ -1334,4 +1405,27 @@ body.bl-panel-single-view .job-manager-container {
     margin-top: 3px;
     font-size: 11px;
     color: #60788f;
+}
+
+.uuid-batch-results-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+}
+
+.uuid-batch-results-clear-btn {
+    border: 1px solid #bfd7ef;
+    border-radius: 8px;
+    background: #ecf5ff;
+    color: #16558d;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+
+.uuid-batch-results-clear-btn:hover {
+    background: #dceeff;
 }
