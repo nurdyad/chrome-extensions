@@ -382,6 +382,15 @@ function getSqlPool() {
 
   sqlPool.on("error", (error) => {
     appendServerLog(`[${nowIso()}] sql pool error: ${String(error?.message || error)}`).catch(() => undefined);
+    if (isTransientSqlConnectionError(error)) {
+      resetSqlPoolAfterConnectionError(error?.message || error).catch(() => undefined);
+    }
+  });
+  sqlPool.on("connect", (client) => {
+    ensureSqlClientErrorHandler(client);
+  });
+  sqlPool.on("acquire", (client) => {
+    ensureSqlClientErrorHandler(client);
   });
   return sqlPool;
 }
@@ -2432,6 +2441,10 @@ function sanitizeUuidLookupRow(row = {}) {
     inputFileName: sanitizeSingleLine(row.input_file_name, 260),
     status: sanitizeSingleLine(row.document_status, 120),
     documentLink: sanitizeHttpUrl(row.document_link),
+    botJobId: sanitizeSingleLine(row.bot_job_id, 120),
+    botJobType: sanitizeSingleLine(row.bot_job_type, 120),
+    botJobStatus: sanitizeSingleLine(row.bot_job_status, 120),
+    botJobStatusReason: sanitizeSingleLine(row.bot_job_status_reason, 420),
     rejectionId: sanitizeSingleLine(row.rejection_id, 80),
     rejectionReason: sanitizeSingleLine(row.rejection_reason, 420),
     rejectionMarkedBy: sanitizeSingleLine(row.rejection_marked_by, 180),
@@ -2466,46 +2479,96 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
             $1,
             '(…|\\.\\.\\.)$',
             ''
-          )
-        ) AS uuid_part
-      )
-      SELECT
-        d.id AS document_id,
-        SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
-        d.input_file_name,
-        d.status AS document_status,
-        CONCAT(
-          'https://app.betterletter.ai/mailroom/annotations/',
-          d.id
-        ) AS document_link,
-        dr.id AS rejection_id,
-        dr.rejection_reason,
-        drv.origin->>'user' AS rejection_marked_by,
-        drv.changes->>'processing_status' AS rejection_processing_status,
-        CASE
-          WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
-            THEN 'Exact match'
-          ELSE 'Partial match'
-        END AS match_type
-      FROM documents d
-      CROSS JOIN search_input s
-      LEFT JOIN document_rejections dr
-        ON d.id = dr.mailroom_document_id
-      LEFT JOIN document_rejections_versions drv
-        ON drv.mailroom_document_id = d.id
-        AND drv.changes->>'processing_status' = 'done'
-      WHERE LENGTH(s.uuid_part) >= 6
-        AND SPLIT_PART(d.input_file_name, '.', 1)
-            ILIKE '%' || s.uuid_part || '%'
-      ORDER BY
-        CASE
-          WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
-            THEN 0
-          ELSE 1
-        END,
-        d.id DESC
-      LIMIT 100
-    `;
+	          )
+	        ) AS uuid_part
+	      ),
+	      document_matches AS (
+	        SELECT
+	          d.id AS document_id,
+	          SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
+	          d.input_file_name,
+	          d.status AS document_status,
+	          NULL::text AS bot_job_id,
+	          NULL::text AS bot_job_type,
+	          NULL::text AS bot_job_status,
+	          NULL::text AS bot_job_status_reason,
+	          CASE
+	            WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
+	              THEN 0
+	            ELSE 2
+	          END AS match_rank,
+	          CASE
+	            WHEN LOWER(SPLIT_PART(d.input_file_name, '.', 1)) = LOWER(s.uuid_part)
+	              THEN 'Exact document UUID match'
+	            ELSE 'Partial document UUID match'
+	          END AS match_type
+	        FROM documents d
+	        CROSS JOIN search_input s
+	        WHERE LENGTH(s.uuid_part) >= 6
+	          AND SPLIT_PART(d.input_file_name, '.', 1)
+	              ILIKE '%' || s.uuid_part || '%'
+	      ),
+	      bot_job_matches AS (
+	        SELECT
+	          d.id AS document_id,
+	          SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
+	          d.input_file_name,
+	          d.status AS document_status,
+	          bj.id::text AS bot_job_id,
+	          bj.type::text AS bot_job_type,
+	          bj.status::text AS bot_job_status,
+	          bj.status_reason::text AS bot_job_status_reason,
+	          CASE
+	            WHEN LOWER(bj.id::text) = LOWER(s.uuid_part)
+	              THEN 1
+	            ELSE 3
+	          END AS match_rank,
+	          CASE
+	            WHEN LOWER(bj.id::text) = LOWER(s.uuid_part)
+	              THEN 'Exact bot job UUID match'
+	            ELSE 'Partial bot job UUID match'
+	          END AS match_type
+	        FROM bot_jobs bj
+	        CROSS JOIN search_input s
+	        LEFT JOIN documents d
+	          ON d.id = bj.document_id
+	        WHERE LENGTH(s.uuid_part) >= 6
+	          AND bj.id::text ILIKE '%' || s.uuid_part || '%'
+	      ),
+	      matches AS (
+	        SELECT * FROM document_matches
+	        UNION ALL
+	        SELECT * FROM bot_job_matches
+	      )
+	      SELECT
+	        m.document_id,
+	        m.matched_uuid,
+	        m.input_file_name,
+	        m.document_status,
+	        CONCAT(
+	          'https://app.betterletter.ai/mailroom/annotations/',
+	          m.document_id
+	        ) AS document_link,
+	        m.bot_job_id,
+	        m.bot_job_type,
+	        m.bot_job_status,
+	        m.bot_job_status_reason,
+	        dr.id AS rejection_id,
+	        dr.rejection_reason,
+	        drv.origin->>'user' AS rejection_marked_by,
+	        drv.changes->>'processing_status' AS rejection_processing_status,
+	        m.match_type
+	      FROM matches m
+	      LEFT JOIN document_rejections dr
+	        ON m.document_id = dr.mailroom_document_id
+	      LEFT JOIN document_rejections_versions drv
+	        ON drv.mailroom_document_id = m.document_id
+	        AND drv.changes->>'processing_status' = 'done'
+	      ORDER BY
+	        m.match_rank,
+	        m.document_id DESC
+	      LIMIT 100
+	    `;
 
     const result = await runSqlQueryWithConnectionRetry(query, [normalizedUuid], {
       timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS,
@@ -2513,41 +2576,49 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
     });
     const matches = (Array.isArray(result?.rows) ? result.rows : [])
       .map(sanitizeUuidLookupRow)
-      .filter((row) => row.documentId)
+      .filter((row) => row.documentId || row.botJobId)
       .slice(0, 100);
     const firstMatch = matches[0] || null;
     const lookup = firstMatch
       ? {
           uuid: normalizedUuid,
           found: true,
-          source: "cloud_sql",
-          status: firstMatch.status,
-          detail: firstMatch.inputFileName || firstMatch.matchType,
-          documentId: firstMatch.documentId,
-          documentLink: firstMatch.documentLink,
-          rejectionReason: firstMatch.rejectionReason,
-          matchedUuid: firstMatch.matchedUuid,
-          inputFileName: firstMatch.inputFileName,
-          rejectionId: firstMatch.rejectionId,
-          rejectionMarkedBy: firstMatch.rejectionMarkedBy,
-          rejectionProcessingStatus: firstMatch.rejectionProcessingStatus,
-          matchType: firstMatch.matchType,
-          matches,
-          checkedAt: nowIso(),
-          matchedStatusPath: "cloud_sql.documents.status",
-        }
+	          source: "cloud_sql",
+	          status: firstMatch.status || firstMatch.botJobStatus,
+	          detail: firstMatch.botJobId
+	            ? `Bot job ${firstMatch.botJobType || firstMatch.botJobId} -> ${firstMatch.inputFileName || firstMatch.botJobStatus || firstMatch.matchType}`
+	            : firstMatch.inputFileName || firstMatch.matchType,
+	          documentId: firstMatch.documentId,
+	          documentLink: firstMatch.documentLink,
+	          rejectionReason: firstMatch.rejectionReason,
+	          matchedUuid: firstMatch.matchedUuid,
+	          inputFileName: firstMatch.inputFileName,
+	          botJobId: firstMatch.botJobId,
+	          botJobType: firstMatch.botJobType,
+	          botJobStatus: firstMatch.botJobStatus,
+	          botJobStatusReason: firstMatch.botJobStatusReason,
+	          rejectionId: firstMatch.rejectionId,
+	          rejectionMarkedBy: firstMatch.rejectionMarkedBy,
+	          rejectionProcessingStatus: firstMatch.rejectionProcessingStatus,
+	          matchType: firstMatch.matchType,
+	          matches,
+	          checkedAt: nowIso(),
+	          matchedStatusPath: firstMatch.botJobId
+	            ? "cloud_sql.bot_jobs.id -> documents.status"
+	            : "cloud_sql.documents.status",
+	        }
       : {
           uuid: normalizedUuid,
           found: false,
           source: "cloud_sql",
           status: "",
-          detail: `No document found for UUID fragment ${normalizedUuid}.`,
+          detail: `No document or bot job found for UUID fragment ${normalizedUuid}.`,
           documentId: "",
           documentLink: "",
           rejectionReason: "",
           matches: [],
           checkedAt: nowIso(),
-          matchedStatusPath: "cloud_sql.documents.status",
+          matchedStatusPath: "cloud_sql.documents.status + cloud_sql.bot_jobs.id",
         };
 
     rememberUuidLookup(normalizedUuid, lookup);

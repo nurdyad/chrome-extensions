@@ -1979,6 +1979,7 @@ async function initializePanel() {
     const uuidLookupStatus = document.getElementById('uuidLookupStatus');
     const uuidBatchResultsSection = document.getElementById('uuidBatchResultsSection');
     const uuidBatchResultsTitle = document.getElementById('uuidBatchResultsTitle');
+    const uuidBatchResultsClearBtn = document.getElementById('uuidBatchResultsClearBtn');
     const uuidBatchResultsList = document.getElementById('uuidBatchResultsList');
     const bulkIdsValidation = document.getElementById('bulkIdsValidation');
 
@@ -2019,6 +2020,7 @@ async function initializePanel() {
     const bookmarkletToolModalBody = document.getElementById('bookmarkletToolModalBody');
     const bookmarkletToolModalCloseBtn = document.getElementById('bookmarkletToolModalCloseBtn');
     let bookmarkletToolModalReturnFocusEl = null;
+    let bookmarkletToolModalCleanup = null;
 
     const linearIssueSourceInput = document.getElementById('linearIssueSourceInput');
     const generateLinearIssueDraftBtn = document.getElementById('generateLinearIssueDraftBtn');
@@ -2080,10 +2082,6 @@ async function initializePanel() {
     let linearIssueContext = null;
     let linearSlackTargetsCache = { channels: [], users: [], syncedAt: '' };
     let linearSlackTargetSyncPromise = null;
-    let uuidLookupRequestSeq = 0;
-    let uuidLookupAbortController = null;
-    let uuidLookupLoadingTimer = null;
-    let lastUuidLookupUuid = '';
     const uuidLookupCache = new Map();
     const UUID_LOOKUP_CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -2102,12 +2100,16 @@ async function initializePanel() {
         }
     };
 
+    const setUuidLookupStatusFor = (statusEl, message, tone = 'neutral') => {
+        if (!statusEl) return;
+        statusEl.classList.remove('neutral', 'valid', 'invalid');
+        statusEl.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
+        statusEl.classList.remove('uuid-lookup-status', 'uuid-lookup-card-host');
+        statusEl.textContent = String(message || '').trim() || 'Paste a UUID or UUID fragment to check status.';
+    };
+
     const setUuidLookupStatus = (message, tone = 'neutral') => {
-        if (!uuidLookupStatus) return;
-        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        uuidLookupStatus.classList.add(['neutral', 'valid', 'invalid'].includes(tone) ? tone : 'neutral');
-        uuidLookupStatus.classList.remove('uuid-lookup-status', 'uuid-lookup-card-host');
-        uuidLookupStatus.textContent = String(message || '').trim() || 'Paste a UUID or UUID fragment to check status.';
+        setUuidLookupStatusFor(uuidLookupStatus, message, tone);
     };
 
     const pruneUuidLookupCache = () => {
@@ -2135,21 +2137,6 @@ async function initializePanel() {
             cachedAt: Date.now(),
             result
         });
-    };
-
-    const clearUuidLookupLoadingTimer = () => {
-        if (uuidLookupLoadingTimer !== null) {
-            window.clearTimeout(uuidLookupLoadingTimer);
-            uuidLookupLoadingTimer = null;
-        }
-    };
-
-    const cancelUuidLookupRequest = () => {
-        clearUuidLookupLoadingTimer();
-        if (uuidLookupAbortController) {
-            uuidLookupAbortController.abort();
-            uuidLookupAbortController = null;
-        }
     };
 
     const buildUuidLookupUrl = (uuid) => {
@@ -2227,19 +2214,28 @@ async function initializePanel() {
         return uuidLookupWarmPromise;
     };
 
-    const buildUuidLookupCardHtml = (result = {}, { loading = false } = {}) => {
-        if (!uuidLookupStatus) return;
-
-        const uuid = collapseText(result.uuid || uuidLookupInput?.value || '');
+    const buildUuidLookupCardHtml = (result = {}, { loading = false, fallbackUuid = '' } = {}) => {
+        const uuid = collapseText(result.uuid || fallbackUuid || '');
         const documentId = collapseText(result.documentId || '');
-        const documentStatus = collapseText(result.status || '');
-        const documentLink = collapseText(result.documentLink || result.detail || '');
+        const botJobId = collapseText(result.botJobId || '');
+        const botJobType = collapseText(result.botJobType || '');
+        const botJobStatus = collapseText(result.botJobStatus || '');
+        const botJobStatusReason = collapseText(result.botJobStatusReason || '');
+        const documentStatus = collapseText(result.status || botJobStatus || '');
+        const documentLink = collapseText(result.documentLink || '');
         const rejectionReason = collapseText(result.rejectionReason || '');
-        const displayTitle = documentId ? `Document ${documentId}` : (loading ? 'Looking up UUID' : 'Document status');
+        const displayTitle = documentId
+            ? `Document ${documentId}`
+            : botJobId
+                ? `Bot job ${formatLookupDisplayValue(botJobType) || truncateMiddleText(botJobId, 10, 8)}`
+                : (loading ? 'Looking up UUID' : 'Lookup status');
         const displaySubtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'UUID lookup';
         const normalizedStatus = documentStatus.toLowerCase();
         const prettyStatus = formatLookupDisplayValue(documentStatus) || 'Unknown';
-        const prettyReason = formatLookupDisplayValue(rejectionReason);
+        const reasonValue = rejectionReason || (!documentId ? botJobStatusReason : '');
+        const prettyReason = formatLookupDisplayValue(reasonValue);
+        const statusLabel = documentId ? 'Document Status' : botJobId ? 'Bot Job Status' : 'Lookup Status';
+        const reasonLabel = rejectionReason ? 'Rejected Reason' : 'Status Reason';
         const statusToneClass = loading
             ? 'is-neutral'
             : normalizedStatus === 'rejected'
@@ -2249,7 +2245,7 @@ async function initializePanel() {
                     : normalizedStatus
                         ? 'is-info'
                         : 'is-neutral';
-        const showReason = Boolean(loading || (normalizedStatus === 'rejected' && rejectionReason));
+        const showReason = Boolean(loading || (normalizedStatus === 'rejected' && rejectionReason) || (!documentId && botJobStatusReason));
         const reasonToneClass = rejectionReason ? 'is-warning' : 'is-neutral';
         const summaryGridClass = showReason
             ? 'uuid-status-summary-grid'
@@ -2261,7 +2257,7 @@ async function initializePanel() {
             : '';
         const reasonTagName = !loading && prettyReason ? 'button' : 'div';
         const reasonInteractiveAttrs = !loading && prettyReason
-            ? ` type="button" data-copy-value="${escapeHtml(prettyReason)}" data-copy-label="Rejected reason" title="Copy rejected reason"`
+            ? ` type="button" data-copy-value="${escapeHtml(prettyReason)}" data-copy-label="${escapeHtml(reasonLabel)}" title="Copy ${escapeHtml(reasonLabel.toLowerCase())}"`
             : '';
 
         return `
@@ -2278,12 +2274,12 @@ async function initializePanel() {
                 </div>
                 <div class="${summaryGridClass}">
                     <${statusTagName} class="practice-status-summary-card ${statusToneClass}${statusTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${statusInteractiveAttrs}>
-                        <span class="practice-status-summary-label">Document Status</span>
+                        <span class="practice-status-summary-label">${escapeHtml(statusLabel)}</span>
                         <span class="practice-status-summary-value">${escapeHtml(loading ? 'Loading' : prettyStatus)}</span>
                     </${statusTagName}>
                     ${showReason ? `
                         <${reasonTagName} class="practice-status-summary-card ${reasonToneClass}${reasonTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${reasonInteractiveAttrs}>
-                            <span class="practice-status-summary-label">Rejected Reason</span>
+                            <span class="practice-status-summary-label">${escapeHtml(reasonLabel)}</span>
                             <span class="practice-status-summary-value">${escapeHtml(loading ? 'Checking' : (prettyReason || 'N/A'))}</span>
                         </${reasonTagName}>
                     ` : ''}
@@ -2293,27 +2289,60 @@ async function initializePanel() {
     };
 
     const UUID_BATCH_RESULTS_STORAGE_KEY = 'uuidBatchCheckLatest';
+    const UUID_BATCH_RESULTS_MAX_AGE_MS = 15 * 60 * 1000;
+
+    const getUuidBatchCheckedAt = (batch) => {
+        const timestamp = Date.parse(batch?.checkedAt);
+        return Number.isFinite(timestamp) ? timestamp : 0;
+    };
+
+    const isUuidBatchFresh = (batch) => {
+        const checkedAt = getUuidBatchCheckedAt(batch);
+        if (!checkedAt) return false;
+        const ageMs = Date.now() - checkedAt;
+        return ageMs >= 0 && ageMs <= UUID_BATCH_RESULTS_MAX_AGE_MS;
+    };
+
+    const hideUuidBatchResultsFor = ({ sectionEl, listEl } = {}) => {
+        if (sectionEl) sectionEl.hidden = true;
+        if (listEl) listEl.innerHTML = '';
+    };
+
+    const hideUuidBatchResults = () => {
+        hideUuidBatchResultsFor({
+            sectionEl: uuidBatchResultsSection,
+            listEl: uuidBatchResultsList
+        });
+    };
+
+    const clearUuidBatchResults = async () => {
+        hideUuidBatchResults();
+        try {
+            await chrome.storage.local.remove(UUID_BATCH_RESULTS_STORAGE_KEY);
+        } catch {
+            // Ignore: hiding the stale panel data is the important part.
+        }
+    };
 
     // Mirrors the batch UUID checks run from the bot dashboard's on-page
     // panel (bot_dashboard_navigator.js), which writes to the same storage
     // key. Reuses buildUuidLookupCardHtml so each card matches the look of
     // the single-UUID lookup above it.
-    const renderUuidBatchResults = (batch) => {
-        if (!uuidBatchResultsSection || !uuidBatchResultsList) return;
+    const renderUuidBatchResultsFor = (batch, { sectionEl, titleEl, listEl } = {}) => {
+        if (!sectionEl || !listEl) return;
         const items = Array.isArray(batch?.items) ? batch.items : [];
-        if (!items.length) {
-            uuidBatchResultsSection.hidden = true;
-            uuidBatchResultsList.innerHTML = '';
+        if (!items.length || !isUuidBatchFresh(batch)) {
+            hideUuidBatchResultsFor({ sectionEl, listEl });
             return;
         }
 
-        if (uuidBatchResultsTitle) {
+        if (titleEl) {
             const checkedAt = Number.isFinite(Date.parse(batch?.checkedAt)) ? new Date(batch.checkedAt) : null;
             const when = checkedAt ? checkedAt.toLocaleString() : '';
-            uuidBatchResultsTitle.textContent = `Last batch check (${items.length} UUID${items.length === 1 ? '' : 's'})${when ? ` · ${when}` : ''}`;
+            titleEl.textContent = `Last batch check (${items.length} UUID${items.length === 1 ? '' : 's'})${when ? ` · ${when}` : ''}`;
         }
 
-        uuidBatchResultsList.innerHTML = items.map((item) => {
+        listEl.innerHTML = items.map((item) => {
             if (item?.error) {
                 const uuid = collapseText(item.uuid || '');
                 const subtitle = uuid ? truncateMiddleText(uuid, 14, 10) : 'UUID lookup';
@@ -2337,114 +2366,208 @@ async function initializePanel() {
             }
             return buildUuidLookupCardHtml({ ...(item?.result || {}), uuid: item?.result?.uuid || item?.uuid || '' }, { loading: false });
         }).join('');
-        uuidBatchResultsSection.hidden = false;
+        sectionEl.hidden = false;
+    };
+
+    const renderUuidBatchResults = (batch) => {
+        renderUuidBatchResultsFor(batch, {
+            sectionEl: uuidBatchResultsSection,
+            titleEl: uuidBatchResultsTitle,
+            listEl: uuidBatchResultsList
+        });
     };
 
     const loadUuidBatchResults = async () => {
         try {
             const stored = await chrome.storage.local.get(UUID_BATCH_RESULTS_STORAGE_KEY);
-            renderUuidBatchResults(stored?.[UUID_BATCH_RESULTS_STORAGE_KEY] || null);
+            const batch = stored?.[UUID_BATCH_RESULTS_STORAGE_KEY] || null;
+            if (batch && !isUuidBatchFresh(batch)) {
+                await clearUuidBatchResults();
+                return;
+            }
+            renderUuidBatchResults(batch);
         } catch (error) {
             // Ignore: this mirror view is a nice-to-have, not core panel function.
         }
     };
 
-    const renderUuidLookupLoading = (uuid = '') => {
-        if (!uuidLookupStatus) return;
-        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        uuidLookupStatus.classList.add('neutral', 'uuid-lookup-status', 'uuid-lookup-card-host');
-        uuidLookupStatus.innerHTML = buildUuidLookupCardHtml({ uuid }, { loading: true });
+    const renderUuidLookupLoadingFor = (statusEl, uuid = '') => {
+        if (!statusEl) return;
+        statusEl.classList.remove('neutral', 'valid', 'invalid');
+        statusEl.classList.add('neutral', 'uuid-lookup-status', 'uuid-lookup-card-host');
+        statusEl.innerHTML = buildUuidLookupCardHtml({ uuid }, { loading: true, fallbackUuid: uuid });
     };
 
-    const renderUuidLookupResult = (result = {}) => {
-        if (!uuidLookupStatus) return;
-        uuidLookupStatus.classList.remove('neutral', 'valid', 'invalid');
-        uuidLookupStatus.classList.add('valid', 'uuid-lookup-status', 'uuid-lookup-card-host');
-        uuidLookupStatus.innerHTML = buildUuidLookupCardHtml(result, { loading: false });
+    const renderUuidLookupResultFor = (statusEl, result = {}, fallbackUuid = '') => {
+        if (!statusEl) return;
+        statusEl.classList.remove('neutral', 'valid', 'invalid');
+        statusEl.classList.add('valid', 'uuid-lookup-status', 'uuid-lookup-card-host');
+        statusEl.innerHTML = buildUuidLookupCardHtml(result, { loading: false, fallbackUuid });
     };
 
-    const runUuidLookup = async ({ force = false } = {}) => {
-        const rawValue = String(uuidLookupInput?.value || '').trim();
-        const uuid = extractUuid(rawValue);
-        const requestSeq = ++uuidLookupRequestSeq;
+    const createUuidLookupController = ({ inputEl, statusEl, onInputStart } = {}) => {
+        let requestSeq = 0;
+        let abortController = null;
+        let loadingTimer = null;
+        let lastUuid = '';
 
-        if (!rawValue) {
-            lastUuidLookupUuid = '';
-            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
-            return '';
-        }
-
-        if (!uuid) {
-            lastUuidLookupUuid = '';
-            setUuidLookupStatus('Enter at least 6 UUID characters.', 'invalid');
-            return '';
-        }
-
-        if (uuidLookupInput && uuidLookupInput.value !== uuid) {
-            uuidLookupInput.value = uuid;
-        }
-
-        if (!force && uuid === lastUuidLookupUuid) {
-            return uuid;
-        }
-
-        lastUuidLookupUuid = uuid;
-        const cachedResult = force ? null : getCachedUuidLookup(uuid);
-        if (cachedResult) {
-            renderUuidLookupResult(cachedResult);
-            return uuid;
-        }
-
-        cancelUuidLookupRequest();
-        const controller = new AbortController();
-        let requestTimedOut = false;
-        uuidLookupAbortController = controller;
-        uuidLookupLoadingTimer = window.setTimeout(() => {
-            if (requestSeq === uuidLookupRequestSeq && lastUuidLookupUuid === uuid) {
-                renderUuidLookupLoading(uuid);
+        const clearLoadingTimer = () => {
+            if (loadingTimer !== null) {
+                window.clearTimeout(loadingTimer);
+                loadingTimer = null;
             }
-        }, UUID_LOOKUP_LOADING_DELAY_MS);
-        const timeoutId = window.setTimeout(() => {
-            requestTimedOut = true;
-            controller.abort();
-        }, UUID_LOOKUP_REQUEST_TIMEOUT_MS);
+        };
 
-        try {
-            const result = await fetchUuidLookup(uuid, { signal: controller.signal });
-            if (requestSeq !== uuidLookupRequestSeq) return uuid;
-            rememberUuidLookup(uuid, result);
-            if (!result.found || !result.status) {
-                setUuidLookupStatus(
-                    String(result.detail || `No document found for ${uuid}.`).trim(),
-                    'invalid'
-                );
+        const cancel = () => {
+            clearLoadingTimer();
+            if (abortController) {
+                abortController.abort();
+                abortController = null;
+            }
+        };
+
+        const reset = () => {
+            requestSeq += 1;
+            cancel();
+            lastUuid = '';
+            if (inputEl) inputEl.value = '';
+            setUuidLookupStatusFor(statusEl, 'Paste a UUID or UUID fragment to check status.', 'neutral');
+        };
+
+        const run = async ({ force = false, value = null } = {}) => {
+            const rawValue = String(value ?? inputEl?.value ?? '').trim();
+            const uuid = extractUuid(rawValue);
+            const currentSeq = ++requestSeq;
+
+            if (!rawValue) {
+                lastUuid = '';
+                setUuidLookupStatusFor(statusEl, 'Paste a UUID or UUID fragment to check status.', 'neutral');
+                return '';
+            }
+
+            if (!uuid) {
+                lastUuid = '';
+                setUuidLookupStatusFor(statusEl, 'Enter at least 6 UUID characters.', 'invalid');
+                return '';
+            }
+
+            if (inputEl && inputEl.value !== uuid) {
+                inputEl.value = uuid;
+            }
+
+            if (!force && uuid === lastUuid) {
                 return uuid;
             }
 
-            renderUuidLookupResult(result);
-            return uuid;
-        } catch (error) {
-            if (requestSeq !== uuidLookupRequestSeq) return uuid;
-            if (error?.name === 'AbortError' && !requestTimedOut) return uuid;
-            lastUuidLookupUuid = '';
-            setUuidLookupStatus(
-                requestTimedOut
-                    ? 'Local trigger service timed out.'
-                    : String(error?.message || 'UUID lookup failed.').trim(),
-                'invalid'
-            );
-            return uuid;
-        } finally {
-            clearUuidLookupLoadingTimer();
-            window.clearTimeout(timeoutId);
-            if (uuidLookupAbortController === controller) {
-                uuidLookupAbortController = null;
+            lastUuid = uuid;
+            const cachedResult = force ? null : getCachedUuidLookup(uuid);
+            if (cachedResult) {
+                renderUuidLookupResultFor(statusEl, cachedResult, uuid);
+                return uuid;
             }
-        }
+
+            cancel();
+            const controller = new AbortController();
+            let requestTimedOut = false;
+            abortController = controller;
+            loadingTimer = window.setTimeout(() => {
+                if (currentSeq === requestSeq && lastUuid === uuid) {
+                    renderUuidLookupLoadingFor(statusEl, uuid);
+                }
+            }, UUID_LOOKUP_LOADING_DELAY_MS);
+            const timeoutId = window.setTimeout(() => {
+                requestTimedOut = true;
+                controller.abort();
+            }, UUID_LOOKUP_REQUEST_TIMEOUT_MS);
+
+            try {
+                const result = await fetchUuidLookup(uuid, { signal: controller.signal });
+                if (currentSeq !== requestSeq) return uuid;
+                rememberUuidLookup(uuid, result);
+                if (!result.found || !result.status) {
+                    setUuidLookupStatusFor(
+                        statusEl,
+                        String(result.detail || `No document found for ${uuid}.`).trim(),
+                        'invalid'
+                    );
+                    return uuid;
+                }
+
+                renderUuidLookupResultFor(statusEl, result, uuid);
+                return uuid;
+            } catch (error) {
+                if (currentSeq !== requestSeq) return uuid;
+                if (error?.name === 'AbortError' && !requestTimedOut) return uuid;
+                lastUuid = '';
+                setUuidLookupStatusFor(
+                    statusEl,
+                    requestTimedOut
+                        ? 'Local trigger service timed out.'
+                        : String(error?.message || 'UUID lookup failed.').trim(),
+                    'invalid'
+                );
+                return uuid;
+            } finally {
+                clearLoadingTimer();
+                window.clearTimeout(timeoutId);
+                if (abortController === controller) {
+                    abortController = null;
+                }
+            }
+        };
+
+        const handleInput = () => {
+            requestSeq += 1;
+            cancel();
+            if (typeof onInputStart === 'function') onInputStart();
+            const rawValue = String(inputEl?.value || '').trim();
+            if (!rawValue) {
+                lastUuid = '';
+                setUuidLookupStatusFor(statusEl, 'Paste a UUID or UUID fragment to check status.', 'neutral');
+                return;
+            }
+
+            if (!extractUuid(rawValue)) {
+                lastUuid = '';
+                setUuidLookupStatusFor(statusEl, 'Enter at least 6 UUID characters.', 'invalid');
+                return;
+            }
+
+            run().catch(() => undefined);
+        };
+
+        const handleKeydown = (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                run({ force: true }).catch(() => undefined);
+            }
+            if (event.key === 'Escape') {
+                reset();
+            }
+        };
+
+        return {
+            run,
+            reset,
+            cancel,
+            handleInput,
+            handleKeydown,
+            warm: () => warmUuidLookupConnection().catch(() => undefined)
+        };
     };
+
+    const jobPanelUuidLookupController = createUuidLookupController({
+        inputEl: uuidLookupInput,
+        statusEl: uuidLookupStatus,
+        onInputStart: hideUuidBatchResults
+    });
 
     const closeBookmarkletToolModal = () => {
         if (!bookmarkletToolModal) return;
+        if (typeof bookmarkletToolModalCleanup === 'function') {
+            bookmarkletToolModalCleanup();
+            bookmarkletToolModalCleanup = null;
+        }
         const activeElement = document.activeElement;
         if (activeElement && bookmarkletToolModal.contains(activeElement)) {
             activeElement.blur();
@@ -2461,6 +2584,10 @@ async function initializePanel() {
 
     const openBookmarkletToolModal = (title) => {
         if (!bookmarkletToolModal) return false;
+        if (typeof bookmarkletToolModalCleanup === 'function') {
+            bookmarkletToolModalCleanup();
+            bookmarkletToolModalCleanup = null;
+        }
         bookmarkletToolModalReturnFocusEl = document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null;
@@ -3988,36 +4115,58 @@ async function initializePanel() {
             func: () => {
                 const normalize = (value) => String(value || '').trim();
                 const regex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-                const allHtml = document.body?.innerHTML || '';
-                const uniqueUuids = [...new Set((allHtml.match(regex) || []).map(item => item.toLowerCase()))];
+                const seen = new Set();
+                const rows = [];
 
-                const getRowData = (uuid) => {
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                    const normalizedUuid = String(uuid || '').toLowerCase();
-                    let node;
-                    while ((node = walker.nextNode())) {
-                        const textContent = String(node.textContent || '');
-                        if (!textContent.toLowerCase().includes(normalizedUuid)) continue;
-
-                        const parentRow = node.parentElement?.closest('tr');
-                        let dateStr = 'N/A';
-                        if (parentRow) {
-                            const cells = parentRow.querySelectorAll('td');
-                            if (cells.length >= 8) dateStr = normalize(cells[7]?.textContent);
-                        }
-                        return { raw: normalize(textContent), date: dateStr || 'N/A' };
-                    }
-                    return { raw: uuid, date: 'N/A' };
+                const isVisibleElement = (element) => {
+                    if (!(element instanceof Element)) return false;
+                    const style = window.getComputedStyle(element);
+                    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+                    const rect = element.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
                 };
 
-                return uniqueUuids.map((id) => {
-                    const row = getRowData(id);
-                    return {
+                const addUuid = (uuid, sourceText, date = 'N/A') => {
+                    const id = normalize(uuid).toLowerCase();
+                    if (!id || seen.has(id)) return;
+                    seen.add(id);
+                    rows.push({
                         id,
-                        raw: row.raw || id,
-                        date: row.date || 'N/A'
-                    };
+                        raw: normalize(sourceText) || id,
+                        date: normalize(date) || 'N/A'
+                    });
+                };
+
+                Array.from(document.querySelectorAll('tr')).forEach((row) => {
+                    if (!isVisibleElement(row)) return;
+                    const rowText = normalize(row.innerText || row.textContent);
+                    const matches = rowText.match(regex) || [];
+                    if (!matches.length) return;
+                    const cells = row.querySelectorAll('td');
+                    const date = cells.length >= 8 ? normalize(cells[7]?.innerText || cells[7]?.textContent) : 'N/A';
+                    matches.forEach((uuid) => addUuid(uuid, rowText, date));
                 });
+
+                if (rows.length) return rows;
+
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+                    acceptNode(node) {
+                        const text = String(node.textContent || '');
+                        if (!text.match(regex)) return NodeFilter.FILTER_SKIP;
+                        return isVisibleElement(node.parentElement)
+                            ? NodeFilter.FILTER_ACCEPT
+                            : NodeFilter.FILTER_SKIP;
+                    }
+                });
+
+                let node;
+                while ((node = walker.nextNode())) {
+                    const textContent = normalize(node.textContent);
+                    const matches = textContent.match(regex) || [];
+                    matches.forEach((uuid) => addUuid(uuid, textContent, 'N/A'));
+                }
+
+                return rows;
             }
         });
         return Array.isArray(result) ? result : [];
@@ -4028,10 +4177,9 @@ async function initializePanel() {
             const tab = await getActiveBetterLetterTabForTool();
             if (!tab) return;
 
-            const rows = await fetchUuidPickerRows(tab.id);
+            let rows = await fetchUuidPickerRows(tab.id);
             if (!rows.length) {
-                showToast('No UUIDs found on the active page.');
-                return;
+                showToast('No UUIDs found on the active page. Paste one to lookup status.');
             }
 
             if (!openBookmarkletToolModal('UUID Picker')) return;
@@ -4076,7 +4224,41 @@ async function initializePanel() {
             exportBtn.className = 'bookmarklet-tool-btn';
             exportBtn.textContent = 'Export';
 
-            bookmarkletToolModalActions?.append(sqlBtn, rawBtn, uuidBtn, copyAllBtn, exportBtn, searchInput, dateInput);
+            const toolbar = document.createElement('div');
+            toolbar.className = 'bookmarklet-tool-toolbar';
+            toolbar.append(sqlBtn, rawBtn, uuidBtn, copyAllBtn, exportBtn);
+
+            const filters = document.createElement('div');
+            filters.className = 'bookmarklet-tool-filter-grid';
+            filters.append(searchInput, dateInput);
+
+            const lookupPanel = document.createElement('div');
+            lookupPanel.className = 'uuid-picker-lookup-panel';
+
+            const lookupTitle = document.createElement('div');
+            lookupTitle.className = 'uuid-picker-lookup-title';
+            lookupTitle.textContent = 'Lookup status';
+
+            const lookupControls = document.createElement('div');
+            lookupControls.className = 'uuid-picker-lookup-controls';
+
+            const lookupInput = document.createElement('input');
+            lookupInput.className = 'bookmarklet-tool-input';
+            lookupInput.placeholder = 'Paste UUID or fragment to check Cloud SQL...';
+            lookupInput.autocomplete = 'off';
+
+            const lookupBtn = document.createElement('button');
+            lookupBtn.type = 'button';
+            lookupBtn.className = 'bookmarklet-tool-btn';
+            lookupBtn.textContent = 'Lookup';
+
+            lookupControls.append(lookupInput, lookupBtn);
+
+            const lookupStatus = document.createElement('div');
+            lookupStatus.className = 'validation-badge neutral uuid-picker-lookup-status';
+            lookupStatus.textContent = 'Paste a UUID or click Lookup on a row.';
+
+            lookupPanel.append(lookupTitle, lookupControls, lookupStatus);
 
             const summaryChip = document.createElement('div');
             summaryChip.className = 'bookmarklet-tool-chip';
@@ -4085,7 +4267,71 @@ async function initializePanel() {
             const list = document.createElement('div');
             list.className = 'bookmarklet-tool-list';
 
-            bookmarkletToolModalBody?.append(summaryChip, list);
+            const batchSection = document.createElement('div');
+            batchSection.className = 'uuid-batch-results-section uuid-picker-batch-results';
+            batchSection.hidden = true;
+
+            const batchHead = document.createElement('div');
+            batchHead.className = 'uuid-batch-results-head';
+
+            const batchTitle = document.createElement('span');
+            batchTitle.textContent = 'Last batch check';
+
+            const batchClearBtn = document.createElement('button');
+            batchClearBtn.type = 'button';
+            batchClearBtn.className = 'uuid-batch-results-clear-btn';
+            batchClearBtn.textContent = 'Clear';
+
+            batchHead.append(batchTitle, batchClearBtn);
+
+            const batchList = document.createElement('div');
+            batchList.className = 'uuid-picker-batch-list';
+
+            batchSection.append(batchHead, batchList);
+
+            bookmarkletToolModalBody?.append(toolbar, filters, lookupPanel, summaryChip, list, batchSection);
+
+            let rowsSourceTabId = tab.id;
+            let rowsSignature = '';
+            let refreshInFlight = false;
+            let refreshTimer = null;
+            let emptyRefreshCount = 0;
+            const buildRowsSignature = (items) => {
+                return (Array.isArray(items) ? items : [])
+                    .map((item) => `${item.id || ''}|${item.date || ''}|${item.raw || ''}`)
+                    .join('\n');
+            };
+            rowsSignature = buildRowsSignature(rows);
+
+            const pickerLookupController = createUuidLookupController({
+                inputEl: lookupInput,
+                statusEl: lookupStatus
+            });
+
+            const runPickerLookup = (uuid, { focus = true } = {}) => {
+                if (lookupInput) lookupInput.value = uuid || '';
+                if (focus) lookupInput.focus();
+                return pickerLookupController.run({ force: true });
+            };
+
+            const loadPickerBatchResults = async () => {
+                try {
+                    const stored = await chrome.storage.local.get(UUID_BATCH_RESULTS_STORAGE_KEY);
+                    const batch = stored?.[UUID_BATCH_RESULTS_STORAGE_KEY] || null;
+                    if (batch && !isUuidBatchFresh(batch)) {
+                        await clearUuidBatchResults();
+                        hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
+                        return;
+                    }
+                    renderUuidBatchResultsFor(batch, {
+                        sectionEl: batchSection,
+                        titleEl: batchTitle,
+                        listEl: batchList
+                    });
+                } catch {
+                    hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
+                }
+            };
 
             const getVisibleRows = () => {
                 const query = searchInput.value.trim().toLowerCase();
@@ -4114,7 +4360,10 @@ async function initializePanel() {
                 list.innerHTML = '';
                 visibleRows.forEach((item) => {
                     const rowEl = document.createElement('div');
-                    rowEl.className = 'bookmarklet-tool-item';
+                    rowEl.className = 'bookmarklet-tool-item uuid-picker-row';
+
+                    const rowContent = document.createElement('div');
+                    rowContent.className = 'uuid-picker-row-content';
 
                     const main = document.createElement('div');
                     main.className = 'bookmarklet-tool-item-main';
@@ -4124,17 +4373,71 @@ async function initializePanel() {
                     meta.className = 'bookmarklet-tool-item-meta';
                     meta.textContent = `Date: ${item.date || 'N/A'}`;
 
-                    rowEl.append(main, meta);
+                    rowContent.append(main, meta);
+
+                    const rowLookupBtn = document.createElement('button');
+                    rowLookupBtn.type = 'button';
+                    rowLookupBtn.className = 'bookmarklet-tool-btn uuid-picker-row-lookup-btn';
+                    rowLookupBtn.textContent = 'Lookup';
+                    rowLookupBtn.title = 'Check this UUID in Cloud SQL';
+
+                    rowEl.append(rowContent, rowLookupBtn);
                     rowEl.addEventListener('click', async () => {
                         const copied = await copyTextToClipboard(getDisplayValue(item));
                         showToast(copied ? 'Copied.' : 'Copy failed.');
+                    });
+                    rowLookupBtn.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        runPickerLookup(item.id).catch(() => undefined);
                     });
                     list.appendChild(rowEl);
                 });
             };
 
+            const refreshRowsFromActiveTab = async () => {
+                if (refreshInFlight || !bookmarkletToolModal?.classList.contains('is-open')) return;
+                refreshInFlight = true;
+                try {
+                    const activeTab = await getBestBetterLetterTab();
+                    if (!activeTab?.id) return;
+                    const nextRows = await fetchUuidPickerRows(activeTab.id);
+                    const nextSignature = buildRowsSignature(nextRows);
+                    if (!nextRows.length && rows.length && activeTab.id === rowsSourceTabId) {
+                        emptyRefreshCount += 1;
+                        if (emptyRefreshCount < 2) return;
+                    } else {
+                        emptyRefreshCount = 0;
+                    }
+                    if (activeTab.id !== rowsSourceTabId || nextSignature !== rowsSignature) {
+                        rows = nextRows;
+                        rowsSourceTabId = activeTab.id;
+                        rowsSignature = nextSignature;
+                        render();
+                    }
+                } catch (error) {
+                    // Ignore transient tab changes while the dashboard is still rendering.
+                } finally {
+                    refreshInFlight = false;
+                }
+            };
+
+            const handleUuidPickerFocus = () => {
+                refreshRowsFromActiveTab().catch(() => undefined);
+            };
+
             searchInput.addEventListener('input', render);
             dateInput.addEventListener('input', render);
+            lookupInput.addEventListener('input', pickerLookupController.handleInput);
+            lookupInput.addEventListener('focus', pickerLookupController.warm);
+            lookupInput.addEventListener('keydown', pickerLookupController.handleKeydown);
+            lookupBtn.addEventListener('click', () => pickerLookupController.run({ force: true }).catch(() => undefined));
+            lookupStatus.addEventListener('click', handleUuidCardClick);
+            batchList.addEventListener('click', handleUuidCardClick);
+            batchClearBtn.addEventListener('click', () => {
+                clearUuidBatchResults().catch(() => undefined);
+                hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
+            });
             sqlBtn.addEventListener('click', () => setMode('SQL'));
             rawBtn.addEventListener('click', () => setMode('RAW'));
             uuidBtn.addEventListener('click', () => setMode('UUID'));
@@ -4158,6 +4461,20 @@ async function initializePanel() {
             });
 
             render();
+            loadPickerBatchResults().catch(() => undefined);
+            refreshTimer = window.setInterval(() => {
+                refreshRowsFromActiveTab().catch(() => undefined);
+            }, 2000);
+            window.addEventListener('focus', handleUuidPickerFocus);
+            document.addEventListener('visibilitychange', handleUuidPickerFocus);
+            bookmarkletToolModalCleanup = () => {
+                if (refreshTimer !== null) {
+                    window.clearInterval(refreshTimer);
+                    refreshTimer = null;
+                }
+                window.removeEventListener('focus', handleUuidPickerFocus);
+                document.removeEventListener('visibilitychange', handleUuidPickerFocus);
+            };
             searchInput.focus();
         } catch (error) {
             console.error('UUID picker failed:', error);
@@ -5709,40 +6026,9 @@ ${error?.message || String(error)}`, 'invalid');
         if (event.key === 'Escape') hideDashboardAutocomplete(jobIdAutocompleteResultsContainer);
     });
 
-    uuidLookupInput?.addEventListener('input', () => {
-        uuidLookupRequestSeq += 1;
-        cancelUuidLookupRequest();
-        const rawValue = String(uuidLookupInput.value || '').trim();
-        if (!rawValue) {
-            lastUuidLookupUuid = '';
-            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
-            return;
-        }
-
-        if (!extractUuid(rawValue)) {
-            lastUuidLookupUuid = '';
-            setUuidLookupStatus('Enter at least 6 UUID characters.', 'invalid');
-            return;
-        }
-
-        runUuidLookup().catch(() => undefined);
-    });
-    uuidLookupInput?.addEventListener('focus', () => {
-        warmUuidLookupConnection().catch(() => undefined);
-    });
-    uuidLookupInput?.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            runUuidLookup().catch(() => undefined);
-        }
-        if (event.key === 'Escape') {
-            uuidLookupRequestSeq += 1;
-            cancelUuidLookupRequest();
-            lastUuidLookupUuid = '';
-            uuidLookupInput.value = '';
-            setUuidLookupStatus('Paste a UUID or UUID fragment to check status.', 'neutral');
-        }
-    });
+    uuidLookupInput?.addEventListener('input', jobPanelUuidLookupController.handleInput);
+    uuidLookupInput?.addEventListener('focus', jobPanelUuidLookupController.warm);
+    uuidLookupInput?.addEventListener('keydown', jobPanelUuidLookupController.handleKeydown);
     const handleUuidCardClick = async (event) => {
         if (!(event.target instanceof Element)) return;
 
@@ -5766,10 +6052,18 @@ ${error?.message || String(error)}`, 'invalid');
     };
     uuidLookupStatus?.addEventListener('click', handleUuidCardClick);
     uuidBatchResultsList?.addEventListener('click', handleUuidCardClick);
+    uuidBatchResultsClearBtn?.addEventListener('click', () => {
+        clearUuidBatchResults().catch(() => undefined);
+    });
     loadUuidBatchResults().catch(() => undefined);
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local' && changes[UUID_BATCH_RESULTS_STORAGE_KEY]) {
-            renderUuidBatchResults(changes[UUID_BATCH_RESULTS_STORAGE_KEY].newValue || null);
+            const batch = changes[UUID_BATCH_RESULTS_STORAGE_KEY].newValue || null;
+            if (batch && !isUuidBatchFresh(batch)) {
+                clearUuidBatchResults().catch(() => undefined);
+                return;
+            }
+            renderUuidBatchResults(batch);
         }
     });
     docmanToolStatus?.addEventListener('click', async (event) => {
