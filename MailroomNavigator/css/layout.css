@@ -48,6 +48,44 @@ h1::after {
     transition: var(--transition);
 }
 
+.docked-panel-header {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    padding: 4px 16px 8px;
+    margin: -10px -10px 12px;
+    background: linear-gradient(180deg, #f7f8fb 0%, rgba(247, 248, 251, 0.96) 100%);
+    border-bottom: 1px solid #d9e3ef;
+    box-sizing: border-box;
+}
+
+body.bl-panel-single-view .docked-panel-header {
+    display: flex;
+}
+
+body.bl-panel-single-tool .docked-panel-header {
+    margin: 0 0 0;
+}
+
+.docked-panel-header h1 {
+    margin: 0;
+    width: 100%;
+    border-bottom: none;
+    padding-bottom: 4px;
+}
+
+.docked-panel-header h1::after {
+    bottom: 0;
+}
+
+body.bl-panel-single-view #practiceNavigatorCoreSection > h1 {
+    display: none;
+}
+
 h3 {
     margin-top: 0;
     margin-bottom: 12px;
@@ -914,6 +952,11 @@ label {
 .email-formatter-container, .job-manager-container {
     position: relative;
     padding-top: 20px;
+}
+
+body.bl-panel-single-view .email-formatter-container,
+body.bl-panel-single-view .job-manager-container {
+    padding-top: 0;
 }
 
 .back-to-nav-btn:hover {

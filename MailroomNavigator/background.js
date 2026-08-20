@@ -5379,7 +5379,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 // grid instead, since splitting all four out separately
                 // wasn't worth 4 handles for tools used less often.
                 { key: 'uuidpicker', view: 'bookmarkletToolsView', tool: 'uuidPicker', label: 'UUID Picker', color: '#d97706' },
-                { key: 'bookmarklettools', view: 'bookmarkletToolsView', label: 'Bookmarklet Tools', color: '#d97706' }
+                { key: 'bookmarklettools', view: 'bookmarkletToolsView', label: 'Bookmarklet Tools', color: '#708238' }
             ];
             const STYLE_ID = 'bl-allinone-sidebar-style';
             const DOCK_ID = 'bl-allinone-sidebar-dock';
@@ -5387,6 +5387,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             const PANEL_WIDTH = 360;
             const HANDLE_WIDTH = 28;
             const PENDING_KEY = '__BL_SIDEBAR_MOUNT_PENDING__';
+            const ORDER_STORAGE_KEY = '__BL_MAILROOM_NAVIGATOR_SIDEBAR_ORDER__';
             // Bump this whenever this injected UI's DOM/CSS structure
             // changes. mountOne/ensureRailMounted/ensureStyleInjected all
             // skip rebuilding anything that already has the expected id, so
@@ -5396,10 +5397,37 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '8';
+            const UI_VERSION = '19';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
+            const getViewByKey = (key) => VIEWS.find((viewConfig) => viewConfig.key === key) || null;
+            const getOrderedViews = () => {
+                let storedKeys = [];
+                try {
+                    const parsed = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) || '[]');
+                    if (Array.isArray(parsed)) storedKeys = parsed.map((key) => String(key || '').trim()).filter(Boolean);
+                } catch {
+                    storedKeys = [];
+                }
+                const knownKeys = new Set(VIEWS.map(({ key }) => key));
+                const orderedKeys = [
+                    ...storedKeys.filter((key, index, list) => knownKeys.has(key) && list.indexOf(key) === index),
+                    ...VIEWS.map(({ key }) => key).filter((key) => !storedKeys.includes(key))
+                ];
+                return orderedKeys.map(getViewByKey).filter(Boolean);
+            };
+            const persistRailOrder = (rail) => {
+                if (!rail) return;
+                const keys = Array.from(rail.querySelectorAll('.bl-sidebar-toggle'))
+                    .map((button) => button.dataset.key)
+                    .filter(Boolean);
+                try {
+                    window.localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(keys));
+                } catch {
+                    // Drag order is UI polish; ignore storage failures.
+                }
+            };
             const buildExpectedSrc = (view, tool) => {
                 const url = new URL(panelUrl);
                 url.searchParams.set('hostTabId', String(hostTabId || ''));
@@ -5416,7 +5444,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 iframeEl.dataset.loadedSrc = expectedSrc;
             };
             const collapseAllExcept = (keepKey) => {
-                VIEWS.forEach(({ key }) => {
+                getOrderedViews().forEach(({ key }) => {
                     if (key === keepKey) return;
                     const otherPanel = document.getElementById(rootIdFor(key));
                     if (otherPanel) otherPanel.classList.add('collapsed');
@@ -5425,12 +5453,19 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             const syncRailState = () => {
                 const rail = document.getElementById(RAIL_ID);
                 if (!rail) return;
-                VIEWS.forEach(({ key }) => {
+                getOrderedViews().forEach(({ key }) => {
                     const panelEl = document.getElementById(rootIdFor(key));
                     const isOpen = Boolean(panelEl && !panelEl.classList.contains('collapsed'));
                     const button = rail.querySelector(`[data-key="${key}"]`);
                     if (button) button.classList.toggle('is-open', isOpen);
                 });
+            };
+            const collapseAllPanels = () => {
+                getOrderedViews().forEach(({ key }) => {
+                    const panelEl = document.getElementById(rootIdFor(key));
+                    if (panelEl) panelEl.classList.add('collapsed');
+                });
+                syncRailState();
             };
             const spawnRipple = (button, event) => {
                 const rect = button.getBoundingClientRect();
@@ -5489,6 +5524,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             box-shadow: none;
                             transition: width 0.28s ${EASE}, border-left-width 0.28s ${EASE}, box-shadow 0.28s ${EASE};
                             pointer-events: auto;
+                            z-index: 1;
                         }
 
                         .bl-allinone-sidebar-root:not(.collapsed) {
@@ -5516,9 +5552,10 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             height: 100%;
                             display: flex;
                             flex-direction: column;
-                            gap: 10px;
-                            padding-top: 64px;
+                            gap: 8px;
+                            padding-top: 24px;
                             pointer-events: none;
+                            z-index: 2;
                         }
 
                         .bl-sidebar-toggle {
@@ -5549,6 +5586,33 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                                         transform 0.2s ${EASE};
                         }
 
+                        .bl-sidebar-toggle::after {
+                            content: '';
+                            position: absolute;
+                            top: -1px;
+                            bottom: -1px;
+                            right: 0;
+                            width: 0;
+                            background: transparent;
+                            pointer-events: none;
+                        }
+
+                        .bl-sidebar-collapse-toggle {
+                            min-height: 40px;
+                            color: #475569;
+                            margin-bottom: 8px;
+                        }
+
+                        .bl-sidebar-toggle.is-dragging {
+                            opacity: 0.42;
+                            transform: translateX(4px) scale(0.98);
+                        }
+
+                        .bl-sidebar-toggle.is-drag-over {
+                            outline: 2px solid color-mix(in srgb, var(--tab-color, #1f2937) 65%, white);
+                            outline-offset: 2px;
+                        }
+
                         /* Rotating just the label (not the whole button) so
                            the button's own box - rounded corners, borders,
                            ripple - stays unaffected. vertical-rl + a 180deg
@@ -5573,12 +5637,23 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                         }
 
                         .bl-sidebar-toggle.is-open {
-                            background: var(--tab-color, #1f2937);
-                            border-color: var(--tab-color, #1f2937);
-                            color: #ffffff;
-                            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.32), 0 1px 3px rgba(15, 23, 42, 0.2);
-                            transform: translateX(4px);
-                            animation: bl-sidebar-tab-pop 0.32s ${SPRING};
+                            background: var(--tab-color, #1f2937) !important;
+                            border-color: var(--tab-color, #1f2937) !important;
+                            color: #ffffff !important;
+                            border-right: none !important;
+                            border-radius: 10px 0 0 10px !important;
+                            width: ${HANDLE_WIDTH}px !important;
+                            margin-right: 0 !important;
+                            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18) !important;
+                            transform: none !important;
+                            overflow: hidden !important;
+                            z-index: 3;
+                            animation: none !important;
+                        }
+
+                        .bl-sidebar-toggle.is-open::after {
+                            width: 0;
+                            background: transparent;
                         }
 
                         .bl-sidebar-toggle.is-open:hover {
@@ -5587,8 +5662,8 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
                         @keyframes bl-sidebar-tab-pop {
                             0% { transform: translateX(0) scale(1); }
-                            55% { transform: translateX(7px) scale(1.06); }
-                            100% { transform: translateX(4px) scale(1); }
+                            55% { transform: translateX(0) scale(1.03); }
+                            100% { transform: translateX(0) scale(1); }
                         }
 
                         .bl-sidebar-toggle-ripple {
@@ -5673,11 +5748,30 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 const rail = document.createElement('div');
                 rail.id = RAIL_ID;
                 rail.className = 'bl-allinone-handle-rail';
+                let draggedKey = '';
+                let suppressNextClick = false;
 
-                VIEWS.forEach(({ key, view, tool, label, color }) => {
+                const collapseButton = document.createElement('button');
+                collapseButton.type = 'button';
+                collapseButton.className = 'bl-sidebar-toggle bl-sidebar-collapse-toggle';
+                collapseButton.dataset.role = 'collapse';
+                collapseButton.style.setProperty('--tab-color', '#64748b');
+                collapseButton.title = 'Collapse panel';
+                collapseButton.setAttribute('aria-label', 'Collapse panel');
+                collapseButton.innerHTML = '<span class="bl-sidebar-toggle-label">Close</span>';
+                collapseButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    spawnRipple(collapseButton, event);
+                    collapseAllPanels();
+                });
+                rail.appendChild(collapseButton);
+
+                getOrderedViews().forEach(({ key, view, tool, label, color }) => {
                     const toggleButton = document.createElement('button');
                     toggleButton.type = 'button';
                     toggleButton.className = 'bl-sidebar-toggle';
+                    toggleButton.draggable = true;
                     toggleButton.dataset.role = 'toggle';
                     toggleButton.dataset.key = key;
                     toggleButton.style.setProperty('--tab-color', color);
@@ -5692,6 +5786,10 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                     toggleButton.addEventListener('click', (event) => {
                         event.preventDefault();
                         event.stopPropagation();
+                        if (suppressNextClick) {
+                            suppressNextClick = false;
+                            return;
+                        }
                         spawnRipple(toggleButton, event);
                         const panelEl = document.getElementById(rootIdFor(key));
                         if (!panelEl) return;
@@ -5702,6 +5800,52 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             collapseAllExcept(key);
                         }
                         syncRailState();
+                    });
+
+                    toggleButton.addEventListener('dragstart', (event) => {
+                        draggedKey = key;
+                        toggleButton.classList.add('is-dragging');
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', key);
+                    });
+
+                    toggleButton.addEventListener('dragover', (event) => {
+                        if (!draggedKey || draggedKey === key) return;
+                        event.preventDefault();
+                        suppressNextClick = true;
+                        event.dataTransfer.dropEffect = 'move';
+                        const draggedButton = rail.querySelector(`[data-key="${draggedKey}"]`);
+                        if (!draggedButton) return;
+                        const rect = toggleButton.getBoundingClientRect();
+                        const insertAfter = event.clientY > rect.top + rect.height / 2;
+                        rail.insertBefore(draggedButton, insertAfter ? toggleButton.nextSibling : toggleButton);
+                        toggleButton.classList.add('is-drag-over');
+                    });
+
+                    toggleButton.addEventListener('dragleave', () => {
+                        toggleButton.classList.remove('is-drag-over');
+                    });
+
+                    toggleButton.addEventListener('drop', (event) => {
+                        if (!draggedKey) return;
+                        event.preventDefault();
+                        suppressNextClick = true;
+                        persistRailOrder(rail);
+                        syncRailState();
+                    });
+
+                    toggleButton.addEventListener('dragend', () => {
+                        draggedKey = '';
+                        rail.querySelectorAll('.bl-sidebar-toggle').forEach((button) => {
+                            button.classList.remove('is-dragging', 'is-drag-over');
+                        });
+                        persistRailOrder(rail);
+                        syncRailState();
+                        if (suppressNextClick) {
+                            window.setTimeout(() => {
+                                suppressNextClick = false;
+                            }, 250);
+                        }
                     });
 
                     rail.appendChild(toggleButton);
@@ -5730,7 +5874,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 cleanupStaleUi();
                 ensureStyleInjected();
                 ensureRailMounted();
-                VIEWS.forEach(mountOne);
+                getOrderedViews().forEach(mountOne);
                 syncRailState();
             };
 
