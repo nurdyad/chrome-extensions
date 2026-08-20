@@ -3219,12 +3219,41 @@ ${hiddenBlock}
         return element;
     }
 
+    function applyBotDashboardFilterToggleButtonState(button) {
+        const isActive = hasActiveBotDashboardFilters();
+        const isExpanded = loadBotDashboardFilterPanelExpanded();
+        button.textContent = isExpanded
+            ? 'Hide Filters'
+            : `Filters${isActive ? ' (active)' : ''}`;
+        Object.assign(button.style, {
+            color: isActive ? '#1d4ed8' : '#334155',
+            background: isExpanded ? '#dbeafe' : '#eff6ff',
+            border: `1px solid ${isActive ? '#93c5fd' : '#cbd5e1'}`,
+            borderRadius: '6px',
+            padding: '5px 10px',
+            fontSize: '12px'
+        });
+    }
+
     function attachBotDashboardFilterToggleButton() {
         const existingHost = document.getElementById(BOT_DASHBOARD_FILTER_TOGGLE_HOST_ID);
         if (!isBotDashboardPage()) {
             existingHost?.remove();
             botDashboardAnchorDebugLogged = false;
             return null;
+        }
+
+        // Once attached and still connected to the page, skip the expensive
+        // full-page anchor search (querySelectorAll over div/button/span/
+        // select/a plus per-candidate getBoundingClientRect, which forces
+        // layout) on every mutation-triggered re-render; just refresh the
+        // button's own label/state. Only re-run the search if the host was
+        // never created yet, or got detached (e.g. the page replaced its
+        // container during its own re-render).
+        const existingButton = existingHost?.isConnected ? existingHost.querySelector('button') : null;
+        if (existingButton) {
+            applyBotDashboardFilterToggleButtonState(existingButton);
+            return existingHost;
         }
 
         const anchor = findBotDashboardPracticeDropdownAnchor();
@@ -3243,9 +3272,6 @@ ${hiddenBlock}
             verticalAlign: 'middle'
         });
 
-        const isActive = hasActiveBotDashboardFilters();
-        const isExpanded = loadBotDashboardFilterPanelExpanded();
-
         let button = host.querySelector('button');
         if (!button) {
             button = createButton({
@@ -3260,17 +3286,7 @@ ${hiddenBlock}
             host.appendChild(button);
         }
 
-        button.textContent = isExpanded
-            ? 'Hide Filters'
-            : `Filters${isActive ? ' (active)' : ''}`;
-        Object.assign(button.style, {
-            color: isActive ? '#1d4ed8' : '#334155',
-            background: isExpanded ? '#dbeafe' : '#eff6ff',
-            border: `1px solid ${isActive ? '#93c5fd' : '#cbd5e1'}`,
-            borderRadius: '6px',
-            padding: '5px 10px',
-            fontSize: '12px'
-        });
+        applyBotDashboardFilterToggleButtonState(button);
 
         const insertionPoint = findFlexRowInsertionPoint(anchor);
         if (host.parentElement !== insertionPoint.parentElement || host.previousElementSibling !== insertionPoint) {
