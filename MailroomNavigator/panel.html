@@ -92,6 +92,9 @@
     body.bl-panel-bookmarklet-suite #bookmarkletInlineTools {
       display: block !important;
     }
+    body.bl-panel-bookmarklet-suite #bookmarkletToolsSection {
+      display: none !important;
+    }
     /* UUID Picker's own dedicated handle still uses the modal system (just
        auto-triggered on load); strip its dialog chrome - dimmed backdrop,
        centered floating card, rounded corners/shadow - so it fills the
@@ -99,7 +102,7 @@
     body.bl-panel-single-tool .bookmarklet-tool-modal,
     body.bl-panel-single-tool .bookmarklet-tool-modal.is-open {
       position: fixed !important;
-      inset: 0 !important;
+      inset: 56px 0 0 0 !important;
       display: flex !important;
       align-items: stretch !important;
       justify-content: stretch !important;
@@ -110,15 +113,17 @@
       background: none !important;
       padding: 0 !important;
       overflow: hidden !important;
+      overflow-x: hidden !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-card {
       width: 100% !important;
       min-width: 0 !important;
       max-width: none !important;
-      height: 100vh !important;
+      height: calc(100vh - 56px) !important;
       max-height: none !important;
       border-radius: 0 !important;
       box-shadow: none !important;
+      overflow-x: hidden !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-header,
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions,
@@ -128,14 +133,14 @@
       box-sizing: border-box !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-header {
-      justify-content: center !important;
-      padding: 10px 12px !important;
+      display: none !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions {
       display: grid !important;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       padding: 10px 12px !important;
+      overflow-x: hidden !important;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-actions .bookmarklet-tool-btn {
       width: 100%;
@@ -146,10 +151,19 @@
       grid-column: 1 / -1;
       width: 100%;
       min-width: 0;
+      max-width: 100%;
       box-sizing: border-box;
     }
     body.bl-panel-single-tool .bookmarklet-tool-modal-body {
       padding: 0 12px 12px !important;
+      overflow-x: hidden !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-list,
+    body.bl-panel-single-tool .bookmarklet-tool-item {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
     body.bl-panel-single-tool .bookmarklet-tool-item-main {
       font-size: 12px;
@@ -305,6 +319,9 @@
     </div>
 
     <div class="panel-body-content">
+    <div id="dockedPanelHeader" class="docked-panel-header" hidden>
+      <h1 id="dockedPanelTitle">Mailroom Navigator</h1>
+    </div>
     <!-- View 1: Practice Navigator -->
     <div id="practiceNavigatorView" class="view-transition">
       <div id="practiceNavigatorCoreSection">

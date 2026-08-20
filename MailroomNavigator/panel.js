@@ -79,6 +79,15 @@ const VIEW_FEATURE_REQUIREMENTS = {
     emailFormatterView: LINEAR_VIEW_FEATURE_KEYS,
     bookmarkletToolsView: BOOKMARKLET_VIEW_FEATURE_KEYS
 };
+const DOCKED_PANEL_TITLES = {
+    practiceNavigatorView: 'Practice Navigator',
+    jobManagerView: 'Job Panel',
+    emailFormatterView: 'Others',
+    bookmarkletToolsView: 'Bookmarklet Tools'
+};
+const DOCKED_TOOL_TITLES = {
+    uuidPicker: 'UUID Picker'
+};
 
 function buildDefaultFeatureAccess() {
     return Object.fromEntries(EXTENSION_FEATURE_KEYS.map((featureKey) => [featureKey, false]));
@@ -221,6 +230,16 @@ function showView(viewId, { force = false } = {}) {
     });
     const activeBtn = document.getElementById(navIds[resolvedViewId]);
     if (activeBtn) activeBtn.classList.add('active-tab');
+}
+
+function setupDockedPanelHeader() {
+    const header = document.getElementById('dockedPanelHeader');
+    const titleEl = document.getElementById('dockedPanelTitle');
+    if (!header || !PANEL_FORCED_VIEW_ID) return;
+
+    const title = DOCKED_TOOL_TITLES[PANEL_FORCED_TOOL_ID] || DOCKED_PANEL_TITLES[PANEL_FORCED_VIEW_ID] || 'Mailroom Navigator';
+    if (titleEl) titleEl.textContent = title;
+    header.hidden = false;
 }
 
 async function fetchExtensionAccessState({ forceRefresh = false, allowStale = false } = {}) {
@@ -809,6 +828,7 @@ async function initializePanel() {
     if (isBookmarkletToolsSuite) {
         document.body.classList.add('bl-panel-bookmarklet-suite');
     }
+    setupDockedPanelHeader();
 
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
