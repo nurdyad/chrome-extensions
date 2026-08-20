@@ -34,15 +34,15 @@ const PANEL_FORCED_VIEW_ID = (() => {
         return null;
     }
 })();
-// Set alongside PANEL_FORCED_VIEW_ID when this docked panel is one of the
-// individual bookmarklet-tool handles (UUID Picker, Custom Workflow, Docman
-// Groups, Email Formatter each get their own handle rather than one shared
-// "Bookmarklet Tools" handle whose launch grid needed a second click).
-// Triggers that tool's modal immediately and hides the launch grid.
+// Set alongside PANEL_FORCED_VIEW_ID when this docked panel is UUID
+// Picker's own dedicated handle (it's used often enough on its own to
+// warrant opening straight to it, unlike Custom Workflow/Docman
+// Groups/Email Formatter, which share the "Bookmarklet Tools" handle and
+// its launch grid). Triggers that tool's modal immediately.
 const PANEL_FORCED_TOOL_ID = (() => {
     try {
         const rawValue = String(new URLSearchParams(window.location.search).get('tool') || '').trim();
-        const validToolIds = ['uuidPicker', 'workflowGroups', 'docmanGroups', 'emailFormatter'];
+        const validToolIds = ['uuidPicker'];
         return validToolIds.includes(rawValue) ? rawValue : null;
     } catch (error) {
         return null;
@@ -555,6 +555,13 @@ function applyExtensionFeatureAccessToUi() {
     setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
     setElementVisible('runEmailFormatterToolBtn', hasExtensionFeature('email_formatter'));
     setElementVisible('runWorkflowGroupsToolBtn', hasExtensionFeature('workflow_groups'));
+    // Same gating as the launch-grid buttons above, applied to the inline
+    // cards shown instead of that grid on the merged "Bookmarklet Tools"
+    // docked handle - a card whose feature isn't granted shouldn't render
+    // as an empty title with nothing underneath it.
+    setElementVisible('inlineWorkflowGroupsCard', hasExtensionFeature('workflow_groups'));
+    setElementVisible('inlineDocmanGroupsCard', hasExtensionFeature('bookmarklet_tools'));
+    setElementVisible('inlineEmailFormatterCard', hasExtensionFeature('email_formatter'));
     setElementVisible(
         'linearIssueSection',
         serverlessLiteMode || hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
@@ -793,6 +800,14 @@ async function initializePanel() {
     }
     if (PANEL_FORCED_TOOL_ID) {
         document.body.classList.add('bl-panel-single-tool');
+    }
+    // The shared "Bookmarklet Tools" docked handle (no specific tool
+    // forced) shows Custom Workflow/Docman Groups/Email Formatter inline
+    // together instead of behind a launch-grid click - see the eager-load
+    // trigger further down and bl-panel-bookmarklet-suite in panel.html.
+    const isBookmarkletToolsSuite = PANEL_FORCED_VIEW_ID === 'bookmarkletToolsView' && !PANEL_FORCED_TOOL_ID;
+    if (isBookmarkletToolsSuite) {
+        document.body.classList.add('bl-panel-bookmarklet-suite');
     }
 
     // A. Visual Cleanup
@@ -2436,6 +2451,23 @@ async function initializePanel() {
         bookmarkletToolModal.setAttribute('aria-hidden', 'false');
         bookmarkletToolModalCloseBtn?.focus({ preventScroll: true });
         return true;
+    };
+
+    // The bookmarklet tool builders (openWorkflowGroupsModal etc.) each
+    // render into a target {actionsEl, bodyEl} pair. By default that's the
+    // shared floating modal (used by the standalone popup window's launch
+    // grid); on the docked "Bookmarklet Tools" handle, all three tools
+    // instead render inline at once into their own persistent cards (see
+    // bl-panel-bookmarklet-suite in initializePanel), so a target is
+    // passed explicitly there and no modal is opened at all.
+    const resolveBookmarkletTarget = (target, modalTitle) => {
+        if (target) {
+            if (target.actionsEl) target.actionsEl.innerHTML = '';
+            if (target.bodyEl) target.bodyEl.innerHTML = '';
+            return target;
+        }
+        if (!openBookmarkletToolModal(modalTitle)) return null;
+        return { actionsEl: bookmarkletToolModalActions, bodyEl: bookmarkletToolModalBody };
     };
 
     bookmarkletToolModalCloseBtn?.addEventListener('click', closeBookmarkletToolModal);
@@ -4134,7 +4166,7 @@ async function initializePanel() {
         return Array.isArray(result) ? result : [];
     };
 
-    const openDocmanGroupsModal = async () => {
+    const openDocmanGroupsModal = async (target) => {
         try {
             const tab = await getActiveBetterLetterTabForTool();
             if (!tab) return;
@@ -4145,7 +4177,9 @@ async function initializePanel() {
                 return;
             }
 
-            if (!openBookmarkletToolModal('Docman Group Names')) return;
+            const resolved = resolveBookmarkletTarget(target, 'Docman Group Names');
+            if (!resolved) return;
+            const { actionsEl, bodyEl } = resolved;
 
             const countChip = document.createElement('div');
             countChip.className = 'bookmarklet-tool-chip';
@@ -4156,7 +4190,7 @@ async function initializePanel() {
             copyBtn.className = 'bookmarklet-tool-btn';
             copyBtn.textContent = 'Copy All';
 
-            bookmarkletToolModalActions?.append(countChip, copyBtn);
+            actionsEl?.append(countChip, copyBtn);
 
             const textarea = document.createElement('textarea');
             textarea.value = groups.join('\n');
@@ -4168,15 +4202,17 @@ async function initializePanel() {
             textarea.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
             textarea.style.fontSize = '12px';
 
-            bookmarkletToolModalBody?.appendChild(textarea);
+            bodyEl?.appendChild(textarea);
 
             copyBtn.addEventListener('click', async () => {
                 const copied = await copyTextToClipboard(textarea.value);
                 showToast(copied ? `Copied ${groups.length} group names.` : 'Copy failed.');
             });
 
-            textarea.focus();
-            textarea.select();
+            if (!target) {
+                textarea.focus();
+                textarea.select();
+            }
         } catch (error) {
             console.error('Docman groups failed:', error);
             showToast('Docman groups tool failed.');
@@ -4203,8 +4239,10 @@ async function initializePanel() {
         };
     };
 
-    const openEmailFormatterModal = () => {
-        if (!openBookmarkletToolModal('Email Formatter')) return;
+    const openEmailFormatterModal = (target) => {
+        const resolved = resolveBookmarkletTarget(target, 'Email Formatter');
+        if (!resolved) return;
+        const { actionsEl, bodyEl } = resolved;
 
         const convertBtn = document.createElement('button');
         convertBtn.type = 'button';
@@ -4225,7 +4263,7 @@ async function initializePanel() {
         countChip.className = 'bookmarklet-tool-chip';
         countChip.textContent = '0 entries';
 
-        bookmarkletToolModalActions?.append(convertBtn, nameOnlyBtn, copyBtn, countChip);
+        actionsEl?.append(convertBtn, nameOnlyBtn, copyBtn, countChip);
 
         const layout = document.createElement('div');
         layout.className = 'bookmarklet-tool-stack';
@@ -4248,7 +4286,7 @@ async function initializePanel() {
         outputTextarea.readOnly = true;
 
         layout.append(inputLabel, inputTextarea, outputLabel, outputTextarea);
-        bookmarkletToolModalBody?.appendChild(layout);
+        bodyEl?.appendChild(layout);
 
         let outputMode = 'formatted';
 
@@ -4282,7 +4320,7 @@ async function initializePanel() {
         inputTextarea.addEventListener('input', renderOutput);
 
         renderOutput();
-        inputTextarea.focus();
+        if (!target) inputTextarea.focus();
     };
 
     const parseWorkflowNames = (rawValue) => String(rawValue || '')
@@ -5371,8 +5409,10 @@ ${error?.message || String(error)}`, 'invalid');
         }
     };
 
-    const openWorkflowGroupsModal = async () => {
-        if (!openBookmarkletToolModal('Custom Workflow Groups')) return;
+    const openWorkflowGroupsModal = async (target) => {
+        const resolved = resolveBookmarkletTarget(target, 'Custom Workflow Groups');
+        if (!resolved) return;
+        const { actionsEl, bodyEl } = resolved;
 
         const runBtn = document.createElement('button');
         runBtn.type = 'button';
@@ -5384,7 +5424,7 @@ ${error?.message || String(error)}`, 'invalid');
         testParseBtn.className = 'bookmarklet-tool-btn';
         testParseBtn.textContent = 'Test Parse';
 
-        bookmarkletToolModalActions?.append(runBtn, testParseBtn);
+        actionsEl?.append(runBtn, testParseBtn);
 
         const layout = document.createElement('div');
         layout.className = 'bookmarklet-tool-stack';
@@ -5425,7 +5465,7 @@ ${error?.message || String(error)}`, 'invalid');
         progressTrackEl.appendChild(progressBarEl);
 
         layout.append(namesLabel, namesInput, optionsWrap, statusEl, progressTrackEl);
-        bookmarkletToolModalBody?.appendChild(layout);
+        bodyEl?.appendChild(layout);
 
         const uiContext = createWorkflowUiContext({
             namesInput,
@@ -5465,7 +5505,7 @@ ${error?.message || String(error)}`, 'invalid');
             });
         });
 
-        namesInput.focus();
+        if (!target) namesInput.focus();
     };
 
     const loadRecentIds = async () => {
@@ -5820,8 +5860,8 @@ ${error?.message || String(error)}`, 'invalid');
         }
     });
     runUuidPickerToolBtn?.addEventListener('click', openUuidPickerModal);
-    runListDocmanGroupsToolBtn?.addEventListener('click', openDocmanGroupsModal);
-    runEmailFormatterToolBtn?.addEventListener('click', openEmailFormatterModal);
+    runListDocmanGroupsToolBtn?.addEventListener('click', () => openDocmanGroupsModal());
+    runEmailFormatterToolBtn?.addEventListener('click', () => openEmailFormatterModal());
     runWorkflowGroupsToolBtn?.addEventListener('click', () => {
         openWorkflowGroupsModal().catch((error) => {
             console.error('Failed to open workflow groups modal:', error);
@@ -5868,14 +5908,26 @@ ${error?.message || String(error)}`, 'invalid');
 
     if (PANEL_FORCED_TOOL_ID === 'uuidPicker' && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
         openUuidPickerModal();
-    } else if (PANEL_FORCED_TOOL_ID === 'docmanGroups' && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
-        openDocmanGroupsModal();
-    } else if (PANEL_FORCED_TOOL_ID === 'emailFormatter' && (hasExtensionFeature('email_formatter') || extensionAccessState === null)) {
-        openEmailFormatterModal();
-    } else if (PANEL_FORCED_TOOL_ID === 'workflowGroups' && (hasExtensionFeature('workflow_groups') || extensionAccessState === null)) {
-        openWorkflowGroupsModal().catch((error) => {
-            console.error('Failed to open workflow groups modal:', error);
-            showToast('Workflow Groups failed to open.');
+    }
+
+    if (isBookmarkletToolsSuite && (hasExtensionFeature('workflow_groups') || extensionAccessState === null)) {
+        openWorkflowGroupsModal({
+            actionsEl: document.getElementById('inlineWorkflowGroupsActions'),
+            bodyEl: document.getElementById('inlineWorkflowGroupsBody')
+        }).catch((error) => {
+            console.error('Failed to load Custom Workflow Groups:', error);
+        });
+    }
+    if (isBookmarkletToolsSuite && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
+        openDocmanGroupsModal({
+            actionsEl: document.getElementById('inlineDocmanGroupsActions'),
+            bodyEl: document.getElementById('inlineDocmanGroupsBody')
+        });
+    }
+    if (isBookmarkletToolsSuite && (hasExtensionFeature('email_formatter') || extensionAccessState === null)) {
+        openEmailFormatterModal({
+            actionsEl: document.getElementById('inlineEmailFormatterActions'),
+            bodyEl: document.getElementById('inlineEmailFormatterBody')
         });
     }
 

@@ -46,13 +46,114 @@
     body.bl-panel-single-view .global-nav-buttons-row {
       display: none !important;
     }
-    /* Single-tool mode: set when this docked panel is one of the individual
-       bookmarklet-tool handles (UUID Picker, Custom Workflow, Docman
-       Groups, Email Formatter), which opens that tool's modal immediately
-       on load. The launch grid of all 4 buttons would be redundant here
-       since this handle is already scoped to one tool. */
-    body.bl-panel-single-tool .bookmarklet-launch-grid {
+    /* Same fix as the compact-mode min-height reset above: body and
+       .extension-wrapper both default to min-height: 750px, so on a docked
+       handle whose visible content is short (or, for single-tool mode,
+       hidden entirely behind the modal), the wrapper still renders as an
+       empty 750px-tall block before the real content below it. */
+    body.bl-panel-single-view,
+    body.bl-panel-single-view .extension-wrapper {
+      min-height: 0;
+    }
+    /* Single-tool mode: set only for the UUID Picker docked handle, which
+       opens that tool's modal immediately on load. The whole Bookmarklet
+       Tools section (title + launch grid) would be redundant here since
+       this handle is already scoped to one tool - it's hidden permanently
+       rather than just while the modal is open, since there's nothing to
+       return to besides that same tool. */
+    body.bl-panel-single-tool #bookmarkletToolsSection {
       display: none !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-close-btn {
+      display: none;
+    }
+    body.bl-panel-single-tool {
+      background: #ffffff;
+    }
+    body.bl-panel-single-tool .extension-wrapper {
+      padding: 0;
+      background: #ffffff;
+    }
+    body.bl-panel-single-tool .panel-body-layout,
+    body.bl-panel-single-tool .panel-body-content,
+    body.bl-panel-single-tool #bookmarkletToolsView {
+      width: 100%;
+      min-width: 0;
+    }
+    /* Bookmarklet suite mode: set on the shared "Bookmarklet Tools" docked
+       handle (Custom Workflow/Docman Groups/Email Formatter). Instead of a
+       launch grid of buttons that each pop a modal, all three tools render
+       inline as their own always-visible cards - the same way Practice
+       Navigator or Job Panel show their sections directly rather than
+       behind a click. */
+    body.bl-panel-bookmarklet-suite .bookmarklet-launch-grid {
+      display: none !important;
+    }
+    body.bl-panel-bookmarklet-suite #bookmarkletInlineTools {
+      display: block !important;
+    }
+    /* UUID Picker's own dedicated handle still uses the modal system (just
+       auto-triggered on load); strip its dialog chrome - dimmed backdrop,
+       centered floating card, rounded corners/shadow - so it fills the
+       panel directly instead of floating over another panel behind it. */
+    body.bl-panel-single-tool .bookmarklet-tool-modal,
+    body.bl-panel-single-tool .bookmarklet-tool-modal.is-open {
+      position: fixed !important;
+      inset: 0 !important;
+      display: flex !important;
+      align-items: stretch !important;
+      justify-content: stretch !important;
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
+      min-height: 0 !important;
+      background: none !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-card {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
+      height: 100vh !important;
+      max-height: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-header,
+    body.bl-panel-single-tool .bookmarklet-tool-modal-actions,
+    body.bl-panel-single-tool .bookmarklet-tool-modal-body {
+      width: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-header {
+      justify-content: center !important;
+      padding: 10px 12px !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-actions {
+      display: grid !important;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px 12px !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-actions .bookmarklet-tool-btn {
+      width: 100%;
+      min-width: 0;
+      padding-inline: 6px;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-actions .bookmarklet-tool-input {
+      grid-column: 1 / -1;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-modal-body {
+      padding: 0 12px 12px !important;
+    }
+    body.bl-panel-single-tool .bookmarklet-tool-item-main {
+      font-size: 12px;
+      line-height: 1.35;
     }
     #compactSearchBar {
       padding-bottom: 4px;
@@ -705,6 +806,27 @@
             </svg>
             <span>Email Formatter</span>
           </button>
+        </div>
+      </div>
+      <!-- Shown instead of the launch grid on the merged "Bookmarklet
+           Tools" docked handle: all three tools rendered inline as their
+           own cards, same as Practice Navigator/Job Panel show their
+           sections, instead of needing a click-to-open modal for each. -->
+      <div id="bookmarkletInlineTools" style="display: none;">
+        <div id="inlineWorkflowGroupsCard" class="section-container">
+          <h3>Custom Workflow Groups</h3>
+          <div id="inlineWorkflowGroupsActions" class="bookmarklet-tool-modal-actions"></div>
+          <div id="inlineWorkflowGroupsBody" class="bookmarklet-tool-modal-body"></div>
+        </div>
+        <div id="inlineEmailFormatterCard" class="section-container">
+          <h3>Email Formatter</h3>
+          <div id="inlineEmailFormatterActions" class="bookmarklet-tool-modal-actions"></div>
+          <div id="inlineEmailFormatterBody" class="bookmarklet-tool-modal-body"></div>
+        </div>
+        <div id="inlineDocmanGroupsCard" class="section-container">
+          <h3>Docman Group Names</h3>
+          <div id="inlineDocmanGroupsActions" class="bookmarklet-tool-modal-actions"></div>
+          <div id="inlineDocmanGroupsBody" class="bookmarklet-tool-modal-body"></div>
         </div>
       </div>
     </div>
