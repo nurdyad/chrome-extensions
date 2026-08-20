@@ -217,6 +217,7 @@ export function setSelectedPractice(practiceLike, { updateInput = true, triggerS
     } else {
       const statusDisplayEl = document.getElementById('statusDisplay');
       if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+      hidePracticeIdentityStrip();
       const statusEl = document.getElementById('status');
       if (statusEl) statusEl.style.display = 'none';
     }
@@ -238,6 +239,7 @@ export function clearSelectedPractice() {
   setNavigatorButtonsState({ hasConcretePractice: false, isAllPractices: false });
   const statusDisplayEl = document.getElementById('statusDisplay');
   if (statusDisplayEl) statusDisplayEl.style.display = 'none';
+  hidePracticeIdentityStrip();
   clearNavActionCountBadges();
   hidePracticeSuggestions();
   emitPracticeSelectionChanged({
@@ -460,7 +462,7 @@ function hasMissingLiveCounts(counts) {
 function readDisplayedLiveCounts() {
     const counts = {};
     LIVE_COUNT_KEYS.forEach((key) => {
-        const el = document.querySelector(`#statusDisplay [data-live-count="${key}"]`);
+        const el = document.querySelector(`#practiceIdentityStrip [data-live-count="${key}"]`);
         if (!el) {
             counts[key] = null;
             return;
@@ -630,22 +632,17 @@ function buildStatusActionIcon(type) {
     `;
 }
 
-function buildMetaItemHtml(label, value, toneClass, options = {}) {
-    const safeLabel = escapeHtml(label);
-    const displayValue = formatStatusValue(value);
-    const copyValue = formatOptionalStatusValue(options.copyValue);
-    const copyLabel = escapeHtml(options.copyLabel || label);
-    const tagName = copyValue ? 'button' : 'div';
-    const interactiveClass = copyValue ? ' practice-status-meta-item-button' : '';
-    const actionAttrs = copyValue
-        ? ` type="button" data-copy-value="${escapeHtml(copyValue)}" data-copy-label="${copyLabel}" title="Copy ${copyLabel}"`
-        : '';
-
+function buildSuggestionChipHtml(label, value, toneClass, options = {}) {
+    if (!value) return '';
+    const text = label ? `${escapeHtml(label)} ${escapeHtml(String(value))}` : escapeHtml(String(value));
+    if (!options.copyable) {
+        return `<span class="suggestion-chip ${toneClass}">${text}</span>`;
+    }
     return `
-        <${tagName} class="practice-status-meta-item ${toneClass}${interactiveClass}"${actionAttrs}>
-            <span class="practice-status-meta-label">${safeLabel}</span>
-            <span class="practice-status-meta-value">${escapeHtml(displayValue)}</span>
-        </${tagName}>
+        <button type="button" class="suggestion-chip suggestion-chip-copyable ${toneClass}"
+            data-copy-value="${escapeHtml(String(value))}" data-copy-label="${escapeHtml(label)}" title="Copy ${escapeHtml(label)}">
+            ${text}
+        </button>
     `;
 }
 
@@ -751,19 +748,46 @@ function getLiveTotal(counts) {
     return hasAny ? total : 'N/A';
 }
 
-function getEhrChipClass(ehrType) {
-    const normalized = String(ehrType || '').trim().toLowerCase();
-    if (normalized === 'emis') return 'is-ehr-emis';
-    if (normalized === 'docman_emis') return 'is-ehr-docman-emis';
-    return 'is-neutral';
+function getSuggestionServiceInfo(serviceLevel) {
+    const normalized = String(serviceLevel || '').trim().toLowerCase();
+    if (!normalized) return null;
+    if (normalized.includes('full')) return { abbrev: 'FS', toneClass: 'is-service-full' };
+    if (normalized.includes('self')) return { abbrev: 'SS', toneClass: 'is-service-self' };
+    if (normalized.includes('hybrid')) return { abbrev: 'HS', toneClass: 'is-service-hybrid' };
+    return null;
 }
 
-function getServiceChipClass(serviceLevel) {
-    const normalized = String(serviceLevel || '').trim().toLowerCase();
-    if (normalized === 'full') return 'is-service-full';
-    if (normalized === 'self') return 'is-service-self';
-    if (normalized === 'hybrid') return 'is-service-hybrid';
-    return 'is-neutral';
+// Shared by the suggestion dropdown rows and the compact practice identity
+// strip, so both stay visually identical without duplicating chip logic.
+function buildPracticeChipRowsHtml(name, fields, nameClass, options = {}) {
+    const odsChip = buildSuggestionChipHtml('ODS', fields?.ods, 'is-ods', { copyable: options.copyableOds });
+    const cdbChip = buildSuggestionChipHtml('CDB', fields?.cdb, 'is-cdb', { copyable: options.copyableCdb });
+    const quotaChip = buildSuggestionChipHtml('Quota', fields?.collectionQuota, 'is-quota');
+    const collectedChip = buildSuggestionChipHtml('Collected', fields?.collectedToday, 'is-collected');
+    const ehrChip = buildSuggestionChipHtml('', fields?.ehrType, 'is-ehr');
+    const serviceInfo = getSuggestionServiceInfo(fields?.serviceLevel);
+    const serviceChip = serviceInfo
+        ? `<span class="suggestion-chip ${serviceInfo.toneClass}">${escapeHtml(serviceInfo.abbrev)}</span>`
+        : '';
+    const topRowChips = odsChip || cdbChip
+        ? `<span class="suggestion-chip-group">${odsChip}${cdbChip}</span>`
+        : '';
+    const metaRowChips = quotaChip || collectedChip || ehrChip || serviceChip
+        ? `
+            <div class="suggestion-meta-row">
+                <span class="suggestion-chip-group">${quotaChip}${collectedChip}</span>
+                <span class="suggestion-chip-group">${ehrChip}${serviceChip}</span>
+            </div>
+        `
+        : '';
+    const nameHtml = name ? `<span class="${nameClass}">${escapeHtml(name)}</span>` : '';
+    return `
+        <div class="suggestion-top-row">
+            ${nameHtml}
+            ${topRowChips}
+        </div>
+        ${metaRowChips}
+    `;
 }
 
 function ensureStatusDisplayInteractions() {
@@ -980,46 +1004,103 @@ function ensureStatusDisplayInteractions() {
     statusDisplayInteractionsBound = true;
 }
 
+function buildPracticeIdentityStripHtml(status, counts) {
+    const odsChip = buildSuggestionChipHtml('ODS', status?.odsCode, 'is-ods', { copyable: true });
+    const cdbChip = buildSuggestionChipHtml('CDB', formatOptionalStatusValue(status?.practiceCDB), 'is-cdb', { copyable: true });
+    const ehrChip = buildSuggestionChipHtml('', status?.ehrType, 'is-ehr');
+    const serviceInfo = getSuggestionServiceInfo(status?.serviceLevel);
+    const serviceChip = serviceInfo
+        ? `<span class="suggestion-chip ${serviceInfo.toneClass}">${escapeHtml(serviceInfo.abbrev)}</span>`
+        : '';
+    const quotaChip = buildSuggestionChipHtml('Quota', status?.collectionQuota, 'is-quota');
+    const collectedChip = buildSuggestionChipHtml('Collected', status?.collectedToday, 'is-collected');
+    const inputFolderChip = buildSuggestionChipHtml(
+        'Input Folder',
+        formatOptionalStatusValue(status?.docmanInputFolder),
+        'is-input-folder'
+    );
+
+    return `
+        <div class="suggestion-top-row">
+            <span class="suggestion-chip-group">${odsChip}${cdbChip}</span>
+            <span class="suggestion-chip-group">${ehrChip}${serviceChip}</span>
+        </div>
+        <div class="suggestion-meta-row">
+            <span class="suggestion-chip-group">${quotaChip}${collectedChip}</span>
+            <span class="suggestion-chip-group">${inputFolderChip}</span>
+        </div>
+        <div class="suggestion-meta-row practice-identity-metrics-row">
+            ${buildLiveCountsMetricsHtml(counts)}
+        </div>
+    `;
+}
+
+let practiceIdentityStripInteractionsBound = false;
+function ensurePracticeIdentityStripInteractions() {
+    if (practiceIdentityStripInteractionsBound) return;
+    const stripEl = document.getElementById('practiceIdentityStrip');
+    if (!stripEl) return;
+
+    stripEl.addEventListener('click', async (event) => {
+        const copyTarget = event.target instanceof Element
+            ? event.target.closest('[data-copy-value]')
+            : null;
+        if (!copyTarget) return;
+        rememberStatusDisplayInteraction();
+
+        const copyValue = String(copyTarget.getAttribute('data-copy-value') || '').trim();
+        const copyLabel = String(copyTarget.getAttribute('data-copy-label') || 'Value').trim();
+        if (!copyValue) return;
+
+        try {
+            const copied = await copyTextToClipboard(copyValue);
+            if (!copied) throw new Error('copy failed');
+            showToast(`${copyLabel} copied.`);
+        } catch (error) {
+            showToast('Copy failed.');
+        }
+    });
+
+    practiceIdentityStripInteractionsBound = true;
+}
+
+function updatePracticeIdentityStrip(status, counts) {
+    const stripEl = document.getElementById('practiceIdentityStrip');
+    if (!stripEl) return;
+    ensurePracticeIdentityStripInteractions();
+    stripEl.innerHTML = buildPracticeIdentityStripHtml(status, counts);
+    stripEl.classList.add('is-visible');
+}
+
+function hidePracticeIdentityStrip() {
+    const stripEl = document.getElementById('practiceIdentityStrip');
+    if (!stripEl) return;
+    stripEl.classList.remove('is-visible');
+    stripEl.innerHTML = '';
+}
+
 function renderPracticeStatusHtml(statusDisplayEl, status, counts) {
-    statusDisplayEl.innerHTML = buildPracticeStatusHtml(status, counts);
+    statusDisplayEl.innerHTML = buildPracticeStatusHtml(status);
+    updatePracticeIdentityStrip(status, counts);
     document.dispatchEvent(new CustomEvent('mailroomNavigator:statusDisplayRendered'));
 }
 
-function buildPracticeStatusHtml(status, counts) {
-    const displayName = formatStatusValue(
-        status?.name || status?.practiceName || status?.practiceCDB || status?.odsCode,
-        'Practice Status'
-    );
-    const odsCode = formatStatusValue(status?.odsCode);
-    const ehrType = formatStatusValue(status?.ehrType);
-    const serviceLevel = formatStatusValue(status?.serviceLevel);
-    const practiceCdbRaw = formatOptionalStatusValue(status?.practiceCDB);
-    const practiceCdb = practiceCdbRaw || 'N/A';
+function buildLiveCountsMetricsHtml(counts) {
     const totalLive = getLiveTotal(counts);
-    const metaItems = [
-        buildMetaItemHtml('ODS', odsCode, 'is-primary', { copyValue: status?.odsCode, copyLabel: 'ODS' }),
-        buildMetaItemHtml('CDB', practiceCdb, practiceCdbRaw ? 'is-cdb' : 'is-neutral', { copyValue: practiceCdbRaw, copyLabel: 'CDB' }),
-        buildMetaItemHtml('EHR Type', ehrType, getEhrChipClass(ehrType)),
-        buildMetaItemHtml('Service', serviceLevel, getServiceChipClass(serviceLevel))
-    ].join('');
-
-    const activeMetricCardHtml = `
-        <div class="practice-status-metric is-primary" data-live-metric-card="active">
-            <span class="practice-status-metric-label">Active</span>
-            <span class="practice-status-metric-value" data-live-total>${escapeHtml(String(totalLive))}</span>
-        </div>
+    const activeChipHtml = `
+        <span class="suggestion-chip is-metric-primary" data-live-metric-card="active">Active <span data-live-total>${escapeHtml(String(totalLive))}</span></span>
     `;
-    const metricCards = activeMetricCardHtml + [
+    const otherChipsHtml = [
         ['edit', 'Edit'],
         ['review', 'Review'],
         ['coding', 'Coding']
     ].map(([key, label]) => `
-        <div class="practice-status-metric ${getMetricToneClass(key, counts?.[key])}" data-live-metric-card="${key}">
-            <span class="practice-status-metric-label">${escapeHtml(label)}</span>
-            <span class="practice-status-metric-value" data-live-count="${key}">${formatCount(counts?.[key])}</span>
-        </div>
+        <span class="suggestion-chip ${getMetricToneClass(key, counts?.[key])}" data-live-metric-card="${key}">${escapeHtml(label)} <span data-live-count="${key}">${formatCount(counts?.[key])}</span></span>
     `).join('');
+    return `<span class="suggestion-chip-group">${activeChipHtml}${otherChipsHtml}</span>`;
+}
 
+function buildPracticeStatusHtml(status) {
     const ehrGroups = [
         buildCredentialGroupHtml('EMIS API', [
             { label: 'Username', value: status?.emisApiUsername, odsCode: status?.odsCode },
@@ -1052,24 +1133,6 @@ function buildPracticeStatusHtml(status, counts) {
 
     return `
         <div class="status-info-box practice-status-card practice-status-card-compact" data-status-ods="${escapeHtml(status.odsCode || '')}">
-            <div class="practice-status-hero">
-                <div class="practice-status-hero-row">
-                    <div class="practice-status-heading">
-                        <div class="practice-status-kicker">Practice Status</div>
-                        <div class="practice-status-title">${escapeHtml(displayName)}</div>
-                        <div class="practice-status-subtitle">Live BetterLetter summary</div>
-                    </div>
-                    <div class="practice-status-meta-grid">
-                        ${metaItems}
-                    </div>
-                </div>
-            </div>
-            <div class="practice-status-section-head">
-                <span class="practice-status-section-caption">Live mailroom counts</span>
-            </div>
-            <div class="practice-status-metrics">
-                ${metricCards}
-            </div>
             <div class="practice-status-section-head practice-status-docman-head">
                 <span class="practice-status-section-caption">Docman Tools</span>
             </div>
@@ -1105,15 +1168,15 @@ function clearNavActionCountBadges() {
 function applyLiveCountsToStatusDisplay(counts) {
     applyNavActionCountBadges(counts);
     LIVE_COUNT_KEYS.forEach((key) => {
-        const el = document.querySelector(`#statusDisplay [data-live-count="${key}"]`);
+        const el = document.querySelector(`#practiceIdentityStrip [data-live-count="${key}"]`);
         if (!el) return;
         el.textContent = formatCount(counts?.[key]);
-        const metricCardEl = document.querySelector(`#statusDisplay [data-live-metric-card="${key}"]`);
+        const metricCardEl = document.querySelector(`#practiceIdentityStrip [data-live-metric-card="${key}"]`);
         if (!metricCardEl) return;
         metricCardEl.classList.remove('is-neutral', 'is-info', 'is-warning', 'is-accent', 'is-success', 'is-danger');
         metricCardEl.classList.add(getMetricToneClass(key, counts?.[key]));
     });
-    const totalEl = document.querySelector('#statusDisplay [data-live-total]');
+    const totalEl = document.querySelector('#practiceIdentityStrip [data-live-total]');
     if (totalEl) totalEl.textContent = String(getLiveTotal(counts));
     const displayedOds = String(
         document.querySelector('#statusDisplay .status-info-box')?.getAttribute('data-status-ods') || ''
@@ -1296,21 +1359,14 @@ export function handleNavigatorInput({ showOnEmpty = false } = {}) {
 
     matches.forEach(({ label, practice }) => {
         const li = document.createElement('li');
-        const odsCdb = [
-            practice?.ods ? `ODS ${practice.ods}` : '',
-            practice?.cdb || practice?.practiceCDB ? `CDB ${practice.cdb || practice.practiceCDB}` : ''
-        ].filter(Boolean).join(' · ');
-        const quotaCollected = [
-            practice?.collectionQuota ? `Quota ${practice.collectionQuota}` : '',
-            practice?.collectedToday ? `Collected ${practice.collectedToday}` : ''
-        ].filter(Boolean).join(' · ');
-        li.innerHTML = `
-            <div class="suggestion-top-row">
-                <span class="suggestion-main">${escapeHtml(practice?.name || label)}</span>
-                ${odsCdb ? `<span class="suggestion-ods-cdb">${escapeHtml(odsCdb)}</span>` : ''}
-            </div>
-            ${quotaCollected ? `<div class="suggestion-meta">${escapeHtml(quotaCollected)}</div>` : ''}
-        `;
+        li.innerHTML = buildPracticeChipRowsHtml(practice?.name || label, {
+            ods: practice?.ods,
+            cdb: practice?.cdb || practice?.practiceCDB,
+            collectionQuota: practice?.collectionQuota,
+            collectedToday: practice?.collectedToday,
+            ehrType: practice?.ehrType,
+            serviceLevel: practice?.serviceLevel
+        }, 'suggestion-main');
         li.addEventListener('mousedown', (e) => {
             e.preventDefault();
             e.stopPropagation();

@@ -763,8 +763,12 @@ async function initializePanel() {
     Navigator.cleanDuplicateButtons();
     await Navigator.initializeRecentPractices();
 
-    resizeToFitContent();
     setupCompactModeToggle();
+    if (window.top === window && await loadCompactModePreference()) {
+        enterCompactMode();
+    } else {
+        resizeToFitContent();
+    }
 
     const linearIssueSection = document.getElementById('linearIssueSection');
     const linearIssueSectionBody = document.getElementById('linearIssueSectionBody');
@@ -5913,8 +5917,11 @@ function resizeToFitContent() {
   }
 }
 
-const COMPACT_PANEL_HEIGHT = 560;
+// Only the search input shows by default; Practice Tools and Quick Document
+// Search are collapsed behind their own accordion toggles, each adding to the
+// window height only while expanded.
 let compactModeMovedElements = null;
+let compactAccordionsBound = false;
 
 function resizePanelWindow(height) {
   if (window.top !== window) return;
@@ -5925,29 +5932,126 @@ function resizePanelWindow(height) {
   }
 }
 
+// Measures the actually-rendered content instead of guessing fixed heights
+// per accordion state, so nothing gets clipped regardless of platform
+// title-bar height or small layout differences. Runs on the next frame so
+// the browser has applied any hidden/appendChild change first.
+function resizeToFitCompactContent() {
+  if (window.top !== window) return;
+  requestAnimationFrame(() => {
+    const contentHeight = document.body.scrollHeight;
+    const chromeHeight = Math.max(0, window.outerHeight - window.innerHeight);
+    resizePanelWindow(contentHeight + chromeHeight + 20);
+  });
+}
+
+function setCompactAccordionExpanded(toggleId, bodyId, expanded) {
+  const toggleBtn = document.getElementById(toggleId);
+  const body = document.getElementById(bodyId);
+  if (!toggleBtn || !body) return;
+  body.hidden = !expanded;
+  toggleBtn.classList.toggle('is-expanded', expanded);
+  resizeToFitCompactContent();
+}
+
+function setupCompactAccordions() {
+  if (compactAccordionsBound) return;
+  compactAccordionsBound = true;
+  [
+    ['compactPracticeToolsToggle', 'compactPracticeToolsBody'],
+    ['compactQuickDocToggle', 'compactQuickDocBody']
+  ].forEach(([toggleId, bodyId]) => {
+    const toggleBtn = document.getElementById(toggleId);
+    if (!toggleBtn) return;
+    toggleBtn.addEventListener('click', () => {
+      const body = document.getElementById(bodyId);
+      setCompactAccordionExpanded(toggleId, bodyId, Boolean(body?.hidden));
+    });
+  });
+}
+
+const COMPACT_MODE_STORAGE_KEY = 'mailroomNavigatorCompactMode';
+
+function saveCompactModePreference(isCompact) {
+  try {
+    chrome.storage.local.set({ [COMPACT_MODE_STORAGE_KEY]: isCompact });
+  } catch (error) {
+    // Ignore storage errors; compact mode just won't be remembered next time.
+  }
+}
+
+async function loadCompactModePreference() {
+  try {
+    const result = await chrome.storage.local.get(COMPACT_MODE_STORAGE_KEY);
+    return result?.[COMPACT_MODE_STORAGE_KEY] === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Reopening the popup via the extension icon reuses an already-open window
+// (just refocusing it) instead of reloading, so this window won't otherwise
+// re-check the saved preference; background.js asks it to sync explicitly.
+try {
+  chrome.runtime.onMessage?.addListener?.((message) => {
+    if (message?.type !== 'BL_SYNC_COMPACT_MODE' || window.top !== window) return;
+    loadCompactModePreference().then((shouldBeCompact) => {
+      const isCurrentlyCompact = Boolean(compactModeMovedElements);
+      if (shouldBeCompact && !isCurrentlyCompact) {
+        enterCompactMode();
+      } else if (!shouldBeCompact && isCurrentlyCompact) {
+        exitCompactMode();
+      }
+    }).catch(() => undefined);
+  });
+} catch (error) {
+  console.warn('[Panel] Unable to attach compact-mode sync listener:', error);
+}
+
 // Relocates the existing practice-search block, its quick-link buttons, and
 // the Quick Document Search card (with all their working autocomplete/lookup
 // behavior intact, since moving a DOM node keeps its listeners) into a small
 // standalone bar, instead of building a second copy of that search logic.
+// Only the search input shows right away; the rest lives behind the two
+// accordions above, collapsed until the user asks for them.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
+  const recentPracticesSection = document.getElementById('recentPracticesSection');
   const practiceQuickLinks = document.querySelector('.nav-action-grid');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
+  const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
+  const practiceToolsBody = document.getElementById('compactPracticeToolsBody');
+  const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
+  const quickDocBody = document.getElementById('compactQuickDocBody');
   if (!bar || !practiceSearchBlock || !quickDocumentSearchCard) return;
 
-  const toMove = [practiceSearchBlock, practiceQuickLinks, quickDocumentSearchCard].filter(Boolean);
-  compactModeMovedElements = toMove.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
-  toMove.forEach((el) => bar.appendChild(el));
+  setupCompactAccordions();
+
+  const toMoveIntoPracticeTools = [recentPracticesSection, practiceQuickLinks].filter(Boolean);
+  const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
+  const allMoved = [practiceSearchBlock, ...toMoveIntoPracticeTools, ...toMoveIntoQuickDoc];
+  compactModeMovedElements = allMoved.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
+
+  bar.insertBefore(practiceSearchBlock, bar.firstChild);
+  toMoveIntoPracticeTools.forEach((el) => practiceToolsBody?.appendChild(el));
+  toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
+
+  if (practiceToolsAccordion) practiceToolsAccordion.hidden = false;
+  if (quickDocAccordion) quickDocAccordion.hidden = false;
+  setCompactAccordionExpanded('compactPracticeToolsToggle', 'compactPracticeToolsBody', false);
+  setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
 
   document.body.classList.add('bl-panel-compact');
   setElementVisible(bar, true, 'flex');
   if (toggleBtn) {
-    toggleBtn.textContent = 'Expand';
     toggleBtn.title = 'Show the full panel';
+    toggleBtn.setAttribute('aria-label', 'Show the full panel');
+    toggleBtn.classList.add('is-expanded');
   }
-  resizePanelWindow(COMPACT_PANEL_HEIGHT);
+  saveCompactModePreference(true);
+  resizeToFitCompactContent();
 }
 
 function exitCompactMode() {
@@ -5965,26 +6069,32 @@ function exitCompactMode() {
   });
   compactModeMovedElements = null;
 
+  const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
+  const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
+  if (practiceToolsAccordion) practiceToolsAccordion.hidden = true;
+  if (quickDocAccordion) quickDocAccordion.hidden = true;
+
   document.body.classList.remove('bl-panel-compact');
   const bar = document.getElementById('compactSearchBar');
   setElementVisible(bar, false);
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   if (toggleBtn) {
-    toggleBtn.textContent = 'Compact';
     toggleBtn.title = 'Shrink to a small search-only bar';
+    toggleBtn.setAttribute('aria-label', 'Shrink to a small search-only bar');
+    toggleBtn.classList.remove('is-expanded');
   }
+  saveCompactModePreference(false);
   resizePanelWindow(PANEL_HEIGHT);
 }
 
 function setupCompactModeToggle() {
-  const row = document.getElementById('compactModeToggleRow');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
-  if (!row || !toggleBtn) return;
+  if (!toggleBtn) return;
 
   // Compact mode resizes the OS window; that only applies to the standalone
   // popup, not the docked sidebar iframe (same check resizeToFitContent uses).
   if (window.top !== window) {
-    setElementVisible(row, false);
+    setElementVisible(toggleBtn, false);
     return;
   }
 
