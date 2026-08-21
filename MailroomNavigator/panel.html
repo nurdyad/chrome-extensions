@@ -263,9 +263,96 @@
     .compact-accordion-body[hidden] {
       display: none;
     }
+    /* Dark mode: a single filter on the whole page instead of hand-picking
+       a dark equivalent for every hardcoded color across every stylesheet
+       (status.css/inputs.css/buttons.css/auth_management.css all use
+       plain colors, not theme variables). invert(1) flips lightness so
+       light backgrounds become dark and dark text becomes light;
+       hue-rotate(180deg) restores the original hue afterward (inverting
+       RGB also flips hue ~180 degrees). brightness/contrast soften the
+       result afterward - a plain invert of white turns into pure #000,
+       which reads as harsher than a normal dark theme. Applied to <body>
+       rather than <html> so it also covers the standalone popup window and
+       every docked-handle iframe the same way, since they all load this
+       file. Fixed-position elements (the toggle button itself, bookmarklet
+       modal) still render correctly - body's own box coincides with the
+       viewport here (no padding/margin), so the containing-block change
+       filter causes for position:fixed descendants isn't visible. */
+    body.bl-dark-mode {
+      filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92);
+    }
+    /* Single-view/single-tool docked handles drop the 750px min-height
+       (see the bl-panel-single-view rule above) so a short view doesn't
+       leave a tall empty gray block below it in light mode - there, the
+       leftover space is filled by the iframe's own background color
+       (set in background.js, outside this document, so this filter can't
+       reach it), which happens to match .extension-wrapper's own light
+       background closely enough to be invisible. In dark mode that same
+       leftover space stays that original light color since it's genuinely
+       outside this page, creating an obvious light patch below the
+       (correctly darkened) content. Force full height back just for dark
+       mode so there's no leftover space left unfiltered. */
+    body.bl-dark-mode,
+    body.bl-dark-mode .extension-wrapper {
+      min-height: 100vh;
+    }
+    /* Raster images/video would look like photo negatives after invert();
+       counter-invert them back to normal. Inline SVG icons in this app use
+       stroke="currentColor" so they invert correctly along with the text
+       color around them and don't need this. */
+    body.bl-dark-mode img,
+    body.bl-dark-mode video {
+      filter: invert(1) hue-rotate(180deg);
+    }
+    .dark-mode-toggle-btn {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 999999;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 1px solid rgba(15, 23, 42, 0.16);
+      background: #ffffff;
+      color: #4b5563;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+    }
+    .dark-mode-toggle-btn:hover {
+      background: #f3f4f6;
+    }
+    .dark-mode-toggle-btn .dark-mode-icon-sun {
+      display: none;
+    }
+    .dark-mode-toggle-btn.is-dark .dark-mode-icon-moon {
+      display: none;
+    }
+    .dark-mode-toggle-btn.is-dark .dark-mode-icon-sun {
+      display: block;
+    }
   </style>
 </head>
 <body>
+  <button type="button" id="darkModeToggleBtn" class="dark-mode-toggle-btn" title="Switch to dark mode" aria-label="Switch to dark mode">
+    <svg class="dark-mode-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+    </svg>
+    <svg class="dark-mode-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </button>
   <div class="extension-wrapper">
     <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">
       <div id="compactPracticeToolsAccordion" class="compact-accordion" hidden>
