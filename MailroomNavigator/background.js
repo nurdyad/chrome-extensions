@@ -5358,9 +5358,10 @@ async function openPanelPopup(hostTabId = null) {
 }
 
 async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) {
+    const isDarkModeEnabled = await getStoredDarkModePreference();
     await chrome.scripting.executeScript({
         target: { tabId },
-        func: (panelUrl, hostTabId, shouldForceCollapsed) => {
+        func: (panelUrl, hostTabId, shouldForceCollapsed, isDark) => {
             // Independent docked panels, one per view, each with its own
             // toggle handle stacked along the right edge. Opening one
             // doesn't require opening a shared container first, and
@@ -5682,6 +5683,31 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                         @keyframes bl-sidebar-ripple {
                             to { transform: scale(1); opacity: 0; }
                         }
+
+                        /* Dark mode: this rail lives in the host page's own
+                           document, entirely separate from panel.html's
+                           <body> (a different document inside each panel's
+                           iframe), so panel.html's dark-mode filter can't
+                           reach it - it needs its own explicit dark
+                           styling, toggled via the .bl-dark class on the
+                           dock (see ensureDockMounted/handleSetDarkModePreference).
+                           The .is-open state already uses a solid
+                           var(--tab-color) fill regardless of theme, so
+                           only the plain white resting state needs a dark
+                           variant. */
+                        #${DOCK_ID}.bl-dark .bl-sidebar-toggle {
+                            background: #1f2937;
+                            border-color: rgba(255, 255, 255, 0.16);
+                            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+                        }
+
+                        #${DOCK_ID}.bl-dark .bl-sidebar-toggle:hover:not(.is-open) {
+                            background: color-mix(in srgb, var(--tab-color, #1f2937) 28%, #1f2937);
+                        }
+
+                        #${DOCK_ID}.bl-dark .bl-sidebar-toggle .bl-sidebar-toggle-ripple {
+                            background: rgba(255, 255, 255, 0.22);
+                        }
                     `;
                 // Always refresh the stylesheet's content, even if the tag
                 // already exists from an earlier injection - a host tab
@@ -5706,6 +5732,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                     dock.id = DOCK_ID;
                     (document.body || document.documentElement).appendChild(dock);
                 }
+                dock.classList.toggle('bl-dark', Boolean(isDark));
                 return dock;
             };
 
@@ -5890,7 +5917,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
             mountSidebar();
         },
-        args: [chrome.runtime.getURL('panel.html'), tabId, Boolean(forceCollapsed)]
+        args: [chrome.runtime.getURL('panel.html'), tabId, Boolean(forceCollapsed), isDarkModeEnabled]
     });
 }
 
@@ -5903,6 +5930,54 @@ async function ensureSidebarHandleForTab(tabId, { forceCollapsed = true } = {}) 
     } catch (e) {
         // Ignore tabs that are gone/restricted or not scriptable yet.
     }
+}
+
+// Kept in sync with DARK_MODE_STORAGE_KEY in panel.js - both sides read/
+// write the same chrome.storage.local key so the popup window and every
+// docked handle's rail agree on the current preference.
+const DARK_MODE_STORAGE_KEY = 'mailroomNavigatorDarkMode';
+
+async function getStoredDarkModePreference() {
+    try {
+        const result = await chrome.storage.local.get(DARK_MODE_STORAGE_KEY);
+        return result?.[DARK_MODE_STORAGE_KEY] === true;
+    } catch (error) {
+        return false;
+    }
+}
+
+async function applyDarkModeToHostRail(tabId, isDark) {
+    if (typeof tabId !== 'number') return;
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (dark) => {
+                document.getElementById('bl-allinone-sidebar-dock')?.classList.toggle('bl-dark', Boolean(dark));
+            },
+            args: [Boolean(isDark)]
+        });
+    } catch (error) {
+        // Tab may be gone/restricted, or the rail may not be mounted there
+        // yet (e.g. dark mode toggled from the standalone popup window,
+        // which has no host tab) - safe to ignore either way.
+    }
+}
+
+async function handleSetDarkModePreference(payload = {}, sender = null) {
+    const isDark = Boolean(payload?.isDark);
+    try {
+        await chrome.storage.local.set({ [DARK_MODE_STORAGE_KEY]: isDark });
+    } catch (error) {
+        // Ignore storage errors; the toggle already reflects the new state
+        // in the panel that triggered it.
+    }
+    const hostTabId = typeof payload?.hostTabId === 'number' && Number.isFinite(payload.hostTabId)
+        ? payload.hostTabId
+        : (typeof sender?.tab?.id === 'number' ? sender.tab.id : null);
+    if (typeof hostTabId === 'number') {
+        await applyDarkModeToHostRail(hostTabId, isDark);
+    }
+    return { success: true };
 }
 
 // --- 4. LISTENERS ---
@@ -6013,6 +6088,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (message.action === 'reviewExtensionAccessRequest') {
             return await handleReviewExtensionAccessRequest(message.payload, sender);
+        }
+        if (message.action === 'setDarkModePreference') {
+            return await handleSetDarkModePreference(message.payload, sender);
         }
 
         if (PROTECTED_EXTENSION_ACTIONS.has(message?.action)) {
