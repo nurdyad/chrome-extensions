@@ -1391,8 +1391,10 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
   if (payloadIsBotJob && candidateIsBotJobSpike) {
     const candidateSpikeSignature = extractBotJobSpikeSignatureFromText(candidateTitle, candidateDescription);
     if (candidateSpikeSignature) {
-      const payloadJobType = normalizeIssueLookupKey(payload?.jobType);
-      const payloadPractice = normalizeIssueLookupKey(payload?.practiceName);
+      const payloadJobType = normalizeIssueLookupKey(payload?.jobType)
+        || normalizeIssueLookupKey(extractIssueStructuredField(payload?.description, "Job Type"));
+      const payloadPractice = normalizeIssueLookupKey(payload?.practiceName)
+        || normalizeIssueLookupKey(extractIssueStructuredField(payload?.description, "Practice"));
       const payloadFailedJobId = normalizeIssueLookupKey(payload?.failedJobId);
       const jobTypeMatches = Boolean(payloadJobType) && candidateSpikeSignature.jobTypes.includes(payloadJobType);
       const practiceMatches = Boolean(payloadPractice) && candidateSpikeSignature.practices.includes(payloadPractice);
