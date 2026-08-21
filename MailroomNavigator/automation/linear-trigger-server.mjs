@@ -2754,6 +2754,23 @@ function parseSqlReconcileBotIssueContext(issue = {}) {
   };
 }
 
+function parseSqlReconcileSpikeIssueContext(issue = {}) {
+  const title = sanitizeSingleLine(issue?.title, 240);
+  if (!title.toLowerCase().includes(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase())) return null;
+
+  const signature = extractBotJobSpikeSignatureFromText(title, issue?.description);
+  if (!signature) return null;
+
+  return {
+    issue,
+    title,
+    job_type: signature.jobTypes.length === 1 ? normalizeSqlReconcileJobType(signature.jobTypes[0]) : "",
+    document_ids: signature.documentIds,
+    practice_name: signature.practices.length === 1 ? signature.practices[0] : "",
+    practice_code: "",
+  };
+}
+
 function sanitizeSqlReconcileDashboardRow(row = {}) {
   const attemptCount = Number(row.attempt_count);
   const maxAttempts = Number(row.max_attempts);
@@ -2887,6 +2904,49 @@ function sqlReconcileIssueStillExists(context, liveIndex) {
   return { found, reason: found ? "matched_document_job_type" : "document_job_type_not_found" };
 }
 
+function sqlReconcileSpikeIssueStillExists(context, liveIndex) {
+  const jobType = normalizeSqlReconcileJobType(context?.job_type);
+  const documentIds = Array.isArray(context?.document_ids) ? context.document_ids : [];
+
+  if (!jobType) {
+    return { found: true, reason: "missing_job_type_in_issue" };
+  }
+
+  if (SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES.has(jobType)) {
+    const practiceName = normalizeSqlReconcilePractice(context?.practice_name);
+    const practiceCode = sanitizeSqlReconcilePracticeCode(context?.practice_code);
+    const practices = liveIndex.practiceByJobType.get(jobType) || [];
+    const foundByName = practiceName
+      ? practices.some((candidate) => sqlReconcilePracticesLikelyMatch(practiceName, candidate))
+      : false;
+    if (foundByName) {
+      return { found: true, reason: "matched_practice_job_type" };
+    }
+
+    const codes = liveIndex.practiceCodeByJobType.get(jobType) || new Set();
+    const foundByCode = practiceCode ? codes.has(practiceCode) : false;
+    return {
+      found: foundByCode,
+      reason: foundByCode ? "matched_practice_code_job_type" : "practice_job_type_not_found",
+    };
+  }
+
+  if (!SQL_RECONCILE_DOC_MATCH_JOB_TYPES.has(jobType)) {
+    return { found: true, reason: "unsupported_job_type_for_auto_close" };
+  }
+
+  if (!documentIds.length) {
+    return { found: true, reason: "missing_document_ids_for_doc_match_job_type" };
+  }
+
+  // A spike is only stale once every one of its original documents has left the
+  // paused queue - as long as even one is still stuck, the underlying problem
+  // this issue tracks hasn't actually been resolved yet.
+  const stillPausedCount = documentIds.filter((documentId) => liveIndex.docKeys.has(`${jobType}|${documentId}`)).length;
+  const found = stillPausedCount > 0;
+  return { found, reason: found ? "matched_document_job_type" : "document_job_type_not_found" };
+}
+
 async function fetchSqlReconcileOpenBotIssues(team) {
   const query = `
     query ReconcileOpenBotIssues($teamKey: String!, $first: Int!, $after: String) {
@@ -2928,7 +2988,11 @@ async function fetchSqlReconcileOpenBotIssues(team) {
     const root = data?.issues;
     const nodes = Array.isArray(root?.nodes) ? root.nodes : [];
     nodes
-      .filter((issue) => sanitizeSingleLine(issue?.title, 240).toLowerCase().includes(BOT_JOB_TITLE_PREFIX.toLowerCase()))
+      .filter((issue) => {
+        const normalized = sanitizeSingleLine(issue?.title, 240).toLowerCase();
+        return normalized.includes(BOT_JOB_TITLE_PREFIX.toLowerCase())
+          || normalized.includes(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+      })
       .forEach((issue) => issues.push(issue));
 
     const pageInfo = root?.pageInfo;
@@ -3062,7 +3126,10 @@ async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
     report.open_issues_scanned = openBotIssues.length;
 
     for (const issue of openBotIssues) {
-      const contextInfo = parseSqlReconcileBotIssueContext(issue);
+      const isSpike = sanitizeSingleLine(issue?.title, 240).toLowerCase().includes(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+      const contextInfo = isSpike
+        ? parseSqlReconcileSpikeIssueContext(issue)
+        : parseSqlReconcileBotIssueContext(issue);
       if (!contextInfo) {
         report.issues_skipped_unmatchable.push({
           linear_key: sanitizeSingleLine(issue?.identifier, 64),
@@ -3072,9 +3139,12 @@ async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
         continue;
       }
 
+      const hasDocumentIds = isSpike
+        ? contextInfo.document_ids.length > 0
+        : Boolean(contextInfo.document_id);
       const missingRequiredFields =
         !contextInfo.job_type
-        || (SQL_RECONCILE_DOC_MATCH_JOB_TYPES.has(contextInfo.job_type) && !contextInfo.document_id)
+        || (SQL_RECONCILE_DOC_MATCH_JOB_TYPES.has(contextInfo.job_type) && !hasDocumentIds)
         || (
           SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES.has(contextInfo.job_type)
           && !normalizeSqlReconcilePractice(contextInfo.practice_name)
@@ -3085,7 +3155,7 @@ async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
           linear_key: sanitizeSingleLine(issue?.identifier, 64),
           title: sanitizeSingleLine(issue?.title, 240),
           job_type: contextInfo.job_type,
-          document_id: contextInfo.document_id,
+          document_id: isSpike ? contextInfo.document_ids.join(",") : contextInfo.document_id,
           practice_name: contextInfo.practice_name,
           practice_code: contextInfo.practice_code,
           reason: "missing_required_match_fields",
@@ -3093,12 +3163,14 @@ async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
         continue;
       }
 
-      const matchResult = sqlReconcileIssueStillExists(contextInfo, liveIndex);
+      const matchResult = isSpike
+        ? sqlReconcileSpikeIssueStillExists(contextInfo, liveIndex)
+        : sqlReconcileIssueStillExists(contextInfo, liveIndex);
       const publicEntry = {
         linear_key: sanitizeSingleLine(issue?.identifier, 64),
         title: sanitizeSingleLine(issue?.title, 240),
         job_type: contextInfo.job_type,
-        document_id: contextInfo.document_id,
+        document_id: isSpike ? contextInfo.document_ids.join(",") : contextInfo.document_id,
         practice_name: contextInfo.practice_name,
         practice_code: contextInfo.practice_code,
         reason: matchResult.reason,
