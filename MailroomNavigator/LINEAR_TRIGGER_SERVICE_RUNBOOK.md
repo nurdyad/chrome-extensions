@@ -1,7 +1,7 @@
 # Linear Trigger Service Runbook
 
 The Mailroom Navigator panel talks to a local service at `http://127.0.0.1:4817`.
-That service powers `Trigger Linear`, `Reconcile Linear`, `Create Linear Issue`, Slack sync, and some access-management checks.
+That service powers `Trigger Linear`, `Reconcile Linear`, `Create Linear Issue`, and Slack sync.
 
 ## What The Panel Status Means
 

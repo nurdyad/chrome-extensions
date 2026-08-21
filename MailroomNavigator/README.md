@@ -159,14 +159,6 @@ Use `SETUP.md` for installation on a new machine.
   - `linearSlackStatus` (issue generation/create status)
   - `linearTriggerStatus`
 
-#### Access Service
-
-- `Open Access Mode on this machine` bypasses feature gating locally so everyone can use the extension immediately
-- the default GitHub/distributed setup is `Hybrid` with `Open Access Mode` enabled, so users are not blocked from Navigator, Job Panel, dashboard hover tools, or other browser-side features
-- localhost-backed tools like `Trigger Linear` and `UUID Lookup` remain visible, but they still require the optional local trigger service to work
-- shared access service URL/key remain available when you want cross-machine user management
-- owner-only `Access Control` stays available for the configured owner account
-
 #### Bookmarklet Tools
 
 - `UUID Picker`
