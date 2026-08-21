@@ -1297,15 +1297,20 @@ function extractBotJobSpikeSignatureFromText(title = "", description = "") {
 
 function botJobSpikeSignaturesMatch(candidateSignature, payloadSignature) {
   if (!candidateSignature || !payloadSignature) return false;
-  const jobTypesCompatible = !candidateSignature.jobTypes.length
-    || !payloadSignature.jobTypes.length
-    || arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes);
+
+  const jobTypesMatch = Boolean(candidateSignature.jobTypes.length)
+    && Boolean(payloadSignature.jobTypes.length)
+    && arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes);
+  const practicesMatch = Boolean(candidateSignature.practices.length)
+    && Boolean(payloadSignature.practices.length)
+    && arraysMatchExactly(candidateSignature.practices, payloadSignature.practices);
+
+  if (!jobTypesMatch || !practicesMatch) return false;
 
   if (
     candidateSignature.documentIds.length
     && payloadSignature.documentIds.length
     && arraysMatchExactly(candidateSignature.documentIds, payloadSignature.documentIds)
-    && jobTypesCompatible
   ) {
     return true;
   }
@@ -1318,16 +1323,7 @@ function botJobSpikeSignaturesMatch(candidateSignature, payloadSignature) {
     return true;
   }
 
-  return Boolean(
-    candidateSignature.title
-    && payloadSignature.title
-    && candidateSignature.title === payloadSignature.title
-    && candidateSignature.rowCount
-    && payloadSignature.rowCount
-    && candidateSignature.rowCount === payloadSignature.rowCount
-    && arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes)
-    && arraysMatchExactly(candidateSignature.practices, payloadSignature.practices)
-  );
+  return false;
 }
 
 function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId) {
