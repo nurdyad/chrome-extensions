@@ -1297,15 +1297,20 @@ function extractBotJobSpikeSignatureFromText(title = "", description = "") {
 
 function botJobSpikeSignaturesMatch(candidateSignature, payloadSignature) {
   if (!candidateSignature || !payloadSignature) return false;
-  const jobTypesCompatible = !candidateSignature.jobTypes.length
-    || !payloadSignature.jobTypes.length
-    || arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes);
+
+  const jobTypesMatch = Boolean(candidateSignature.jobTypes.length)
+    && Boolean(payloadSignature.jobTypes.length)
+    && arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes);
+  const practicesMatch = Boolean(candidateSignature.practices.length)
+    && Boolean(payloadSignature.practices.length)
+    && arraysMatchExactly(candidateSignature.practices, payloadSignature.practices);
+
+  if (!jobTypesMatch || !practicesMatch) return false;
 
   if (
     candidateSignature.documentIds.length
     && payloadSignature.documentIds.length
     && arraysMatchExactly(candidateSignature.documentIds, payloadSignature.documentIds)
-    && jobTypesCompatible
   ) {
     return true;
   }
@@ -1318,16 +1323,7 @@ function botJobSpikeSignaturesMatch(candidateSignature, payloadSignature) {
     return true;
   }
 
-  return Boolean(
-    candidateSignature.title
-    && payloadSignature.title
-    && candidateSignature.title === payloadSignature.title
-    && candidateSignature.rowCount
-    && payloadSignature.rowCount
-    && candidateSignature.rowCount === payloadSignature.rowCount
-    && arraysMatchExactly(candidateSignature.jobTypes, payloadSignature.jobTypes)
-    && arraysMatchExactly(candidateSignature.practices, payloadSignature.practices)
-  );
+  return false;
 }
 
 function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId) {
@@ -1392,6 +1388,24 @@ function isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSuppor
     }
   }
 
+  if (payloadIsBotJob && candidateIsBotJobSpike) {
+    const candidateSpikeSignature = extractBotJobSpikeSignatureFromText(candidateTitle, candidateDescription);
+    if (candidateSpikeSignature) {
+      const payloadJobType = normalizeIssueLookupKey(payload?.jobType)
+        || normalizeIssueLookupKey(extractIssueStructuredField(payload?.description, "Job Type"));
+      const payloadPractice = normalizeIssueLookupKey(payload?.practiceName)
+        || normalizeIssueLookupKey(extractIssueStructuredField(payload?.description, "Practice"));
+      const payloadFailedJobId = normalizeIssueLookupKey(payload?.failedJobId);
+      const jobTypeMatches = Boolean(payloadJobType) && candidateSpikeSignature.jobTypes.includes(payloadJobType);
+      const practiceMatches = Boolean(payloadPractice) && candidateSpikeSignature.practices.includes(payloadPractice);
+      const documentCovered = Boolean(payloadDocumentId) && candidateSpikeSignature.documentIds.includes(payloadDocumentId);
+      const jobCovered = Boolean(payloadFailedJobId) && candidateSpikeSignature.jobIds.includes(payloadFailedJobId);
+      if ((documentCovered || jobCovered) && jobTypeMatches && practiceMatches) {
+        return true;
+      }
+    }
+  }
+
   if (practiceSupportSignature) {
     const candidateSignature = extractPracticeSupportSignatureFromIssue(candidate);
     if (
@@ -1414,6 +1428,99 @@ async function findExistingLinearIssue(payload, team) {
 
   if (!dedupeMarker && !practiceSupportSignature && !payloadDocumentId && !normalizedTitle) {
     return null;
+  }
+
+  const shapeMatch = (match) => ({
+    id: sanitizeSingleLine(match.id, 64),
+    identifier: sanitizeSingleLine(match.identifier, 64),
+    title: sanitizeSingleLine(match.title, 240),
+    url: sanitizeSingleLine(match.url, 1200),
+    priority: 0,
+    state: {
+      id: sanitizeSingleLine(match?.state?.id, 64),
+      name: sanitizeSingleLine(match?.state?.name, 120),
+      type: sanitizeSingleLine(match?.state?.type, 64),
+    },
+  });
+
+  const normalizedPayloadTitleLower = normalizedTitle.toLowerCase();
+  const payloadIsBotJobForSearch = normalizedPayloadTitleLower.startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase());
+  const payloadIsBotJobSpikeForSearch = normalizedPayloadTitleLower.startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+
+  // Bot job / bot job spike issues always embed their document id and job id as literal
+  // text in the title or description (structured fields, "doc 123" / "job <uuid>" sample
+  // lines, and the hidden dedupe marker all include the raw value). So any real duplicate
+  // must contain that literal text somewhere - searching Linear directly for it instead of
+  // paging through the entire team backlog is safe and much faster.
+  if (payloadIsBotJobForSearch || payloadIsBotJobSpikeForSearch) {
+    const identifierCandidates = [...new Set([
+      payloadDocumentId,
+      normalizeIssueLookupKey(payload?.failedJobId),
+    ].filter(Boolean))];
+
+    if (identifierCandidates.length > 0) {
+      const targetedQuery = `
+        query FindBotJobDuplicateByIdentifier($teamKey: String!, $value: String!, $first: Int!, $after: String) {
+          issues(
+            first: $first
+            after: $after
+            filter: {
+              team: { key: { eq: $teamKey } }
+              or: [
+                { description: { contains: $value } }
+                { title: { contains: $value } }
+              ]
+            }
+          ) {
+            nodes {
+              id
+              identifier
+              title
+              url
+              description
+              createdAt
+              updatedAt
+              state {
+                id
+                name
+                type
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      `;
+
+      for (const identifierValue of identifierCandidates) {
+        const seenIssueIds = new Set();
+        let after = null;
+        for (let page = 0; page < 5; page += 1) {
+          const data = await runLinearGraphqlRequest(targetedQuery, {
+            teamKey: team.key,
+            value: identifierValue,
+            first: 50,
+            after,
+          });
+          const issuesRoot = data?.issues;
+          const nodes = Array.isArray(issuesRoot?.nodes) ? issuesRoot.nodes : [];
+          const match = nodes.find((candidate) => {
+            if (!candidate?.id || seenIssueIds.has(candidate.id)) return false;
+            seenIssueIds.add(candidate.id);
+            return isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId);
+          });
+          if (match?.id) return shapeMatch(match);
+
+          const pageInfo = issuesRoot?.pageInfo;
+          if (!pageInfo?.hasNextPage || !sanitizeSingleLine(pageInfo?.endCursor, 240)) break;
+          after = sanitizeSingleLine(pageInfo.endCursor, 240);
+        }
+      }
+
+      return null;
+    }
   }
 
   const buildQuery = (stateFilterBlock = "") => `
@@ -1479,18 +1586,7 @@ async function findExistingLinearIssue(payload, team) {
         return isLinearIssueDuplicate(candidate, payload, dedupeMarker, practiceSupportSignature, payloadDocumentId);
       });
       if (match?.id) {
-        return {
-          id: sanitizeSingleLine(match.id, 64),
-          identifier: sanitizeSingleLine(match.identifier, 64),
-          title: sanitizeSingleLine(match.title, 240),
-          url: sanitizeSingleLine(match.url, 1200),
-          priority: 0,
-          state: {
-            id: sanitizeSingleLine(match?.state?.id, 64),
-            name: sanitizeSingleLine(match?.state?.name, 120),
-            type: sanitizeSingleLine(match?.state?.type, 64),
-          },
-        };
+        return shapeMatch(match);
       }
 
       const pageInfo = issuesRoot?.pageInfo;
@@ -1612,6 +1708,22 @@ async function createLinearIssue(payload) {
   const team = await resolveLinearTeam();
   const duplicateIssue = await findExistingLinearIssue(payload, team);
   if (duplicateIssue?.identifier && duplicateIssue?.url) {
+    const normalizedPayloadTitle = sanitizeSingleLine(payload?.title, 240).toLowerCase();
+    const payloadIsBotJob = normalizedPayloadTitle.startsWith(BOT_JOB_TITLE_PREFIX.toLowerCase());
+    const duplicateIsBotJobSpike = sanitizeSingleLine(duplicateIssue?.title, 240)
+      .toLowerCase()
+      .startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+    if (payloadIsBotJob && duplicateIsBotJobSpike) {
+      return {
+        team,
+        issue: toPublicLinearIssue(duplicateIssue),
+        duplicate: true,
+        reopened: false,
+        reopenStateName: LINEAR_DUPLICATE_REOPEN_STATE_NAME,
+        reopenSkipped: "covered_by_bot_job_spike",
+      };
+    }
+
     const reopenResult = await moveExistingLinearIssueToReopenState(duplicateIssue, team);
     return {
       team,
