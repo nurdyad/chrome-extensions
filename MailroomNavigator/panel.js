@@ -433,6 +433,7 @@ async function initializePanel() {
     await Navigator.initializeRecentPractices();
 
     setupCompactModeToggle();
+    setupDarkModeToggle();
     if (window.top === window && await loadCompactModePreference()) {
         enterCompactMode();
     } else {
@@ -5260,6 +5261,60 @@ async function loadCompactModePreference() {
   } catch (error) {
     return false;
   }
+}
+
+const DARK_MODE_STORAGE_KEY = 'mailroomNavigatorDarkMode';
+
+function saveDarkModePreference(isDark) {
+  try {
+    chrome.storage.local.set({ [DARK_MODE_STORAGE_KEY]: isDark });
+  } catch (error) {
+    // Ignore storage errors; dark mode just won't be remembered next time.
+  }
+  // This filter only reaches this document's own <body> - it can't touch
+  // the host-page-level docked handle rail, which background.js injects
+  // into a completely separate document. Tell it to restyle that rail's
+  // existing DOM immediately instead of waiting for the next tab
+  // activation/reload to notice the new stored preference.
+  try {
+    chrome.runtime.sendMessage({
+      action: 'setDarkModePreference',
+      payload: { isDark, hostTabId: PANEL_HOST_TAB_ID }
+    }).catch(() => undefined);
+  } catch (error) {
+    // Background script may not be reachable; the stored preference still
+    // applies next time the host page re-injects the rail.
+  }
+}
+
+async function loadDarkModePreference() {
+  try {
+    const result = await chrome.storage.local.get(DARK_MODE_STORAGE_KEY);
+    return result?.[DARK_MODE_STORAGE_KEY] === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function applyDarkMode(isDark) {
+  document.body.classList.toggle('bl-dark-mode', isDark);
+  const toggleBtn = document.getElementById('darkModeToggleBtn');
+  if (!toggleBtn) return;
+  toggleBtn.classList.toggle('is-dark', isDark);
+  const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  toggleBtn.title = label;
+  toggleBtn.setAttribute('aria-label', label);
+}
+
+function setupDarkModeToggle() {
+  const toggleBtn = document.getElementById('darkModeToggleBtn');
+  if (!toggleBtn) return;
+  toggleBtn.addEventListener('click', () => {
+    const isDark = !document.body.classList.contains('bl-dark-mode');
+    applyDarkMode(isDark);
+    saveDarkModePreference(isDark);
+  });
+  loadDarkModePreference().then(applyDarkMode).catch(() => undefined);
 }
 
 // Reopening the popup via the extension icon reuses an already-open window
