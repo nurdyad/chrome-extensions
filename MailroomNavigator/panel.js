@@ -3,12 +3,8 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
-import { AuthManagement } from './auth_management.js';
 
 let practiceCacheLoadPromise = null;
-let extensionAccessState = null;
-let extensionUserManagementState = { users: [], featureCatalog: [] };
-let accessNoticeHideTimer = null;
 const PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY = 'mailroomNavPanelSectionCollapseV1';
 const PANEL_HOST_TAB_ID = (() => {
     try {
@@ -49,36 +45,9 @@ const PANEL_FORCED_TOOL_ID = (() => {
     }
 })();
 
-const EXTENSION_FEATURE_CATALOG = [
-    { key: 'practice_navigator', label: 'Navigator', description: 'Practice Navigator, practice links, live counts, and related admin pages.' },
-    { key: 'job_panel', label: 'Job Panel', description: 'Quick document search, job status checks, and bulk job/admin links.' },
-    { key: 'email_formatter', label: 'Email Formatter', description: 'Use the Email Formatter tool from Bookmarklet Tools.' },
-    { key: 'linear_create_issue', label: 'Create Linear Issue', description: 'Manual Linear issue creation from the panel or document hover actions.' },
-    { key: 'linear_trigger', label: 'Trigger Linear', description: 'Run automated bot-jobs issue creation.' },
-    { key: 'linear_reconcile', label: 'Reconcile Linear', description: 'Mark resolved bot-job issues done in Linear.' },
-    { key: 'slack_sync', label: 'Slack Sync', description: 'Sync Slack workspace targets and send Slack notifications from the Linear panel.' },
-    { key: 'workflow_groups', label: 'Workflow Groups', description: 'Use the Custom Workflow Groups tool from Bookmarklet Tools.' },
-    { key: 'bookmarklet_tools', label: 'Bookmarklet Tools', description: 'Use UUID picker, Docman group discovery, and related modal tools.' },
-    { key: 'dashboard_hover_tools', label: 'Dashboard Hover Tools', description: 'Use Jobs/Admin/Issue hover actions on BetterLetter dashboards.' }
-];
-const EXTENSION_FEATURE_KEYS = EXTENSION_FEATURE_CATALOG.map((feature) => feature.key);
 const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const UUID_LOOKUP_REQUEST_TIMEOUT_MS = 26000;
 const UUID_LOOKUP_LOADING_DELAY_MS = 120;
-const NAVIGATOR_VIEW_FEATURE_KEYS = ['practice_navigator'];
-const LINEAR_VIEW_FEATURE_KEYS = [
-    'linear_create_issue',
-    'linear_trigger',
-    'linear_reconcile',
-    'slack_sync'
-];
-const BOOKMARKLET_VIEW_FEATURE_KEYS = ['bookmarklet_tools', 'email_formatter', 'workflow_groups'];
-const VIEW_FEATURE_REQUIREMENTS = {
-    practiceNavigatorView: NAVIGATOR_VIEW_FEATURE_KEYS,
-    jobManagerView: ['job_panel'],
-    emailFormatterView: LINEAR_VIEW_FEATURE_KEYS,
-    bookmarkletToolsView: BOOKMARKLET_VIEW_FEATURE_KEYS
-};
 const DOCKED_PANEL_TITLES = {
     practiceNavigatorView: 'Practice Navigator',
     jobManagerView: 'Job Panel',
@@ -88,68 +57,6 @@ const DOCKED_PANEL_TITLES = {
 const DOCKED_TOOL_TITLES = {
     uuidPicker: 'UUID Picker'
 };
-
-function buildDefaultFeatureAccess() {
-    return Object.fromEntries(EXTENSION_FEATURE_KEYS.map((featureKey) => [featureKey, false]));
-}
-
-function normalizePanelAccessState(rawAccess = null) {
-    const featureCatalog = Array.isArray(rawAccess?.featureCatalog) && rawAccess.featureCatalog.length > 0
-        ? rawAccess.featureCatalog
-        : EXTENSION_FEATURE_CATALOG;
-    const features = buildDefaultFeatureAccess();
-    EXTENSION_FEATURE_KEYS.forEach((featureKey) => {
-        features[featureKey] = Boolean(rawAccess?.features?.[featureKey]);
-    });
-    return {
-        enabled: true,
-        initialized: Boolean(rawAccess?.initialized),
-        allowed: Boolean(rawAccess?.allowed),
-        isOwner: Boolean(rawAccess?.isOwner),
-        canManageUsers: Boolean(rawAccess?.canManageUsers),
-        openAccessMode: Boolean(rawAccess?.openAccessMode),
-        serverlessLiteMode: Boolean(rawAccess?.serverlessLiteMode),
-        role: String(rawAccess?.role || '').trim().slice(0, 40),
-        email: String(rawAccess?.email || '').trim().slice(0, 240),
-        reason: String(rawAccess?.reason || '').trim().slice(0, 260),
-        detectionSource: String(rawAccess?.detectionSource || '').trim().slice(0, 120),
-        requestStatus: String(rawAccess?.requestStatus || '').trim().slice(0, 40),
-        requestRequestedAt: String(rawAccess?.requestRequestedAt || '').trim().slice(0, 80),
-        requestUpdatedAt: String(rawAccess?.requestUpdatedAt || '').trim().slice(0, 80),
-        requestRequestedFeatures: Array.isArray(rawAccess?.requestRequestedFeatures)
-            ? rawAccess.requestRequestedFeatures
-                .map((featureKey) => String(featureKey || '').trim())
-                .filter((featureKey) => EXTENSION_FEATURE_KEYS.includes(featureKey))
-            : [],
-        features,
-        featureCatalog
-    };
-}
-
-function hasExtensionFeature(featureKey) {
-    if (!extensionAccessState) return false;
-    if (extensionAccessState.isOwner) return true;
-    return Boolean(extensionAccessState.features?.[featureKey]);
-}
-
-function hasAnyExtensionFeature(featureKeys = []) {
-    if (!Array.isArray(featureKeys) || featureKeys.length === 0) return false;
-    return featureKeys.some((featureKey) => hasExtensionFeature(featureKey));
-}
-
-function canAccessView(viewId) {
-    const requiredFeatures = VIEW_FEATURE_REQUIREMENTS[viewId] || [];
-    return hasAnyExtensionFeature(requiredFeatures);
-}
-
-function getAvailableViewIds() {
-    return Object.keys(VIEW_FEATURE_REQUIREMENTS).filter((viewId) => canAccessView(viewId));
-}
-
-function getInitialAccessibleViewId() {
-    if (PANEL_FORCED_VIEW_ID && canAccessView(PANEL_FORCED_VIEW_ID)) return PANEL_FORCED_VIEW_ID;
-    return getAvailableViewIds()[0] || '';
-}
 
 function getProtectedActionPayload(extraPayload = {}) {
     return typeof PANEL_HOST_TAB_ID === 'number'
@@ -207,11 +114,8 @@ async function syncPracticeCache({ forceRefresh = false, allowScrape = true } = 
 
 
 // --- 1. Global View Switcher ---
-function showView(viewId, { force = false } = {}) {
-    const fallbackViewId = getInitialAccessibleViewId();
-    const resolvedViewId = force
-        ? (VIEW_FEATURE_REQUIREMENTS[viewId] ? viewId : fallbackViewId)
-        : (canAccessView(viewId) ? viewId : fallbackViewId);
+function showView(viewId) {
+    const resolvedViewId = viewId;
     ['practiceNavigatorView', 'jobManagerView', 'emailFormatterView', 'bookmarkletToolsView'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = (resolvedViewId && id === resolvedViewId) ? 'block' : 'none';
@@ -242,277 +146,52 @@ function setupDockedPanelHeader() {
     header.hidden = false;
 }
 
-async function fetchExtensionAccessState({ forceRefresh = false, allowStale = false } = {}) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'getExtensionAccessState',
-        payload: {
-            forceRefresh,
-            allowStale,
-            preferredTabId: PANEL_HOST_TAB_ID
-        }
-    });
-    if (!response?.success || !response?.access) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not resolve MailroomNavigator access.');
-    }
-    return response.access;
-}
-
-async function fetchExtensionUserManagement({ forceRefresh = false } = {}) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'getExtensionUserManagement',
-        payload: {
-            forceRefresh,
-            preferredTabId: PANEL_HOST_TAB_ID
-        }
-    });
-    if (!response?.success || !response?.management) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load MailroomNavigator user management.');
-    }
-    return response.management;
-}
-
-async function exportExtensionAccessPolicy() {
-    const response = await chrome.runtime.sendMessage({
-        action: 'exportExtensionAccessPolicy',
-        payload: {
-            preferredTabId: PANEL_HOST_TAB_ID
-        }
-    });
-    if (!response?.success || !response?.exported) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not export MailroomNavigator access policy.');
-    }
-    return response.exported;
-}
-
-async function importExtensionAccessPolicy({ policy, mode = 'merge' } = {}) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'importExtensionAccessPolicy',
-        payload: {
-            preferredTabId: PANEL_HOST_TAB_ID,
-            policy,
-            mode
-        }
-    });
-    if (!response?.success || !response?.management) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not import MailroomNavigator access policy.');
-    }
-    return response;
-}
-
-async function fetchExtensionIdentityDiagnostics({ forceRefresh = false } = {}) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'getExtensionIdentityDiagnostics',
-        payload: {
-            forceRefresh,
-            preferredTabId: PANEL_HOST_TAB_ID
-        }
-    });
-    if (!response?.success || !response?.diagnostics) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load BetterLetter identity diagnostics.');
-    }
-    return response.diagnostics;
-}
-
-async function submitExtensionAccessRequest({ note = '', requestedFeatures = [] } = {}) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'submitExtensionAccessRequest',
-        payload: {
-            preferredTabId: PANEL_HOST_TAB_ID,
-            note,
-            requestedFeatures
-        }
-    });
-    if (!response?.success) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not submit access request.');
-    }
-    return response;
-}
-
-function sanitizeAccessServiceUrl(value) {
-    try {
-        const raw = String(value || '').trim();
-        if (!raw) return '';
-        const url = new URL(raw);
-        if (!/^https?:$/i.test(url.protocol)) return '';
-        url.hash = '';
-        return url.toString().replace(/\/+$/, '');
-    } catch {
-        return '';
-    }
-}
-
-async function fetchAccessControlServiceConfig() {
-    const response = await chrome.runtime.sendMessage({
-        action: 'getAccessControlServiceConfig'
-    });
-    if (!response?.success || !response?.config) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not load access service config.');
-    }
-    return response.config;
-}
-
-async function saveAccessControlServiceConfig(config) {
-    const response = await chrome.runtime.sendMessage({
-        action: 'saveAccessControlServiceConfig',
-        payload: config
-    });
-    if (!response?.success || !response?.config) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not save access service config.');
-    }
-    return response.config;
-}
-
-async function fetchAccessControlServiceHealth() {
-    const response = await chrome.runtime.sendMessage({
-        action: 'getAccessControlServiceHealth'
-    });
-    if (!response?.success || !response?.health) {
-        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not reach access service.');
-    }
-    return response.health;
-}
-
-function renderExtensionAccessState(access) {
-    const notice = document.getElementById('accessControlNotice');
-    const identityPanel = document.getElementById('identityDetectionPanel');
-    const identityStatus = document.getElementById('identityDetectionStatus');
-    const identityDiagnostics = document.getElementById('identityDetectionDiagnostics');
-    const navButtonsRow = document.querySelector('.global-nav-buttons-row');
-    const views = [
-        document.getElementById('practiceNavigatorView'),
-        document.getElementById('jobManagerView'),
-        document.getElementById('emailFormatterView'),
-        document.getElementById('bookmarkletToolsView')
-    ];
-
-    extensionAccessState = normalizePanelAccessState(access);
-
-    if (!notice) return;
-
-    const emailLine = extensionAccessState.email
-        ? `Current BetterLetter user: ${extensionAccessState.email}`
-        : 'Current BetterLetter user: not detected';
-    const sourceLine = extensionAccessState.detectionSource
-        ? `Detection source: ${extensionAccessState.detectionSource}`
-        : '';
-
-    if (accessNoticeHideTimer) {
-        clearTimeout(accessNoticeHideTimer);
-        accessNoticeHideTimer = null;
-    }
-
-    notice.style.display = 'none';
-    if (identityStatus) {
-        identityStatus.textContent = [emailLine, extensionAccessState.reason || 'Open a signed-in BetterLetter tab and refresh the panel.', sourceLine]
-            .filter(Boolean)
-            .join('\n');
-    }
-
-    if (extensionAccessState.openAccessMode) {
-        notice.classList.remove('invalid');
-        notice.classList.add('valid');
-        notice.textContent = '';
-        if (!extensionAccessState.email) {
-            notice.style.display = 'block';
-            notice.textContent = [
-                'BetterLetter email is not detected yet, so owner-only management stays hidden until you open a signed-in BetterLetter tab.',
-                sourceLine
-            ].filter(Boolean).join('\n');
-        }
-        if (identityPanel) identityPanel.style.display = 'none';
-        if (identityDiagnostics) {
-            identityDiagnostics.style.display = 'none';
-            identityDiagnostics.textContent = '';
-        }
-        if (navButtonsRow) navButtonsRow.style.display = '';
-        return;
-    }
-
-    if (extensionAccessState.allowed) {
-        notice.classList.remove('invalid');
-        notice.classList.add('valid');
-        notice.style.display = 'none';
-        notice.textContent = '';
-        if (identityPanel) identityPanel.style.display = 'none';
-        if (identityDiagnostics) {
-            identityDiagnostics.style.display = 'none';
-            identityDiagnostics.textContent = '';
-        }
-        if (navButtonsRow) navButtonsRow.style.display = '';
-        return;
-    }
-
-    notice.classList.remove('valid');
-    notice.classList.add('invalid');
-    notice.style.display = 'block';
-    notice.textContent = [emailLine, extensionAccessState.reason || 'Access denied.', sourceLine]
-        .filter(Boolean)
-        .join('\n');
-    if (navButtonsRow) navButtonsRow.style.display = 'none';
-    if (identityPanel) identityPanel.style.display = !extensionAccessState.email ? 'block' : 'none';
-    if (identityDiagnostics) {
-        identityDiagnostics.style.display = 'none';
-        identityDiagnostics.textContent = '';
-    }
-    views.forEach((view) => {
-        if (!view) return;
-        view.style.display = 'none';
-    });
-}
-
-function renderIdentityDiagnostics(diagnostics = null) {
-    const identityDiagnostics = document.getElementById('identityDetectionDiagnostics');
-    if (!identityDiagnostics) return;
-    if (!diagnostics || typeof diagnostics !== 'object') {
-        identityDiagnostics.style.display = 'none';
-        identityDiagnostics.textContent = '';
-        return;
-    }
-
-    const lines = [];
-    lines.push(`Panel hostTabId: ${PANEL_HOST_TAB_ID ?? 'none'}`);
-    lines.push(`Preferred tabId: ${diagnostics.preferredTabId ?? 'none'}`);
-    if (diagnostics?.storedSnapshot?.email) {
-        lines.push(`Stored snapshot: ${diagnostics.storedSnapshot.email} (${diagnostics.storedSnapshot.source || 'unknown'})`);
-    } else {
-        lines.push('Stored snapshot: none');
-    }
-    lines.push(`Candidate tabs: ${Array.isArray(diagnostics?.tabs) ? diagnostics.tabs.length : 0}`);
-
-    (Array.isArray(diagnostics?.tabs) ? diagnostics.tabs : []).slice(0, 6).forEach((tab, index) => {
-        lines.push('');
-        lines.push(`[${index + 1}] tabId=${tab.tabId} active=${tab.active ? 'yes' : 'no'} status=${tab.status || 'unknown'} signIn=${tab.isSignIn ? 'yes' : 'no'}`);
-        if (tab.url) lines.push(`url: ${tab.url}`);
-        if (tab.title) lines.push(`title: ${tab.title}`);
-        if (tab.datasetEmail || tab.datasetSource) {
-            lines.push(`dataset: ${tab.datasetEmail || 'none'} ${tab.datasetSource ? `(${tab.datasetSource})` : ''}`.trim());
-        }
-        if (tab.mainWorld?.email || tab.mainWorld?.source) {
-            lines.push(`main: ${tab.mainWorld.email || 'none'} ${tab.mainWorld.source ? `(${tab.mainWorld.source})` : ''}`.trim());
-        } else {
-            lines.push('main: none');
-        }
-        if (tab.isolatedWorld?.email || tab.isolatedWorld?.source) {
-            lines.push(`isolated: ${tab.isolatedWorld.email || 'none'} ${tab.isolatedWorld.source ? `(${tab.isolatedWorld.source})` : ''}`.trim());
-        } else {
-            lines.push('isolated: none');
-        }
-        if (tab.routeProbe?.email || tab.routeProbe?.source) {
-            lines.push(`route: ${tab.routeProbe.email || 'none'} ${tab.routeProbe.source ? `(${tab.routeProbe.source})` : ''}`.trim());
-        } else {
-            lines.push('route: none');
-        }
-        if (tab.error) lines.push(`error: ${tab.error}`);
-    });
-
-    identityDiagnostics.textContent = lines.join('\n');
-    identityDiagnostics.style.display = 'block';
-}
-
 function setElementVisible(elementOrId, shouldShow, displayValue = '') {
     const element = typeof elementOrId === 'string' ? document.getElementById(elementOrId) : elementOrId;
     if (!element) return;
     element.style.display = shouldShow ? displayValue : 'none';
+}
+
+async function fetchServerlessLiteMode() {
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getServerlessLiteMode' });
+        return Boolean(response?.success && response.serverlessLiteMode);
+    } catch (error) {
+        return false;
+    }
+}
+
+// Serverless Lite mode has no local trigger server to actually fire Linear/
+// Slack actions from, so those controls would just fail if shown - swap
+// them for a generate-the-draft-and-copy-it-manually flow instead. This is
+// a deployment-topology switch, not permission gating.
+function applyServerlessLiteModeToUi(isServerlessLiteMode) {
+    setElementVisible('linearServerlessLiteNotice', isServerlessLiteMode);
+    setElementVisible('linearSlackControls', !isServerlessLiteMode);
+    setElementVisible('createLinearSlackIssueBtn', !isServerlessLiteMode, '');
+    setElementVisible('triggerLinearBotJobsBtn', !isServerlessLiteMode, '');
+    setElementVisible('triggerLinearDryRunLabel', !isServerlessLiteMode, 'flex');
+    setElementVisible('reconcileLinearControls', !isServerlessLiteMode);
+    setElementVisible('reconcileLinearDryRunLabel', !isServerlessLiteMode, 'flex');
+    setElementVisible('linearServiceControls', !isServerlessLiteMode);
+    setElementVisible('linearActionButtonsRow', !isServerlessLiteMode, 'grid');
+    setElementVisible('linearDraftCopyButtonsRow', isServerlessLiteMode);
+
+    const linearIssueSectionSubtitle = document.getElementById('linearIssueSectionSubtitle');
+    if (linearIssueSectionSubtitle) {
+        linearIssueSectionSubtitle.textContent = isServerlessLiteMode
+            ? 'Generate draft details and copy them into Linear manually.'
+            : 'Create issues, trigger runs, and Slack updates.';
+    }
+    const linearSlackStatus = document.getElementById('linearSlackStatus');
+    if (linearSlackStatus && linearSlackStatus.dataset.mode !== (isServerlessLiteMode ? 'serverless-lite' : 'full')) {
+        linearSlackStatus.dataset.mode = isServerlessLiteMode ? 'serverless-lite' : 'full';
+        linearSlackStatus.classList.remove('valid', 'invalid');
+        linearSlackStatus.classList.add('neutral');
+        linearSlackStatus.textContent = isServerlessLiteMode
+            ? 'Paste a Document ID and click Generate Details. Then copy the title and description into Linear manually.'
+            : 'Paste a Document ID and click Generate Details.';
+    }
 }
 
 async function loadPanelCollapsibleSectionState() {
@@ -541,95 +220,6 @@ function applyCollapsibleSectionUi(section, body, toggleButton, collapsed) {
     section.classList.toggle('is-collapsed', Boolean(collapsed));
     toggleButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     body.style.display = collapsed ? 'none' : '';
-}
-
-function applyExtensionFeatureAccessToUi() {
-    const navRow = document.querySelector('.global-nav-buttons-row');
-    const accessAllowed = Boolean(extensionAccessState?.allowed);
-    const serverlessLiteMode = Boolean(extensionAccessState?.serverlessLiteMode);
-    const availableViewIds = getAvailableViewIds();
-    const linearSlackStatus = document.getElementById('linearSlackStatus');
-    const linearIssueSectionSubtitle = document.getElementById('linearIssueSectionSubtitle');
-
-    const navButtonMap = {
-        practiceNavigatorView: document.getElementById('navigatorGlobalToggleBtn'),
-        jobManagerView: document.getElementById('jobManagerGlobalToggleBtn'),
-        emailFormatterView: document.getElementById('emailFormatterGlobalToggleBtn'),
-        bookmarkletToolsView: document.getElementById('bookmarkletToolsGlobalToggleBtn')
-    };
-
-    Object.entries(navButtonMap).forEach(([viewId, button]) => {
-        if (!button) return;
-        const showButton = accessAllowed && canAccessView(viewId);
-        button.style.display = showButton ? '' : 'none';
-    });
-
-    if (navRow) {
-        navRow.style.display = accessAllowed && availableViewIds.length > 0 ? '' : 'none';
-    }
-
-    setElementVisible('practiceNavigatorCoreSection', hasExtensionFeature('practice_navigator'));
-    setElementVisible('docmanToolStatusSection', hasExtensionFeature('practice_navigator'));
-    setElementVisible('runUuidPickerToolBtn', hasExtensionFeature('bookmarklet_tools'));
-    setElementVisible('runListDocmanGroupsToolBtn', hasExtensionFeature('bookmarklet_tools'));
-    setElementVisible('runEmailFormatterToolBtn', hasExtensionFeature('email_formatter'));
-    setElementVisible('runWorkflowGroupsToolBtn', hasExtensionFeature('workflow_groups'));
-    // Same gating as the launch-grid buttons above, applied to the inline
-    // cards shown instead of that grid on the merged "Bookmarklet Tools"
-    // docked handle - a card whose feature isn't granted shouldn't render
-    // as an empty title with nothing underneath it.
-    setElementVisible('inlineWorkflowGroupsCard', hasExtensionFeature('workflow_groups'));
-    setElementVisible('inlineDocmanGroupsCard', hasExtensionFeature('bookmarklet_tools'));
-    setElementVisible('inlineEmailFormatterCard', hasExtensionFeature('email_formatter'));
-    setElementVisible(
-        'linearIssueSection',
-        serverlessLiteMode || hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
-    );
-    setElementVisible('linearCreateIssueControls', serverlessLiteMode || hasExtensionFeature('linear_create_issue'));
-    setElementVisible('linearServerlessLiteNotice', serverlessLiteMode);
-    setElementVisible('linearSlackControls', !serverlessLiteMode && hasExtensionFeature('slack_sync'));
-    setElementVisible('createLinearSlackIssueBtn', !serverlessLiteMode && hasExtensionFeature('linear_create_issue'), '');
-    setElementVisible('triggerLinearBotJobsBtn', !serverlessLiteMode && hasExtensionFeature('linear_trigger'), '');
-    setElementVisible('triggerLinearDryRunLabel', !serverlessLiteMode && hasExtensionFeature('linear_trigger'), 'flex');
-    setElementVisible('reconcileLinearControls', !serverlessLiteMode && hasExtensionFeature('linear_reconcile'));
-    setElementVisible('reconcileLinearDryRunLabel', !serverlessLiteMode && hasExtensionFeature('linear_reconcile'), 'flex');
-    setElementVisible(
-        'linearServiceControls',
-        !serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
-    );
-    setElementVisible('linearDraftCopyButtonsRow', serverlessLiteMode);
-    setElementVisible('uuidLookupSection', !serverlessLiteMode && hasExtensionFeature('job_panel'));
-    setElementVisible(
-        'linearTriggerStatus',
-        !serverlessLiteMode
-            && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
-            && Boolean(String(document.getElementById('linearTriggerStatus')?.textContent || '').trim())
-    );
-    setElementVisible('extensionUserManagementSection', !serverlessLiteMode && Boolean(extensionAccessState?.isOwner));
-
-    const actionRow = document.getElementById('linearActionButtonsRow');
-    const canCreateIssue = hasExtensionFeature('linear_create_issue');
-    const canTriggerLinear = hasExtensionFeature('linear_trigger');
-    if (actionRow) {
-        actionRow.style.display = (!serverlessLiteMode && (canCreateIssue || canTriggerLinear)) ? 'grid' : 'none';
-        actionRow.style.gridTemplateColumns = canCreateIssue && canTriggerLinear ? '1fr 1fr' : '1fr';
-    }
-    if (linearIssueSectionSubtitle) {
-        linearIssueSectionSubtitle.textContent = serverlessLiteMode
-            ? 'Generate draft details and copy them into Linear manually.'
-            : 'Create issues, trigger runs, and Slack updates.';
-    }
-    if (linearSlackStatus) {
-        const nextMode = serverlessLiteMode ? 'serverless-lite' : 'full';
-        if (linearSlackStatus.dataset.mode !== nextMode) {
-            linearSlackStatus.dataset.mode = nextMode;
-            linearSlackStatus.classList.remove('valid', 'invalid');
-            linearSlackStatus.classList.add('neutral');
-            linearSlackStatus.textContent = serverlessLiteMode
-                ? 'Paste a Document ID and click Generate Details. Then copy the title and description into Linear manually.'
-                : 'Paste a Document ID and click Generate Details.';
-        }
-    }
 }
 
 
@@ -830,6 +420,14 @@ async function initializePanel() {
     }
     setupDockedPanelHeader();
 
+    // Serverless Lite is a deployment-mode switch (no local trigger server
+    // available on this machine/network), not a permission concept - it's
+    // unrelated to who's using the extension. Resolved once here and reused
+    // below wherever Linear/Slack UI needs to pick "fire it from here" vs.
+    // "generate and copy into Linear manually".
+    const isServerlessLiteMode = await fetchServerlessLiteMode();
+    applyServerlessLiteModeToUi(isServerlessLiteMode);
+
     // A. Visual Cleanup
     Navigator.cleanDuplicateButtons();
     await Navigator.initializeRecentPractices();
@@ -844,9 +442,6 @@ async function initializePanel() {
     const linearIssueSection = document.getElementById('linearIssueSection');
     const linearIssueSectionBody = document.getElementById('linearIssueSectionBody');
     const linearIssueSectionToggle = document.getElementById('linearIssueSectionToggle');
-    const extensionUserManagementSection = document.getElementById('extensionUserManagementSection');
-    const extensionUserManagementSectionBody = document.getElementById('extensionUserManagementSectionBody');
-    const extensionUserManagementSectionToggle = document.getElementById('extensionUserManagementSectionToggle');
     const bulkIdActionsSection = document.getElementById('bulkIdActionsSection');
     const bulkIdActionsSectionBody = document.getElementById('bulkIdActionsSectionBody');
     const bulkIdActionsSectionToggle = document.getElementById('bulkIdActionsSectionToggle');
@@ -854,41 +449,6 @@ async function initializePanel() {
     const recentIdsSectionBody = document.getElementById('recentIdsSectionBody');
     const recentIdsSectionToggle = document.getElementById('recentIdsSectionToggle');
 
-    const identityDetectionStatus = document.getElementById('identityDetectionStatus');
-    const accessRequestSection = document.getElementById('accessRequestSection');
-    const accessRequestStatus = document.getElementById('accessRequestStatus');
-    const accessRequestNoteInput = document.getElementById('accessRequestNoteInput');
-    const accessRequestFeaturesGrid = document.getElementById('accessRequestFeaturesGrid');
-    const submitAccessRequestBtn = document.getElementById('submitAccessRequestBtn');
-    const refreshAccessRequestBtn = document.getElementById('refreshAccessRequestBtn');
-    const accessServiceConfigSection = document.getElementById('accessServiceConfigSection');
-    const accessOpenModeInput = document.getElementById('accessOpenModeInput');
-    const accessServiceUrlInput = document.getElementById('accessServiceUrlInput');
-    const accessServiceKeyInput = document.getElementById('accessServiceKeyInput');
-    const saveAccessServiceConfigBtn = document.getElementById('saveAccessServiceConfigBtn');
-    const clearAccessServiceConfigBtn = document.getElementById('clearAccessServiceConfigBtn');
-    const accessServiceConfigStatus = document.getElementById('accessServiceConfigStatus');
-    const uuidLookupSection = document.getElementById('uuidLookupSection');
-    const extensionUserManagementSummary = document.getElementById('extensionUserManagementSummary');
-    const managedUserEmailInput = document.getElementById('managedUserEmailInput');
-    const managedUserRoleInput = document.getElementById('managedUserRoleInput');
-    const managedUserFeaturesGrid = document.getElementById('managedUserFeaturesGrid');
-    const clearManagedUserFormBtn = document.getElementById('clearManagedUserFormBtn');
-    const saveManagedUserBtn = document.getElementById('saveManagedUserBtn');
-    const refreshManagedUsersBtn = document.getElementById('refreshManagedUsersBtn');
-    const extensionManagedUsersList = document.getElementById('extensionManagedUsersList');
-    let managedUserEditingEmail = '';
-    let accessServiceConfig = {
-        enabled: false,
-        baseUrl: '',
-        sharedKey: '',
-        isDefault: false,
-        defaultBaseUrl: '',
-        defaultOpenAccessMode: false,
-        useLocalOverride: false,
-        openAccessMode: false
-    };
-    let enhancedAuthManagementReady = false;
     let collapsibleSectionState = await loadPanelCollapsibleSectionState();
 
     const setCollapsibleSectionCollapsed = (sectionKey, collapsed, { persist = true } = {}) => {
@@ -898,9 +458,6 @@ async function initializePanel() {
         };
         if (sectionKey === 'linearIssueSection') {
             applyCollapsibleSectionUi(linearIssueSection, linearIssueSectionBody, linearIssueSectionToggle, collapsed);
-        }
-        if (sectionKey === 'extensionUserManagementSection') {
-            applyCollapsibleSectionUi(extensionUserManagementSection, extensionUserManagementSectionBody, extensionUserManagementSectionToggle, collapsed);
         }
         if (sectionKey === 'bulkIdActionsSection') {
             applyCollapsibleSectionUi(bulkIdActionsSection, bulkIdActionsSectionBody, bulkIdActionsSectionToggle, collapsed);
@@ -917,12 +474,6 @@ async function initializePanel() {
             !Boolean(collapsibleSectionState?.linearIssueSection)
         );
     });
-    extensionUserManagementSectionToggle?.addEventListener('click', () => {
-        setCollapsibleSectionCollapsed(
-            'extensionUserManagementSection',
-            !Boolean(collapsibleSectionState?.extensionUserManagementSection)
-        );
-    });
     bulkIdActionsSectionToggle?.addEventListener('click', () => {
         setCollapsibleSectionCollapsed(
             'bulkIdActionsSection',
@@ -937,7 +488,6 @@ async function initializePanel() {
     });
 
     setCollapsibleSectionCollapsed('linearIssueSection', Boolean(collapsibleSectionState?.linearIssueSection), { persist: false });
-    setCollapsibleSectionCollapsed('extensionUserManagementSection', Boolean(collapsibleSectionState?.extensionUserManagementSection), { persist: false });
     setCollapsibleSectionCollapsed(
         'bulkIdActionsSection',
         collapsibleSectionState?.bulkIdActionsSection === undefined ? true : Boolean(collapsibleSectionState.bulkIdActionsSection),
@@ -949,683 +499,11 @@ async function initializePanel() {
         { persist: false }
     );
 
-    const getFeatureCatalogForUi = () => Array.isArray(extensionAccessState?.featureCatalog) && extensionAccessState.featureCatalog.length > 0
-        ? extensionAccessState.featureCatalog
-        : EXTENSION_FEATURE_CATALOG;
-
-    const setAccessRequestStatus = (message, tone = null) => {
-        if (!accessRequestStatus) return;
-        accessRequestStatus.classList.remove('neutral', 'valid', 'invalid');
-        if (tone === 'valid') accessRequestStatus.classList.add('valid');
-        else if (tone === 'invalid') accessRequestStatus.classList.add('invalid');
-        else accessRequestStatus.classList.add('neutral');
-        accessRequestStatus.textContent = String(message || '').trim();
-    };
-
-    const renderAccessRequestFeatureCheckboxes = (selectedFeatures = []) => {
-        if (!accessRequestFeaturesGrid) return;
-        const selectedFeatureSet = new Set(Array.isArray(selectedFeatures) ? selectedFeatures : []);
-        accessRequestFeaturesGrid.innerHTML = '';
-        getFeatureCatalogForUi().forEach((feature) => {
-            const row = document.createElement('label');
-            row.className = 'job-check-item';
-            row.style.display = 'flex';
-            row.style.gap = '8px';
-            row.style.alignItems = 'flex-start';
-
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.value = feature.key;
-            checkbox.checked = selectedFeatureSet.has(feature.key);
-
-            const copy = document.createElement('span');
-            const title = document.createElement('strong');
-            title.textContent = feature.label;
-            const description = document.createElement('div');
-            description.textContent = feature.description;
-            description.style.fontSize = '11px';
-            description.style.color = '#6b7280';
-            copy.append(title, description);
-
-            row.append(checkbox, copy);
-            accessRequestFeaturesGrid.appendChild(row);
-        });
-    };
-
-    const getRequestedAccessFeatures = () => {
-        if (!accessRequestFeaturesGrid) return [];
-        return [...accessRequestFeaturesGrid.querySelectorAll('input[type="checkbox"]:checked')]
-            .map((input) => String(input.value || '').trim())
-            .filter(Boolean);
-    };
-
-    const renderAccessRequestSection = () => {
-        if (extensionAccessState?.serverlessLiteMode || extensionAccessState?.openAccessMode) {
-            setElementVisible(accessRequestSection, false);
-            return;
-        }
-        // This panel only submits a review request. The shared access service still
-        // decides whether the current BetterLetter email is granted any features.
-        const canRequestAccess = Boolean(extensionAccessState?.email)
-            && !extensionAccessState?.allowed
-            && !extensionAccessState?.isOwner;
-        setElementVisible(accessRequestSection, canRequestAccess, '');
-        if (!canRequestAccess) return;
-
-        const selectedFeatures = (getRequestedAccessFeatures().length > 0)
-            ? getRequestedAccessFeatures()
-            : extensionAccessState?.requestRequestedFeatures || [];
-        renderAccessRequestFeatureCheckboxes(selectedFeatures);
-
-        if (submitAccessRequestBtn) {
-            submitAccessRequestBtn.textContent = extensionAccessState?.requestRequestedAt ? 'Update Request' : 'Request Access';
-        }
-
-        if (extensionAccessState?.requestStatus === 'pending' && extensionAccessState?.requestRequestedAt) {
-            setAccessRequestStatus(
-                `Request pending review since ${extensionAccessState.requestRequestedAt}. You can update the note or requested features and submit again.`,
-                'valid'
-            );
-        } else if (extensionAccessState?.requestStatus === 'rejected') {
-            setAccessRequestStatus(
-                'A previous access request was rejected. Update the note if needed and submit again to reopen it.',
-                'invalid'
-            );
-        } else {
-            setAccessRequestStatus(
-                `Detected BetterLetter user: ${extensionAccessState.email}. Submit a request so the owner can review this email and machine.`,
-                'neutral'
-            );
-        }
-    };
-
-    const initializeAccessUi = async () => {
-        setElementVisible(accessServiceConfigSection, false);
-        try {
-            accessServiceConfig = await fetchAccessControlServiceConfig();
-        } catch (error) {
-            setAccessServiceConfigStatus(String(error?.message || 'Could not load access service config.').trim(), 'invalid');
-        }
-
-        try {
-            const access = await fetchExtensionAccessState({ allowStale: true });
-            renderExtensionAccessState(access);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-            if (shouldRefreshAccessServiceHealth()) {
-                refreshAccessServiceHealth().catch(() => undefined);
-            }
-            if (!access?.email) {
-                try {
-                    const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
-                    renderIdentityDiagnostics(diagnostics);
-                } catch (diagnosticError) {
-                    renderIdentityDiagnostics({
-                        preferredTabId: PANEL_HOST_TAB_ID,
-                        tabs: [],
-                        storedSnapshot: null,
-                        error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
-                    });
-                }
-            } else {
-                renderIdentityDiagnostics(null);
-            }
-
-            fetchExtensionAccessState({ forceRefresh: true, allowStale: true })
-                .then((freshAccess) => {
-                    renderExtensionAccessState(freshAccess);
-                    renderAccessRequestSection();
-                    renderAccessServiceConfig();
-                    applyExtensionFeatureAccessToUi();
-                    if (shouldRefreshAccessServiceHealth()) {
-                        refreshAccessServiceHealth().catch(() => undefined);
-                    }
-                    if (!freshAccess?.email) return;
-                    renderIdentityDiagnostics(null);
-                })
-                .catch(() => undefined);
-        } catch (error) {
-            renderExtensionAccessState({
-                initialized: false,
-                allowed: false,
-                email: '',
-                reason: String(error?.message || 'Could not resolve MailroomNavigator access.').trim().slice(0, 260),
-                detectionSource: ''
-            });
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-            try {
-                const diagnostics = await fetchExtensionIdentityDiagnostics({ forceRefresh: true });
-                renderIdentityDiagnostics(diagnostics);
-            } catch (diagnosticError) {
-                renderIdentityDiagnostics({
-                    preferredTabId: PANEL_HOST_TAB_ID,
-                    tabs: [],
-                    storedSnapshot: null,
-                    error: String(diagnosticError?.message || 'Could not load diagnostics.').trim()
-                });
-            }
-        }
-    };
-
-    // The advanced auth module is owner-only UI. The existing background/service
-    // actions remain the single source of truth for access policy enforcement.
-    const syncEnhancedAuthManagement = async (management = null) => {
-        if (!extensionAccessState?.isOwner) return;
-        const effectiveManagement = management || extensionUserManagementState;
-        const sharedCallbacks = {
-            fetchManagement: fetchExtensionUserManagement,
-            getAccessServiceHealth: fetchAccessControlServiceHealth,
-            getIdentityDiagnostics: fetchExtensionIdentityDiagnostics,
-            exportAccessPolicy: exportExtensionAccessPolicy,
-            importAccessPolicy: importExtensionAccessPolicy
-        };
-
-        if (!enhancedAuthManagementReady) {
-            await AuthManagement.init({
-                accessState: extensionAccessState,
-                management: effectiveManagement,
-                featureCatalog: getFeatureCatalogForUi(),
-                callbacks: sharedCallbacks
-            });
-            enhancedAuthManagementReady = true;
-            return;
-        }
-
-        await AuthManagement.updateContext({
-            accessState: extensionAccessState,
-            management: effectiveManagement,
-            featureCatalog: getFeatureCatalogForUi(),
-            callbacks: sharedCallbacks
-        });
-    };
-
-    const setAccessServiceConfigStatus = (message, tone = null) => {
-        if (!accessServiceConfigStatus) return;
-        accessServiceConfigStatus.classList.remove('neutral', 'valid', 'invalid');
-        if (tone === 'valid') accessServiceConfigStatus.classList.add('valid');
-        else if (tone === 'invalid') accessServiceConfigStatus.classList.add('invalid');
-        else accessServiceConfigStatus.classList.add('neutral');
-        accessServiceConfigStatus.textContent = String(message || '').trim();
-    };
-
-    const shouldRefreshAccessServiceHealth = () => (
-        !extensionAccessState?.serverlessLiteMode
-        && Boolean(accessServiceConfig?.enabled && accessServiceConfig?.baseUrl)
-    );
-
-    const renderAccessServiceConfig = () => {
-        if (extensionAccessState?.serverlessLiteMode) {
-            setElementVisible(accessServiceConfigSection, false);
-            return;
-        }
-        if (accessOpenModeInput) accessOpenModeInput.checked = Boolean(accessServiceConfig.openAccessMode);
-        if (accessServiceUrlInput) accessServiceUrlInput.value = accessServiceConfig.baseUrl || '';
-        if (accessServiceKeyInput) accessServiceKeyInput.value = accessServiceConfig.sharedKey || '';
-        setElementVisible(
-            accessServiceConfigSection,
-            Boolean(
-                accessServiceConfig?.openAccessMode
-                || !extensionAccessState?.allowed
-                || accessServiceConfig?.enabled
-            ),
-            ''
-        );
-        if (accessServiceConfig?.openAccessMode) {
-            setAccessServiceConfigStatus(
-                'Open access mode is enabled locally. Everyone on this machine gets MailroomNavigator immediately.',
-                'valid'
-            );
-            return;
-        }
-        if (accessServiceConfig?.enabled && accessServiceConfig.baseUrl) {
-            const prefix = accessServiceConfig?.isDefault ? 'Using default shared access service' : 'Using shared access service';
-            setAccessServiceConfigStatus(`${prefix}: ${accessServiceConfig.baseUrl}`, 'valid');
-        } else {
-            setAccessServiceConfigStatus('Using local access service.', 'neutral');
-        }
-    };
-
-    const refreshAccessServiceHealth = async () => {
-        try {
-            const health = await fetchAccessControlServiceHealth();
-            const serviceLabel = health?.usingRemoteConfig && health?.baseUrl
-                ? `shared access service ${health.baseUrl}`
-                : 'local access service';
-            const ownerLabel = health?.access?.ownerEmail
-                ? ` Owner: ${health.access.ownerEmail}.`
-                : '';
-            const prefix = accessServiceConfig?.openAccessMode
-                ? 'Open access mode enabled. '
-                : '';
-            setAccessServiceConfigStatus(`${prefix}Connected to ${serviceLabel}.${ownerLabel}`.trim(), 'valid');
-        } catch (error) {
-            const fallbackMessage = accessServiceConfig?.enabled
-                ? `Shared access service unavailable. ${String(error?.message || '').trim()}`
-                : String(error?.message || '').trim();
-            setAccessServiceConfigStatus(
-                accessServiceConfig?.openAccessMode
-                    ? `Open access mode enabled. ${fallbackMessage || 'Could not reach the configured access service for owner diagnostics.'}`
-                    : (fallbackMessage || 'Could not reach the configured access service.'),
-                accessServiceConfig?.openAccessMode ? 'neutral' : 'invalid'
-            );
-        }
-    };
-
-    const normalizeManagedUserEmail = (value) => String(value || '').trim().toLowerCase().slice(0, 240);
-
-    const getManagedUserSelectedFeatures = () => {
-        if (!managedUserFeaturesGrid) return [];
-        return [...managedUserFeaturesGrid.querySelectorAll('input[type="checkbox"]:checked')]
-            .map((input) => String(input.value || '').trim())
-            .filter(Boolean);
-    };
-
-    const renderManagedUserFeatureCheckboxes = (selectedFeatures = []) => {
-        if (enhancedAuthManagementReady) return;
-        if (!managedUserFeaturesGrid) return;
-        const role = String(managedUserRoleInput?.value || 'user').trim().toLowerCase();
-        const selectedFeatureSet = new Set(Array.isArray(selectedFeatures) ? selectedFeatures : []);
-        managedUserFeaturesGrid.innerHTML = '';
-
-        getFeatureCatalogForUi().forEach((feature) => {
-            const row = document.createElement('label');
-            row.className = 'job-check-item';
-            row.style.alignItems = 'flex-start';
-            row.style.display = 'flex';
-            row.style.gap = '8px';
-
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.value = feature.key;
-            checkbox.checked = role === 'admin' ? selectedFeatureSet.has(feature.key) : selectedFeatureSet.has(feature.key);
-            checkbox.disabled = false;
-
-            const copy = document.createElement('span');
-            const title = document.createElement('strong');
-            title.textContent = feature.label;
-            const description = document.createElement('div');
-            description.textContent = feature.description;
-            description.style.fontSize = '11px';
-            description.style.color = '#6b7280';
-            copy.append(title, description);
-
-            row.append(checkbox, copy);
-            managedUserFeaturesGrid.appendChild(row);
-        });
-    };
-
-    const resetManagedUserForm = () => {
-        if (enhancedAuthManagementReady) return;
-        managedUserEditingEmail = '';
-        if (managedUserEmailInput) managedUserEmailInput.value = '';
-        if (managedUserRoleInput) managedUserRoleInput.value = 'user';
-        renderManagedUserFeatureCheckboxes([]);
-        if (saveManagedUserBtn) saveManagedUserBtn.textContent = 'Save User';
-    };
-
-    const populateManagedUserForm = (user) => {
-        if (enhancedAuthManagementReady) return;
-        managedUserEditingEmail = normalizeManagedUserEmail(user?.email);
-        if (managedUserEmailInput) managedUserEmailInput.value = managedUserEditingEmail;
-        if (managedUserRoleInput) managedUserRoleInput.value = String(user?.role || 'user');
-        renderManagedUserFeatureCheckboxes(Array.isArray(user?.features) ? user.features : []);
-        if (saveManagedUserBtn) saveManagedUserBtn.textContent = managedUserEditingEmail ? 'Update User' : 'Save User';
-    };
-
-    const renderManagedUsersList = () => {
-        if (enhancedAuthManagementReady) return;
-        if (!extensionManagedUsersList) return;
-        extensionManagedUsersList.innerHTML = '';
-
-        const users = Array.isArray(extensionUserManagementState?.users) ? extensionUserManagementState.users : [];
-        if (users.length === 0) {
-            extensionManagedUsersList.textContent = 'No managed users yet.';
-            extensionManagedUsersList.style.color = '#6b7280';
-            return;
-        }
-
-        extensionManagedUsersList.style.color = '';
-        users.forEach((user) => {
-            const row = document.createElement('div');
-            row.style.border = '1px solid #d1d5db';
-            row.style.borderRadius = '8px';
-            row.style.padding = '10px';
-            row.style.marginTop = '8px';
-            row.style.background = '#f8fafc';
-
-            const header = document.createElement('div');
-            header.style.display = 'flex';
-            header.style.justifyContent = 'space-between';
-            header.style.alignItems = 'center';
-            header.style.gap = '8px';
-
-            const title = document.createElement('div');
-            title.innerHTML = `<strong>${user.email}</strong><br><span style="font-size:11px; color:#6b7280;">${user.role === 'admin' ? 'Admin' : 'User'}</span>`;
-
-            const actions = document.createElement('div');
-            actions.style.display = 'flex';
-            actions.style.gap = '6px';
-
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.className = 'btn btn-sm btn-ghost';
-            editBtn.textContent = 'Edit';
-            editBtn.addEventListener('click', () => populateManagedUserForm(user));
-
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'btn btn-sm';
-            deleteBtn.style.background = '#dc2626';
-            deleteBtn.textContent = 'Delete';
-            deleteBtn.addEventListener('click', async () => {
-                if (!window.confirm(`Delete ${user.email} from MailroomNavigator access?`)) return;
-                try {
-                    deleteBtn.disabled = true;
-                    const response = await chrome.runtime.sendMessage({
-                        action: 'deleteExtensionManagedUser',
-                        payload: { email: user.email }
-                    });
-                    if (!response?.success) {
-                        throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not delete user.');
-                    }
-                    extensionUserManagementState = response.management || extensionUserManagementState;
-                    renderManagedUsersList();
-                    resetManagedUserForm();
-                    if (extensionUserManagementSummary) {
-                        extensionUserManagementSummary.className = 'validation-badge valid';
-                        const alert = response?.alert;
-                        const alertSuffix = alert?.attempted
-                            ? (alert.success ? ' Slack alert sent.' : ` Slack alert failed: ${String(alert.error || 'unknown error').trim().slice(0, 120)}`)
-                            : '';
-                        extensionUserManagementSummary.textContent = `Removed ${user.email}.${alertSuffix}`;
-                    }
-                    const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
-                    renderExtensionAccessState(refreshedAccess);
-                    renderAccessServiceConfig();
-                    applyExtensionFeatureAccessToUi();
-                    const nextViewId = getInitialAccessibleViewId();
-                    showView(nextViewId);
-                } catch (error) {
-                    if (extensionUserManagementSummary) {
-                        extensionUserManagementSummary.className = 'validation-badge invalid';
-                        extensionUserManagementSummary.textContent = String(error?.message || 'Could not delete user.').trim().slice(0, 260);
-                    }
-                } finally {
-                    deleteBtn.disabled = false;
-                }
-            });
-
-            actions.append(editBtn, deleteBtn);
-            header.append(title, actions);
-
-            const featureList = document.createElement('div');
-            featureList.style.marginTop = '8px';
-            featureList.style.fontSize = '12px';
-            featureList.style.color = '#374151';
-            featureList.textContent = `Features: ${(Array.isArray(user.features) && user.features.length > 0) ? user.features.join(', ') : 'none'}`;
-
-            row.append(header, featureList);
-            extensionManagedUsersList.appendChild(row);
-        });
-    };
-
-    const refreshExtensionUserManagementUi = async ({ forceRefresh = false } = {}) => {
-        if (!extensionAccessState?.isOwner) {
-            extensionUserManagementState = { users: [], featureCatalog: getFeatureCatalogForUi() };
-            renderManagedUserFeatureCheckboxes([]);
-            renderManagedUsersList();
-            return extensionUserManagementState;
-        }
-        const management = await fetchExtensionUserManagement({ forceRefresh });
-        extensionUserManagementState = management;
-        if (!enhancedAuthManagementReady) {
-            renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
-            renderManagedUsersList();
-        }
-        if (!enhancedAuthManagementReady && extensionUserManagementSummary) {
-            extensionUserManagementSummary.className = 'validation-badge neutral';
-            extensionUserManagementSummary.textContent = `Owner: ${extensionAccessState.email}\nSynced users: ${Array.isArray(management?.users) ? management.users.length : 0}`;
-        }
-        await syncEnhancedAuthManagement(management);
-        return management;
-    };
-
-    renderAccessServiceConfig();
-
-    saveAccessServiceConfigBtn?.addEventListener('click', async () => {
-        try {
-            const baseUrl = sanitizeAccessServiceUrl(accessServiceUrlInput?.value);
-            const sharedKey = String(accessServiceKeyInput?.value || '').trim();
-            const openAccessMode = Boolean(accessOpenModeInput?.checked);
-            if (!baseUrl && !openAccessMode) {
-                throw new Error('Enter a valid shared access service URL.');
-            }
-
-            saveAccessServiceConfigBtn.disabled = true;
-            accessServiceConfig = await saveAccessControlServiceConfig({
-                baseUrl,
-                sharedKey,
-                useLocalOverride: !baseUrl,
-                openAccessMode
-            });
-            renderAccessServiceConfig();
-            if (shouldRefreshAccessServiceHealth()) {
-                await refreshAccessServiceHealth();
-            }
-
-            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
-            renderExtensionAccessState(refreshedAccess);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-            if (extensionAccessState?.isOwner) {
-                await syncEnhancedAuthManagement(extensionUserManagementState);
-            }
-            if (refreshedAccess?.email) renderIdentityDiagnostics(null);
-            showView(getInitialAccessibleViewId());
-        } catch (error) {
-            setAccessServiceConfigStatus(String(error?.message || 'Could not save access service config.').trim(), 'invalid');
-        } finally {
-            saveAccessServiceConfigBtn.disabled = false;
-        }
-    });
-
-    clearAccessServiceConfigBtn?.addEventListener('click', async () => {
-        try {
-            clearAccessServiceConfigBtn.disabled = true;
-            accessServiceConfig = await saveAccessControlServiceConfig({
-                baseUrl: '',
-                sharedKey: '',
-                useLocalOverride: true,
-                openAccessMode: false
-            });
-            renderAccessServiceConfig();
-            if (shouldRefreshAccessServiceHealth()) {
-                refreshAccessServiceHealth().catch(() => undefined);
-            }
-            if (extensionAccessState?.isOwner) {
-                await syncEnhancedAuthManagement(extensionUserManagementState);
-            }
-        } catch (error) {
-            setAccessServiceConfigStatus(String(error?.message || 'Could not reset access service config.').trim(), 'invalid');
-        } finally {
-            clearAccessServiceConfigBtn.disabled = false;
-        }
-    });
-
-    submitAccessRequestBtn?.addEventListener('click', async () => {
-        try {
-            submitAccessRequestBtn.disabled = true;
-            const response = await submitExtensionAccessRequest({
-                note: String(accessRequestNoteInput?.value || '').trim(),
-                requestedFeatures: getRequestedAccessFeatures()
-            });
-            if (response?.access) {
-                renderExtensionAccessState(response.access);
-                renderAccessRequestSection();
-                renderAccessServiceConfig();
-                applyExtensionFeatureAccessToUi();
-            }
-            setAccessRequestStatus('Access request submitted. The owner can now review your email, requested features, and recent machine IP.', 'valid');
-        } catch (error) {
-            setAccessRequestStatus(String(error?.message || 'Could not submit access request.').trim(), 'invalid');
-        } finally {
-            submitAccessRequestBtn.disabled = false;
-        }
-    });
-
-    refreshAccessRequestBtn?.addEventListener('click', async () => {
-        try {
-            refreshAccessRequestBtn.disabled = true;
-            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
-            renderExtensionAccessState(refreshedAccess);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-        } catch (error) {
-            setAccessRequestStatus(String(error?.message || 'Could not refresh access state.').trim(), 'invalid');
-        } finally {
-            refreshAccessRequestBtn.disabled = false;
-        }
-    });
-    
     // C. Setup Navigation Tabs
-    document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView', { force: true }));
-    document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView', { force: true }));
-    document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView', { force: true }));
-    document.getElementById("bookmarkletToolsGlobalToggleBtn")?.addEventListener("click", () => showView('bookmarkletToolsView', { force: true }));
-    const accessUiInitPromise = initializeAccessUi();
-    accessUiInitPromise.catch((error) => {
-        console.error('Failed to initialize MailroomNavigator access UI:', error);
-    });
-
-    managedUserRoleInput?.addEventListener('change', () => {
-        renderManagedUserFeatureCheckboxes(getManagedUserSelectedFeatures());
-    });
-
-    clearManagedUserFormBtn?.addEventListener('click', () => {
-        resetManagedUserForm();
-        if (extensionUserManagementSummary) {
-            extensionUserManagementSummary.className = 'validation-badge neutral';
-            extensionUserManagementSummary.textContent = 'Ready.';
-        }
-    });
-
-    refreshManagedUsersBtn?.addEventListener('click', () => {
-        refreshExtensionUserManagementUi({ forceRefresh: true })
-            .then(() => {
-                if (extensionUserManagementSummary) {
-                    extensionUserManagementSummary.className = 'validation-badge valid';
-                    extensionUserManagementSummary.textContent = 'User list refreshed.';
-                }
-            })
-            .catch((error) => {
-                if (extensionUserManagementSummary) {
-                    extensionUserManagementSummary.className = 'validation-badge invalid';
-                    extensionUserManagementSummary.textContent = String(error?.message || 'Could not refresh users.').trim().slice(0, 260);
-                }
-            });
-    });
-
-    saveManagedUserBtn?.addEventListener('click', async () => {
-        try {
-            const email = normalizeManagedUserEmail(managedUserEmailInput?.value);
-            const role = String(managedUserRoleInput?.value || 'user').trim().toLowerCase();
-            const features = getManagedUserSelectedFeatures();
-
-            if (!email) {
-                throw new Error('Enter a BetterLetter user email.');
-            }
-
-            saveManagedUserBtn.disabled = true;
-            if (extensionUserManagementSummary) {
-                extensionUserManagementSummary.className = 'validation-badge neutral';
-                extensionUserManagementSummary.textContent = managedUserEditingEmail
-                    ? `Updating ${managedUserEditingEmail}…`
-                    : `Saving ${email}…`;
-            }
-
-            const response = await chrome.runtime.sendMessage({
-                action: 'saveExtensionManagedUser',
-                payload: { email, role, features }
-            });
-            if (!response?.success) {
-                throw new Error(String(response?.error || '').trim().slice(0, 240) || 'Could not save user.');
-            }
-            extensionUserManagementState = response.management || extensionUserManagementState;
-            renderManagedUsersList();
-            populateManagedUserForm({ email, role, features });
-            if (extensionUserManagementSummary) {
-                extensionUserManagementSummary.className = 'validation-badge valid';
-                const alert = response?.alert;
-                const alertSuffix = alert?.attempted
-                    ? (alert.success ? ' Slack alert sent.' : ` Slack alert failed: ${String(alert.error || 'unknown error').trim().slice(0, 120)}`)
-                    : '';
-                extensionUserManagementSummary.textContent = `Saved ${email}.${alertSuffix}`;
-            }
-            const refreshedAccess = await fetchExtensionAccessState({ forceRefresh: true });
-            renderExtensionAccessState(refreshedAccess);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-        } catch (error) {
-            if (extensionUserManagementSummary) {
-                extensionUserManagementSummary.className = 'validation-badge invalid';
-                extensionUserManagementSummary.textContent = String(error?.message || 'Could not save user.').trim().slice(0, 260);
-            }
-        } finally {
-            saveManagedUserBtn.disabled = false;
-        }
-    });
-
-    if (!extensionAccessState?.email && identityDetectionStatus) {
-        identityDetectionStatus.className = 'validation-badge neutral';
-        identityDetectionStatus.textContent = 'Open a signed-in BetterLetter page, then refresh the panel. Manual email override is disabled.';
-    }
-
-    if (extensionAccessState?.isOwner) {
-        refreshExtensionUserManagementUi({ forceRefresh: true })
-            .catch((error) => {
-                if (extensionUserManagementSummary) {
-                    extensionUserManagementSummary.className = 'validation-badge invalid';
-                    extensionUserManagementSummary.textContent = String(error?.message || 'Could not load user management.').trim().slice(0, 260);
-                }
-            });
-    } else {
-        renderManagedUserFeatureCheckboxes([]);
-        renderManagedUsersList();
-    }
-
-    document.addEventListener('authMgmt:userSaved', async () => {
-        try {
-            const freshAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
-            renderExtensionAccessState(freshAccess);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-            await refreshExtensionUserManagementUi({ forceRefresh: true });
-            showView(getInitialAccessibleViewId());
-        } catch {
-            // The advanced UI already surfaced the save error locally.
-        }
-    });
-
-    document.addEventListener('authMgmt:userDeleted', async () => {
-        try {
-            const freshAccess = await fetchExtensionAccessState({ forceRefresh: true, allowStale: true });
-            renderExtensionAccessState(freshAccess);
-            renderAccessRequestSection();
-            renderAccessServiceConfig();
-            applyExtensionFeatureAccessToUi();
-            await refreshExtensionUserManagementUi({ forceRefresh: true });
-            showView(getInitialAccessibleViewId());
-        } catch {
-            // The advanced UI already surfaced the delete error locally.
-        }
-    });
+    document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
+    document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView'));
+    document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView'));
+    document.getElementById("bookmarkletToolsGlobalToggleBtn")?.addEventListener("click", () => showView('bookmarkletToolsView'));
 
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
@@ -2034,7 +912,6 @@ async function initializePanel() {
     const linearSlackTargetSuggestions = document.getElementById('linearSlackTargetSuggestions');
     const linearSlackTargetHint = document.getElementById('linearSlackTargetHint');
     const linearSlackStatus = document.getElementById('linearSlackStatus');
-    const linearServerlessLiteNotice = document.getElementById('linearServerlessLiteNotice');
     const createLinearSlackIssueBtn = document.getElementById('createLinearSlackIssueBtn');
     const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
     const reconcileLinearBotIssuesBtn = document.getElementById('reconcileLinearBotIssuesBtn');
@@ -5028,10 +3905,7 @@ async function initializePanel() {
             else linearTriggerStatus.classList.add('neutral');
         }
         linearTriggerStatus.textContent = normalizedMessage;
-        setElementVisible(
-            linearTriggerStatus,
-            Boolean(normalizedMessage) && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])
-        );
+        setElementVisible(linearTriggerStatus, Boolean(normalizedMessage));
     };
 
     const clearLinearTriggerStatusAutoClearTimer = () => {
@@ -5864,23 +4738,12 @@ ${error?.message || String(error)}`, 'invalid');
         renderRecentIdChips();
     };
 
-    await accessUiInitPromise.catch(() => undefined);
-
-    if (!extensionAccessState?.serverlessLiteMode) {
+    if (!isServerlessLiteMode) {
         await loadSlackTargetCache();
-        await loadLinearSlackPrefs();
-        if (linearSlackNotifyEnabledInput?.checked) {
-            maybeWarmSlackTargetSuggestions().catch(() => undefined);
-        }
-    } else {
-        if (linearSlackTargetHint) {
-            linearSlackTargetHint.classList.remove('valid', 'invalid');
-            linearSlackTargetHint.classList.add('neutral');
-            linearSlackTargetHint.textContent = 'Slack sync is unavailable in Serverless Lite.';
-        }
-        if (linearServerlessLiteNotice) {
-            linearServerlessLiteNotice.textContent = 'Serverless Lite keeps draft generation only. Generate the issue details below, then copy the title and description into Linear manually.';
-        }
+    }
+    await loadLinearSlackPrefs();
+    if (linearSlackNotifyEnabledInput?.checked) {
+        maybeWarmSlackTargetSuggestions().catch(() => undefined);
     }
 
     generateLinearIssueDraftBtn?.addEventListener('click', () => {
@@ -5978,7 +4841,7 @@ ${error?.message || String(error)}`, 'invalid');
             showToast('Could not restart local trigger service.');
         });
     });
-    if (!extensionAccessState?.serverlessLiteMode && hasAnyExtensionFeature(['linear_create_issue', 'linear_trigger', 'linear_reconcile', 'slack_sync'])) {
+    if (!isServerlessLiteMode) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });
         if (isLinearRunActiveOnLoad) {
             startLinearTriggerStatusPolling();
@@ -6188,10 +5051,8 @@ ${error?.message || String(error)}`, 'invalid');
     updateDocValidation();
     updateJobValidation();
     updateBulkValidation();
-    if (hasAnyExtensionFeature(['job_panel', 'linear_create_issue']) || extensionAccessState === null) {
-        await loadRecentIds();
-        await syncDashboardSuggestionRows({ silent: true });
-    }
+    await loadRecentIds();
+    await syncDashboardSuggestionRows({ silent: true });
 
     // J. Global UI Listeners
     document.addEventListener("mousedown", (e) => {
@@ -6214,17 +5075,15 @@ ${error?.message || String(error)}`, 'invalid');
         }
     });
 
-    if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
-        await tryAutoSelectPracticeFromActiveTab();
-    }
+    await tryAutoSelectPracticeFromActiveTab();
 
-    showView(PANEL_FORCED_VIEW_ID || 'practiceNavigatorView', { force: true });
+    showView(PANEL_FORCED_VIEW_ID || 'practiceNavigatorView');
 
-    if (PANEL_FORCED_TOOL_ID === 'uuidPicker' && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
+    if (PANEL_FORCED_TOOL_ID === 'uuidPicker') {
         openUuidPickerModal();
     }
 
-    if (isBookmarkletToolsSuite && (hasExtensionFeature('workflow_groups') || extensionAccessState === null)) {
+    if (isBookmarkletToolsSuite) {
         openWorkflowGroupsModal({
             actionsEl: document.getElementById('inlineWorkflowGroupsActions'),
             bodyEl: document.getElementById('inlineWorkflowGroupsBody')
@@ -6232,13 +5091,13 @@ ${error?.message || String(error)}`, 'invalid');
             console.error('Failed to load Custom Workflow Groups:', error);
         });
     }
-    if (isBookmarkletToolsSuite && (hasExtensionFeature('bookmarklet_tools') || extensionAccessState === null)) {
+    if (isBookmarkletToolsSuite) {
         openDocmanGroupsModal({
             actionsEl: document.getElementById('inlineDocmanGroupsActions'),
             bodyEl: document.getElementById('inlineDocmanGroupsBody')
         });
     }
-    if (isBookmarkletToolsSuite && (hasExtensionFeature('email_formatter') || extensionAccessState === null)) {
+    if (isBookmarkletToolsSuite) {
         openEmailFormatterModal({
             actionsEl: document.getElementById('inlineEmailFormatterActions'),
             bodyEl: document.getElementById('inlineEmailFormatterBody')
@@ -6246,27 +5105,25 @@ ${error?.message || String(error)}`, 'invalid');
     }
 
     // B. Initial Data Load (non-blocking so top navigation responds immediately)
-    if (hasExtensionFeature('practice_navigator') || extensionAccessState === null) {
-        try {
-	            const cache = await syncPracticeCache();
-	            await Navigator.initializeRecentPractices();
-	            const cacheSize = Object.keys(cache || {}).length;
+    try {
+        const cache = await syncPracticeCache();
+        await Navigator.initializeRecentPractices();
+        const cacheSize = Object.keys(cache || {}).length;
 
-            if (cacheSize === 0) {
-                // Compatibility fallback when background returns cache without scrape refresh
-                const response = await chrome.runtime.sendMessage({
-                    action: 'getPracticeCache',
-                    ...getProtectedActionPayload()
-                });
-                if (response && response.practiceCache) {
-                    setCachedPractices(response.practiceCache);
-                    return;
-                }
+        if (cacheSize === 0) {
+            // Compatibility fallback when background returns cache without scrape refresh
+            const response = await chrome.runtime.sendMessage({
+                action: 'getPracticeCache',
+                ...getProtectedActionPayload()
+            });
+            if (response && response.practiceCache) {
+                setCachedPractices(response.practiceCache);
+                return;
             }
+        }
 
-            await tryAutoSelectPracticeFromActiveTab();
-        } catch (e) { console.error("Cache load error:", e); }
-    }
+        await tryAutoSelectPracticeFromActiveTab();
+    } catch (e) { console.error("Cache load error:", e); }
     } catch (error) {
         panelInitializationStarted = false;
         console.error('Panel initialization failed:', error);

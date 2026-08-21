@@ -27,18 +27,7 @@
     let botDashboardBulkStatusEl = null;
     let botDashboardBulkOverlayEl = null;
     const createdIssueByDedupeKey = new Map();
-    let restrictedToolsAccess = {
-        enabled: true,
-        allowed: false,
-        reason: '',
-        openAccessMode: false,
-        isOwner: false,
-        serverlessLiteMode: false,
-        features: {
-            dashboard_hover_tools: false,
-            linear_create_issue: false
-        }
-    };
+    let serverlessLiteModeCache = null;
     let listenersStarted = false;
 
     const META_CLOSE_DELAY_MS = 120;
@@ -1881,56 +1870,21 @@ ${hiddenBlock}
         });
     }
 
-    async function ensureRestrictedToolsAccess(forceRefresh = false) {
-        if (!forceRefresh && restrictedToolsAccess && (restrictedToolsAccess.allowed || restrictedToolsAccess.reason)) {
-            return restrictedToolsAccess;
+    async function ensureServerlessLiteModeResolved(forceRefresh = false) {
+        if (!forceRefresh && serverlessLiteModeCache !== null) {
+            return serverlessLiteModeCache;
         }
-
         try {
-            const response = await sendRuntimeMessage({
-                action: 'getExtensionAccessState',
-                payload: {
-                    forceRefresh,
-                    allowStale: true
-                }
-            });
-            if (response?.success && response?.access) {
-                restrictedToolsAccess = {
-                    enabled: true,
-                    allowed: Boolean(response.access.allowed),
-                    reason: collapseText(response.access.reason || ''),
-                    openAccessMode: Boolean(response.access?.openAccessMode),
-                    isOwner: Boolean(response.access?.isOwner),
-                    serverlessLiteMode: Boolean(response.access?.serverlessLiteMode),
-                    features: {
-                        dashboard_hover_tools: Boolean(response.access?.features?.dashboard_hover_tools),
-                        linear_create_issue: Boolean(response.access?.features?.linear_create_issue)
-                    }
-                };
-                return restrictedToolsAccess;
-            }
+            const response = await sendRuntimeMessage({ action: 'getServerlessLiteMode' });
+            serverlessLiteModeCache = Boolean(response?.success && response.serverlessLiteMode);
         } catch (error) {
-            // Fall through to deny-by-default if access state cannot be resolved.
+            serverlessLiteModeCache = false;
         }
-
-        restrictedToolsAccess = {
-            enabled: true,
-            allowed: false,
-            reason: 'MailroomNavigator access could not be verified.',
-            openAccessMode: false,
-            isOwner: false,
-            serverlessLiteMode: false,
-            features: {
-                dashboard_hover_tools: false,
-                linear_create_issue: false
-            }
-        };
-        return restrictedToolsAccess;
+        return serverlessLiteModeCache;
     }
 
     function canUseLinearIssueAction() {
-        if (restrictedToolsAccess?.serverlessLiteMode) return false;
-        return true;
+        return !serverlessLiteModeCache;
     }
 
     function canUseNavigatorClipboardApi() {
@@ -4213,7 +4167,7 @@ ${hiddenBlock}
         listenersStarted = true;
         observer.observe(document.body, { childList: true, subtree: true });
         attachListeners();
-        ensureRestrictedToolsAccess(true)
+        ensureServerlessLiteModeResolved(true)
             .then(() => {
                 if (floatingNavPanel) createFloatingDocPanel();
                 attachListeners();
