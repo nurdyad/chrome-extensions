@@ -37,23 +37,6 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://app.betterletter.ai/*"
-      ],
-      "js": ["betterletter_identity_main.js"],
-      "run_at": "document_start",
-      "all_frames": false,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://app.betterletter.ai/*"
-      ],
-      "js": ["betterletter_identity.js"],
-      "run_at": "document_idle",
-      "all_frames": false
-    },
-    {
       "matches": ["https://app.betterletter.ai/admin_panel/practices*"],
       "js": ["password_content.js"],
       "run_at": "document_idle",
