@@ -5264,6 +5264,34 @@ async function loadCompactModePreference() {
 }
 
 const DARK_MODE_STORAGE_KEY = 'mailroomNavigatorDarkMode';
+const darkModeMediaQuery = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null;
+
+function systemPrefersDarkMode() {
+  return Boolean(darkModeMediaQuery?.matches);
+}
+
+// This document's own dark-mode filter can't reach sibling docked-handle
+// iframes (each is a separate document) or the host-page-level rail
+// background.js injects into a completely separate document. Broadcasting
+// through background.js restyles the rail immediately and reaches every
+// other panel.html instance via its own runtime.onMessage listener below,
+// instead of each one waiting for its next load to notice the change.
+// persist=false (a system-theme change, not a manual click) restyles
+// everything live without locking in an explicit preference, so the
+// extension keeps following the OS/Chrome theme afterward.
+function broadcastDarkModePreference(isDark, persist) {
+  try {
+    chrome.runtime.sendMessage({
+      action: 'setDarkModePreference',
+      payload: { isDark, persist }
+    }).catch(() => undefined);
+  } catch (error) {
+    // Background script may not be reachable; the stored preference still
+    // applies next time each panel loads.
+  }
+}
 
 function saveDarkModePreference(isDark) {
   try {
@@ -5271,28 +5299,19 @@ function saveDarkModePreference(isDark) {
   } catch (error) {
     // Ignore storage errors; dark mode just won't be remembered next time.
   }
-  // This filter only reaches this document's own <body> - it can't touch
-  // the host-page-level docked handle rail, which background.js injects
-  // into a completely separate document. Tell it to restyle that rail's
-  // existing DOM immediately instead of waiting for the next tab
-  // activation/reload to notice the new stored preference.
-  try {
-    chrome.runtime.sendMessage({
-      action: 'setDarkModePreference',
-      payload: { isDark, hostTabId: PANEL_HOST_TAB_ID }
-    }).catch(() => undefined);
-  } catch (error) {
-    // Background script may not be reachable; the stored preference still
-    // applies next time the host page re-injects the rail.
-  }
+  broadcastDarkModePreference(isDark, true);
 }
 
-async function loadDarkModePreference() {
+// Returns true/false only once the user has explicitly chosen a mode via the
+// toggle; null means no explicit choice has been made yet, in which case
+// callers should fall back to the OS/Chrome theme instead of defaulting to
+// light.
+async function loadExplicitDarkModePreference() {
   try {
     const result = await chrome.storage.local.get(DARK_MODE_STORAGE_KEY);
-    return result?.[DARK_MODE_STORAGE_KEY] === true;
+    return typeof result?.[DARK_MODE_STORAGE_KEY] === 'boolean' ? result[DARK_MODE_STORAGE_KEY] : null;
   } catch (error) {
-    return false;
+    return null;
   }
 }
 
@@ -5307,14 +5326,40 @@ function applyDarkMode(isDark) {
 }
 
 function setupDarkModeToggle() {
+  loadExplicitDarkModePreference()
+    .then((explicit) => applyDarkMode(explicit === null ? systemPrefersDarkMode() : explicit))
+    .catch(() => undefined);
+
   const toggleBtn = document.getElementById('darkModeToggleBtn');
-  if (!toggleBtn) return;
-  toggleBtn.addEventListener('click', () => {
+  toggleBtn?.addEventListener('click', () => {
     const isDark = !document.body.classList.contains('bl-dark-mode');
     applyDarkMode(isDark);
     saveDarkModePreference(isDark);
   });
-  loadDarkModePreference().then(applyDarkMode).catch(() => undefined);
+
+  // Follow the OS/Chrome theme live as long as the user hasn't explicitly
+  // chosen a mode themselves - re-checking storage fresh each time in case
+  // another panel set an explicit preference since this one loaded.
+  darkModeMediaQuery?.addEventListener?.('change', (event) => {
+    loadExplicitDarkModePreference().then((explicit) => {
+      if (explicit !== null) return;
+      applyDarkMode(event.matches);
+      broadcastDarkModePreference(event.matches, false);
+    }).catch(() => undefined);
+  });
+}
+
+// Every panel.html instance (docked iframes on any tab, or the standalone
+// popup window) listens for this so dark mode is a single global setting -
+// toggling it anywhere applies everywhere immediately, not just wherever it
+// was clicked.
+try {
+  chrome.runtime.onMessage?.addListener?.((message) => {
+    if (message?.action !== 'setDarkModePreference') return;
+    applyDarkMode(Boolean(message.payload?.isDark));
+  });
+} catch (error) {
+  console.warn('[Panel] Unable to attach dark-mode sync listener:', error);
 }
 
 // Reopening the popup via the extension icon reuses an already-open window
