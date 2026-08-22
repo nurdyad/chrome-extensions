@@ -3695,7 +3695,14 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
     const isDarkModeEnabled = await getStoredDarkModePreference();
     await chrome.scripting.executeScript({
         target: { tabId },
-        func: (panelUrl, hostTabId, shouldForceCollapsed, isDark) => {
+        func: (panelUrl, hostTabId, shouldForceCollapsed, storedIsDark) => {
+            // storedIsDark is null when the user hasn't explicitly chosen a
+            // mode yet - fall back to the OS/Chrome theme so a fresh install
+            // (or a browser already running in dark mode) starts out dark
+            // without requiring a manual toggle first.
+            const isDark = typeof storedIsDark === 'boolean'
+                ? storedIsDark
+                : Boolean(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
             // Independent docked panels, one per view, each with its own
             // toggle handle stacked along the right edge. Opening one
             // doesn't require opening a shared container first, and
@@ -4271,12 +4278,16 @@ async function ensureSidebarHandleForTab(tabId, { forceCollapsed = true } = {}) 
 // docked handle's rail agree on the current preference.
 const DARK_MODE_STORAGE_KEY = 'mailroomNavigatorDarkMode';
 
+// Returns true/false only once the user has explicitly chosen a mode via the
+// toggle; null means no explicit choice has been made yet, in which case
+// callers should fall back to the OS/Chrome theme (window.matchMedia
+// '(prefers-color-scheme: dark)') instead of defaulting to light.
 async function getStoredDarkModePreference() {
     try {
         const result = await chrome.storage.local.get(DARK_MODE_STORAGE_KEY);
-        return result?.[DARK_MODE_STORAGE_KEY] === true;
+        return typeof result?.[DARK_MODE_STORAGE_KEY] === 'boolean' ? result[DARK_MODE_STORAGE_KEY] : null;
     } catch (error) {
-        return false;
+        return null;
     }
 }
 
@@ -4292,24 +4303,36 @@ async function applyDarkModeToHostRail(tabId, isDark) {
         });
     } catch (error) {
         // Tab may be gone/restricted, or the rail may not be mounted there
-        // yet (e.g. dark mode toggled from the standalone popup window,
-        // which has no host tab) - safe to ignore either way.
+        // at all - safe to ignore either way, since this runs against every
+        // open tab (see handleSetDarkModePreference) rather than one known
+        // host tab.
     }
 }
 
-async function handleSetDarkModePreference(payload = {}, sender = null) {
+async function handleSetDarkModePreference(payload = {}) {
     const isDark = Boolean(payload?.isDark);
-    try {
-        await chrome.storage.local.set({ [DARK_MODE_STORAGE_KEY]: isDark });
-    } catch (error) {
-        // Ignore storage errors; the toggle already reflects the new state
-        // in the panel that triggered it.
+    // A system-theme-driven change (persist === false) restyles every open
+    // panel/rail immediately without locking in an explicit preference, so
+    // the extension keeps following the OS/Chrome theme until the user
+    // actually clicks the toggle themselves.
+    if (payload?.persist !== false) {
+        try {
+            await chrome.storage.local.set({ [DARK_MODE_STORAGE_KEY]: isDark });
+        } catch (error) {
+            // Ignore storage errors; the toggle already reflects the new state
+            // in the panel that triggered it.
+        }
     }
-    const hostTabId = typeof payload?.hostTabId === 'number' && Number.isFinite(payload.hostTabId)
-        ? payload.hostTabId
-        : (typeof sender?.tab?.id === 'number' ? sender.tab.id : null);
-    if (typeof hostTabId === 'number') {
-        await applyDarkModeToHostRail(hostTabId, isDark);
+    // Dark mode is a single global preference, not per-tab, so restyle the
+    // docked rail on every open tab - not just whichever one triggered this -
+    // the same way every other panel.html instance already syncs itself via
+    // its own runtime.onMessage listener.
+    try {
+        const tabs = await chrome.tabs.query({});
+        await Promise.all(tabs.map((tab) => applyDarkModeToHostRail(tab.id, isDark)));
+    } catch (error) {
+        // Ignore; chrome.tabs.query failing here just means the rails will
+        // pick up the new preference next time each tab is activated.
     }
     return { success: true };
 }
@@ -4380,7 +4403,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const handle = async () => {
         if (message.action === 'setDarkModePreference') {
-            return await handleSetDarkModePreference(message.payload, sender);
+            return await handleSetDarkModePreference(message.payload);
         }
 
         if (CACHE_REQUIRED_ACTIONS.has(message?.action)) {
