@@ -2,6 +2,22 @@
 let toastHideTimer = null;
 let toastFadeTimer = null;
 
+// Reloading the extension (e.g. during an update, or a developer reload via
+// chrome://extensions) invalidates any already-open panel/page's connection
+// to it - chrome.runtime.sendMessage then throws this exact message instead
+// of returning a normal response. The panel itself still renders fine since
+// its JS already finished loading, so this shows up as a confusing "Error:
+// Extension context invalidated." banner rather than the page failing
+// outright. The only real fix is reloading the host tab, so surface that
+// directly instead of the raw browser error.
+export function describeExtensionError(error, fallback = 'Something went wrong.') {
+  const message = String(error?.message || error || '');
+  if (message.toLowerCase().includes('extension context invalidated')) {
+    return 'Extension was reloaded/updated - please refresh this page to keep using the panel.';
+  }
+  return message || fallback;
+}
+
 // Delays a function call (prevents rapid firing)
 export function debounce(func, timeout = 300) {
   let timer;
