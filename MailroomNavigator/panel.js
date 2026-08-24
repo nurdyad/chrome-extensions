@@ -1,7 +1,7 @@
 // Main panel controller for all three views (Navigator, Job Panel, Others).
 // This file wires DOM events to feature modules and background actions.
 import { state, setCachedPractices } from './state.js';
-import { hideStatus, showToast, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
+import { hideStatus, showToast, describeExtensionError, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
 
 let practiceCacheLoadPromise = null;
@@ -351,12 +351,7 @@ async function openUrlsWithLoading(urls, actionButtons = []) {
             await new Promise(resolve => setTimeout(resolve, 60));
         }
     } catch (error) {
-        const message = String(error?.message || error || '').toLowerCase();
-        if (message.includes('extension context invalidated')) {
-            showToast('Extension reloaded. Refresh this page and reopen the panel.');
-            return;
-        }
-        showToast('Failed to open one or more pages.');
+        showToast(describeExtensionError(error, 'Failed to open one or more pages.'));
     } finally {
         actionButtons.forEach(btn => { if (btn) btn.disabled = false; });
     }
@@ -641,7 +636,7 @@ async function initializePanel() {
                 settingType: 'task_recipients',
                 ...getProtectedActionPayload()
             });
-        } catch (err) { showToast(err.message); }
+        } catch (err) { showToast(describeExtensionError(err)); }
     });
 
     document.getElementById('openEhrSettingsBtn')?.addEventListener('click', async () => {
