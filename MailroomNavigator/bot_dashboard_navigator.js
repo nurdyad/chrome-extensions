@@ -118,6 +118,14 @@
 
     function describeError(error, fallback = 'Something went wrong.') {
         const direct = collapseText(error);
+        // Reloading/updating the extension invalidates this already-injected
+        // content script's connection to it - chrome.runtime.sendMessage then
+        // throws this exact message instead of returning a normal response.
+        // The only real fix is reloading the host page, so say that directly
+        // instead of surfacing the raw browser error.
+        if (direct.toLowerCase().includes('extension context invalidated')) {
+            return 'Extension was reloaded/updated - please refresh this page to keep using it.';
+        }
         if (direct && direct !== '[object Object]') return direct;
 
         if (error && typeof error === 'object') {

@@ -1,6 +1,6 @@
 // Navigator view logic: practice lookup, quick navigation actions, and practice status rendering.
 import { state, setCurrentSelectedOdsCode } from './state.js';
-import { copyTextToClipboard, hideStatus, showStatus, showToast } from './utils.js';
+import { copyTextToClipboard, describeExtensionError, hideStatus, showStatus, showToast } from './utils.js';
 
 const ALL_PRACTICES_CODE = 'ALL';
 const ALL_PRACTICES_LABEL = 'All practices';
@@ -1298,7 +1298,7 @@ export async function displayPracticeStatus(options = {}) {
         }
     } catch (err) {
         statusFetchInFlightByOds.delete(selectedOds);
-        if (!silent) showStatus(`Error: ${err.message}`, 'error');
+        if (!silent) showStatus(describeExtensionError(err, 'Something went wrong fetching practice details.'), 'error');
     }
 }
 
