@@ -1810,6 +1810,25 @@ async function createLinearIssue(payload) {
       };
     }
 
+    // Only pull a duplicate back into review when it was actually marked
+    // done - the underlying document/job showing up again means a "done"
+    // issue was closed prematurely. An issue already sitting in Triage,
+    // Backlog, Todo, In Progress (or any other non-completed state,
+    // including Canceled) is already being tracked appropriately; forcing
+    // it into In Review would just disrupt whatever's already happening
+    // with it instead of reflecting anything new.
+    const duplicateStateType = sanitizeSingleLine(duplicateIssue?.state?.type, 64).toLowerCase();
+    if (duplicateStateType !== "completed") {
+      return {
+        team,
+        issue: toPublicLinearIssue(duplicateIssue),
+        duplicate: true,
+        reopened: false,
+        reopenStateName: LINEAR_DUPLICATE_REOPEN_STATE_NAME,
+        reopenSkipped: duplicateStateType ? `already_active_${duplicateStateType}` : "unknown_state",
+      };
+    }
+
     const reopenResult = await moveExistingLinearIssueToReopenState(duplicateIssue, team);
     return {
       team,
