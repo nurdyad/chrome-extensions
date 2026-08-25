@@ -844,6 +844,7 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
     stateName: sanitizeSingleLine(rawPayload.stateName, 120),
     dedupeKey: sanitizeSingleLine(rawPayload.dedupeKey, 160),
     jobType: sanitizeSingleLine(rawPayload.jobType, 120),
+    bulk: rawPayload.bulk === true,
     slack: sanitizeLinearSlackPayload(rawPayload?.slack),
   };
 }
@@ -1143,22 +1144,24 @@ const BOT_JOB_SPIKE_TITLE_PREFIX = "Bot Job Spike:";
 const PRACTICE_SUPPORT_TITLE_PREFIX = "Practice Support Ticket:";
 const MAILROOM_REJECTED_TITLE_PREFIX = "Mailroom Rejected:";
 
-// New Bot Job Spike issues only (not reopened duplicates) get auto-assigned
-// between these two on a running 60/40 split - see pickNextBotJobSpikeAssignee.
-const BOT_JOB_SPIKE_ASSIGNEES = [
+// New issues created via the bulk "Create Issue" action (payload.bulk) or as
+// a combined Bot Job Spike issue - not reopened duplicates, and not issues
+// created one at a time via a single-row button - get auto-assigned between
+// these two on a running 60/40 split. See pickNextBotJobBulkAssignee.
+const BOT_JOB_BULK_ASSIGNEES = [
   { id: "08fbc9ef-b958-406b-b7be-fb956452f18b", name: "Nur Siddique", weight: 60 },
   { id: "f2e5964e-f773-40e5-aada-5d05ea6d885e", name: "Abby Buckley", weight: 40 },
 ];
-const BOT_JOB_SPIKE_ASSIGNMENT_STATE_PATH = join(STATE_DIR, "bot-job-spike-assignment-state.json");
+const BOT_JOB_BULK_ASSIGNMENT_STATE_PATH = join(STATE_DIR, "bot-job-bulk-assignment-state.json");
 
-async function readBotJobSpikeAssignmentState() {
+async function readBotJobBulkAssignmentState() {
   const current = {};
-  for (const candidate of BOT_JOB_SPIKE_ASSIGNEES) current[candidate.id] = 0;
+  for (const candidate of BOT_JOB_BULK_ASSIGNEES) current[candidate.id] = 0;
 
   try {
-    const raw = await readFile(BOT_JOB_SPIKE_ASSIGNMENT_STATE_PATH, "utf8");
+    const raw = await readFile(BOT_JOB_BULK_ASSIGNMENT_STATE_PATH, "utf8");
     const parsed = raw.trim() ? JSON.parse(raw) : {};
-    for (const candidate of BOT_JOB_SPIKE_ASSIGNEES) {
+    for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
       const stored = Number(parsed?.current?.[candidate.id]);
       if (Number.isFinite(stored)) current[candidate.id] = stored;
     }
@@ -1173,10 +1176,10 @@ async function readBotJobSpikeAssignmentState() {
   return { current };
 }
 
-async function writeBotJobSpikeAssignmentState(state) {
-  await mkdir(dirname(BOT_JOB_SPIKE_ASSIGNMENT_STATE_PATH), { recursive: true });
+async function writeBotJobBulkAssignmentState(state) {
+  await mkdir(dirname(BOT_JOB_BULK_ASSIGNMENT_STATE_PATH), { recursive: true });
   await writeFile(
-    BOT_JOB_SPIKE_ASSIGNMENT_STATE_PATH,
+    BOT_JOB_BULK_ASSIGNMENT_STATE_PATH,
     `${JSON.stringify(state, null, 2)}\n`,
     "utf8",
   );
@@ -1189,23 +1192,23 @@ async function writeBotJobSpikeAssignmentState(state) {
 // over time instead of drifting the way an independent random 60/40 coin
 // flip per issue would (a short run of spikes could otherwise land on the
 // same person several times in a row purely by chance).
-async function pickNextBotJobSpikeAssignee() {
-  const totalWeight = BOT_JOB_SPIKE_ASSIGNEES.reduce((sum, candidate) => sum + candidate.weight, 0);
-  const state = await readBotJobSpikeAssignmentState();
+async function pickNextBotJobBulkAssignee() {
+  const totalWeight = BOT_JOB_BULK_ASSIGNEES.reduce((sum, candidate) => sum + candidate.weight, 0);
+  const state = await readBotJobBulkAssignmentState();
   const current = { ...state.current };
 
-  for (const candidate of BOT_JOB_SPIKE_ASSIGNEES) {
+  for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
     current[candidate.id] = (Number(current[candidate.id]) || 0) + candidate.weight;
   }
 
-  let winner = BOT_JOB_SPIKE_ASSIGNEES[0];
-  for (const candidate of BOT_JOB_SPIKE_ASSIGNEES) {
+  let winner = BOT_JOB_BULK_ASSIGNEES[0];
+  for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
     if ((current[candidate.id] || 0) > (current[winner.id] || 0)) winner = candidate;
   }
 
   current[winner.id] = (current[winner.id] || 0) - totalWeight;
 
-  await writeBotJobSpikeAssignmentState({ current }).catch((error) => {
+  await writeBotJobBulkAssignmentState({ current }).catch((error) => {
     // Non-fatal: worst case the next pick recomputes from a stale/reset
     // state and briefly drifts from the exact 60/40 target, rather than
     // blocking issue creation over a state-file write failure.
@@ -1826,8 +1829,10 @@ async function createLinearIssue(payload) {
     const labelIds = await resolveLinearLabelIds(payload.labels);
     if (labelIds.length > 0) issueInput.labelIds = labelIds;
   }
-  if (sanitizeSingleLine(payload?.title, 240).toLowerCase().startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase())) {
-    const assignee = await pickNextBotJobSpikeAssignee().catch(() => null);
+  const isBulkCreatedIssue = payload?.bulk === true
+    || sanitizeSingleLine(payload?.title, 240).toLowerCase().startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
+  if (isBulkCreatedIssue) {
+    const assignee = await pickNextBotJobBulkAssignee().catch(() => null);
     if (assignee?.id) {
       issueInput.assigneeId = assignee.id;
     }

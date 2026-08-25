@@ -627,6 +627,7 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
         stateName: sanitizeSingleLine(rawPayload.stateName, 120),
         dedupeKey: sanitizeSingleLine(rawPayload.dedupeKey, 160),
         jobType: sanitizeSingleLine(rawPayload.jobType, 120),
+        bulk: rawPayload.bulk === true,
         slack: sanitizeLinearSlackPayload(rawPayload?.slack)
     };
 }
