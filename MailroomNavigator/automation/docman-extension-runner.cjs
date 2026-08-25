@@ -1088,7 +1088,7 @@ async function main() {
         });
       }
 
-      await runStepWithRetry({
+      const cleanResult = await runStepWithRetry({
         label: "clean_workflow",
         logger: runLogger,
         retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
@@ -1118,6 +1118,12 @@ async function main() {
 
       emitStructuredResult(action, {
         cleanType,
+        outcome: cleanResult?.outcome || "success",
+        sourceFolder: cleanResult?.sourceFolder || "",
+        destinationFolder: cleanResult?.destinationFolder || "",
+        totalDocuments: cleanResult?.totalDocuments ?? 0,
+        matchedDocuments: cleanResult?.matchedDocuments ?? 0,
+        movedDocuments: cleanResult?.movedDocuments ?? 0,
       });
       console.log("✅ CLEAN workflow finished.");
       return;
@@ -1132,6 +1138,21 @@ async function main() {
     });
     console.error(`\n❌ FAILED: ${error?.message || error}`);
     process.exitCode = 1;
+
+    if (resolvedAction === "clean-processing" || resolvedAction === "clean-filing") {
+      const partial = error?.docmanCleanResult;
+      emitStructuredResult(resolvedAction, {
+        cleanType: resolvedAction === "clean-processing" ? "processing" : "filing",
+        outcome: "failed",
+        errorMessage: error?.message || String(error),
+        sourceFolder: partial?.sourceFolder || "",
+        destinationFolder: partial?.destinationFolder || "",
+        totalDocuments: partial?.totalDocuments ?? 0,
+        matchedDocuments: partial?.matchedDocuments ?? 0,
+        movedDocuments: partial?.movedDocuments ?? 0,
+        failedDocuments: partial?.failedDocuments ?? 0,
+      });
+    }
   } finally {
     runLogger?.close?.({ outcome: runOutcome });
 

@@ -752,9 +752,23 @@ function sanitizeDocmanResultData(rawResult = null) {
   }
 
   if (type === "clean-processing" || type === "clean-filing") {
+    const totalDocuments = Number.isFinite(Number(rawResult.totalDocuments)) ? Number(rawResult.totalDocuments) : 0;
+    const matchedDocuments = Number.isFinite(Number(rawResult.matchedDocuments)) ? Number(rawResult.matchedDocuments) : 0;
+    const movedDocuments = Number.isFinite(Number(rawResult.movedDocuments)) ? Number(rawResult.movedDocuments) : 0;
+    const failedDocuments = Number.isFinite(Number(rawResult.failedDocuments))
+      ? Number(rawResult.failedDocuments)
+      : Math.max(0, matchedDocuments - movedDocuments);
     return {
       type,
       cleanType: sanitizeSingleLine(rawResult.cleanType, 80),
+      outcome: sanitizeSingleLine(rawResult.outcome, 40) || "success",
+      sourceFolder: sanitizeDocmanFolderName(rawResult.sourceFolder),
+      destinationFolder: sanitizeDocmanFolderName(rawResult.destinationFolder),
+      totalDocuments,
+      matchedDocuments,
+      movedDocuments,
+      failedDocuments,
+      errorMessage: rawResult.outcome === "failed" ? sanitizeSingleLine(rawResult.errorMessage, 400) : "",
     };
   }
 

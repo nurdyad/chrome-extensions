@@ -1604,6 +1604,7 @@ async function initializePanel() {
         docmanToolStatus.classList.add('validation-badge', 'docman-tool-status-host');
         docmanToolStatus.textContent = normalizedMessage;
     };
+    const isDocmanCleanAction = (action) => action === 'clean-processing' || action === 'clean-filing';
     const getDocmanRunStatusTone = (run, isActive = false) => {
         if (isActive || String(run?.status || '').toLowerCase() === 'running') return 'running';
         const action = trimDocmanField(run?.action, 40);
@@ -1613,6 +1614,13 @@ async function initializePanel() {
             const matched = Number(resultData?.matched) || 0;
             if (checked > 0 && matched <= 0) return 'warning';
             if (checked > 0 && matched < checked) return 'warning';
+        }
+        if (isDocmanCleanAction(action) && String(run?.status || '').toLowerCase() === 'success') {
+            const outcome = trimDocmanField(resultData?.outcome, 40);
+            if (outcome === 'cancelled') return 'warning';
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            if (matched > 0 && moved < matched) return 'warning';
         }
         return String(run?.status || '').toLowerCase() === 'success' ? 'success' : 'failed';
     };
@@ -1626,6 +1634,10 @@ async function initializePanel() {
                 const checked = Number(resultData?.checked) || Number(run?.usernamesCount) || 0;
                 const matched = Number(resultData?.matched) || 0;
                 if (checked > 0 && matched <= 0) return 'No Matches';
+                return 'Partial';
+            }
+            if (isDocmanCleanAction(action)) {
+                if (trimDocmanField(resultData?.outcome, 40) === 'cancelled') return 'Cancelled';
                 return 'Partial';
             }
             return 'Attention';
@@ -1652,6 +1664,24 @@ async function initializePanel() {
                 return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}, but no exact Docman matches were found.`;
             }
             return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''} with partial matches (${matched} matched, ${missing} missing).`;
+        }
+        if (isDocmanCleanAction(trimDocmanField(run.action, 40))) {
+            const outcome = trimDocmanField(resultData?.outcome, 40);
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            const failed = Number.isFinite(Number(resultData?.failedDocuments)) ? Number(resultData.failedDocuments) : Math.max(0, matched - moved);
+            const destination = trimDocmanField(resultData?.destinationFolder, 80);
+            const destinationSuffix = destination ? ` to "${destination}"` : '';
+            if (outcome === 'cancelled') return `${actionLabel} cancelled for ${practiceLabel} — no documents were moved.`;
+            if (outcome === 'nothing_to_move') return `${actionLabel} found no documents to move for ${practiceLabel}.`;
+            if (tone === 'failed') {
+                const reason = trimDocmanField(run.error, 140) || 'Run failed';
+                return moved > 0
+                    ? `Moved ${moved} of ${matched} documents${destinationSuffix} before failing. ${reason}`
+                    : `${actionLabel} failed for ${practiceLabel}. ${reason}`;
+            }
+            if (failed > 0) return `Moved ${moved} of ${matched} documents${destinationSuffix} — ${failed} did not move.`;
+            return `Moved ${moved} document${moved === 1 ? '' : 's'}${destinationSuffix}.`;
         }
         if (String(run.status || '').toLowerCase() === 'success') {
             return `${actionLabel} finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}.`;
@@ -1687,6 +1717,17 @@ async function initializePanel() {
                 { label: 'Folder #4', value: trimDocmanField(resultData?.inputFolderName || run.onboardingInputFolderName, 48) || 'Default', tone: 'is-primary' },
                 { label: 'Folders', value: String(folderCount || 0), tone: 'is-info' },
                 { label: 'Already There', value: String(existingCount || 0), tone: existingCount > 0 ? 'is-warning' : 'is-neutral' }
+            ];
+        }
+        if (isDocmanCleanAction(action)) {
+            const total = Number(resultData?.totalDocuments) || 0;
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            const notMoved = Number.isFinite(Number(resultData?.failedDocuments)) ? Number(resultData.failedDocuments) : Math.max(0, matched - moved);
+            return [
+                { label: 'Found', value: String(matched || total || 0), tone: 'is-primary' },
+                { label: 'Moved', value: String(moved), tone: moved > 0 ? 'is-success' : 'is-neutral' },
+                { label: 'Not Moved', value: String(notMoved), tone: notMoved > 0 ? 'is-danger' : 'is-neutral' }
             ];
         }
         return [
