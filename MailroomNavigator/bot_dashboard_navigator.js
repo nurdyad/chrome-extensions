@@ -2215,7 +2215,7 @@ ${hiddenBlock}
             for (let index = 0; index < queue.length; index += 1) {
                 btn.textContent = `Creating ${index + 1}/${queue.length}`;
                 try {
-                    const response = await createLinearIssueFromPayload(queue[index]);
+                    const response = await createLinearIssueFromPayload({ ...queue[index], bulk: true });
                     if (response?.duplicate) {
                         reused.push({
                             ...(response?.issue || {}),
