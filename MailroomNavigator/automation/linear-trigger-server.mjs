@@ -3627,6 +3627,9 @@ function sanitizeDocmanRunPayload(rawPayload = {}) {
     onboardingInputFolderName: sanitizeDocmanFolderName(rawPayload?.onboardingInputFolderName),
     docmanUsername: sanitizeSingleLine(rawPayload?.docmanUsername, 240),
     docmanPassword: sanitizeDocmanCredential(rawPayload?.docmanPassword),
+    docmanInputFolder: sanitizeDocmanFolderName(rawPayload?.docmanInputFolder),
+    docmanProcessingFolder: sanitizeDocmanFolderName(rawPayload?.docmanProcessingFolder),
+    docmanFilingFolder: sanitizeDocmanFolderName(rawPayload?.docmanFilingFolder),
   };
 }
 
@@ -3670,6 +3673,9 @@ async function hydrateDocmanRunPayloadFromSql(payload) {
     docmanUsername: sanitizedPayload.docmanUsername || practice.docmanUsername,
     docmanPassword: sanitizedPayload.docmanPassword || practice.docmanPassword,
     onboardingInputFolderName: sanitizedPayload.onboardingInputFolderName || practice.docmanInputFolder,
+    docmanInputFolder: sanitizedPayload.docmanInputFolder || practice.docmanInputFolder,
+    docmanProcessingFolder: sanitizedPayload.docmanProcessingFolder || practice.docmanProcessingFolder,
+    docmanFilingFolder: sanitizedPayload.docmanFilingFolder || practice.docmanFilingFolder,
   });
 }
 
@@ -3709,6 +3715,9 @@ function buildDocmanToolLaunch(payload) {
     env: {
       MAILROOM_DOCMAN_USERNAME: payload.docmanUsername,
       MAILROOM_DOCMAN_PASSWORD: payload.docmanPassword,
+      MAILROOM_DOCMAN_INPUT_FOLDER: payload.docmanInputFolder,
+      MAILROOM_DOCMAN_PROCESSING_FOLDER: payload.docmanProcessingFolder,
+      MAILROOM_DOCMAN_FILING_FOLDER: payload.docmanFilingFolder,
     },
   };
 }
