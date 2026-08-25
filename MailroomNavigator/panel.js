@@ -45,7 +45,43 @@ const PANEL_FORCED_TOOL_ID = (() => {
     }
 })();
 
-const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const DEFAULT_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const TRIGGER_SERVER_BASE_URL_STORAGE_KEY = 'mailroomNavigatorTriggerServerBaseUrl';
+// Kept in sync with background.js's own copy of this lookup - both read the
+// same chrome.storage.local key. Cached here (rather than re-read on every
+// UUID lookup) and refreshed on load and right after a successful save from
+// the settings field, since this direct fetch to the trigger server bypasses
+// background.js's message-passing layer entirely.
+let triggerServerBaseUrl = DEFAULT_TRIGGER_SERVER_BASE_URL;
+
+async function refreshTriggerServerBaseUrl() {
+    try {
+        const result = await chrome.storage.local.get(TRIGGER_SERVER_BASE_URL_STORAGE_KEY);
+        const stored = String(result?.[TRIGGER_SERVER_BASE_URL_STORAGE_KEY] || '').trim();
+        triggerServerBaseUrl = stored || DEFAULT_TRIGGER_SERVER_BASE_URL;
+    } catch (error) {
+        triggerServerBaseUrl = DEFAULT_TRIGGER_SERVER_BASE_URL;
+    }
+    return triggerServerBaseUrl;
+}
+
+const TRIGGER_SERVER_SECRET_STORAGE_KEY = 'mailroomNavigatorTriggerServerSecret';
+const TRIGGER_SECRET_HEADER_NAME = 'X-MailroomNav-Trigger-Secret';
+// Paired with the server-side shared-secret check - this direct fetch
+// bypasses background.js's own header-attaching logic entirely, so it needs
+// its own copy of the secret too.
+let triggerServerSecret = '';
+
+async function refreshTriggerServerSecret() {
+    try {
+        const result = await chrome.storage.local.get(TRIGGER_SERVER_SECRET_STORAGE_KEY);
+        triggerServerSecret = String(result?.[TRIGGER_SERVER_SECRET_STORAGE_KEY] || '').trim();
+    } catch (error) {
+        triggerServerSecret = '';
+    }
+    return triggerServerSecret;
+}
+
 const UUID_LOOKUP_REQUEST_TIMEOUT_MS = 26000;
 const UUID_LOOKUP_LOADING_DELAY_MS = 120;
 const DOCKED_PANEL_TITLES = {
@@ -399,6 +435,8 @@ async function initializePanel() {
     if (panelInitializationStarted) return;
     panelInitializationStarted = true;
     try {
+    await refreshTriggerServerBaseUrl();
+    await refreshTriggerServerSecret();
     if (PANEL_FORCED_VIEW_ID) {
         document.body.classList.add('bl-panel-single-view');
     }
@@ -912,6 +950,14 @@ async function initializePanel() {
     const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
     const reconcileLinearBotIssuesBtn = document.getElementById('reconcileLinearBotIssuesBtn');
     const restartLinearTriggerServerBtn = document.getElementById('restartLinearTriggerServerBtn');
+    const triggerServerBaseUrlInput = document.getElementById('triggerServerBaseUrlInput');
+    const saveTriggerServerBaseUrlBtn = document.getElementById('saveTriggerServerBaseUrlBtn');
+    const triggerServerBaseUrlStatus = document.getElementById('triggerServerBaseUrlStatus');
+    const triggerServerSecretRow = document.getElementById('triggerServerSecretRow');
+    const triggerServerSecretInput = document.getElementById('triggerServerSecretInput');
+    const saveTriggerServerSecretBtn = document.getElementById('saveTriggerServerSecretBtn');
+    const clearTriggerServerSecretBtn = document.getElementById('clearTriggerServerSecretBtn');
+    const triggerServerSecretStatus = document.getElementById('triggerServerSecretStatus');
     const triggerLinearDryRunInput = document.getElementById('triggerLinearDryRunInput');
     const reconcileLinearDryRunInput = document.getElementById('reconcileLinearDryRunInput');
     const linearTriggerStatus = document.getElementById('linearTriggerStatus');
@@ -1013,7 +1059,7 @@ async function initializePanel() {
     };
 
     const buildUuidLookupUrl = (uuid) => {
-        return `${LINEAR_TRIGGER_SERVER_BASE_URL}/uuid-status?uuid=${encodeURIComponent(uuid)}`;
+        return `${triggerServerBaseUrl}/uuid-status?uuid=${encodeURIComponent(uuid)}`;
     };
 
     const normalizeUuidLookupError = (message, status = 0) => {
@@ -1026,9 +1072,11 @@ async function initializePanel() {
     };
 
     const fetchUuidLookupDirect = async (uuid, { signal } = {}) => {
+        const headers = triggerServerSecret ? { [TRIGGER_SECRET_HEADER_NAME]: triggerServerSecret } : undefined;
         const response = await fetch(buildUuidLookupUrl(uuid), {
             method: 'GET',
             cache: 'no-store',
+            headers,
             signal
         });
         const rawBody = await response.text();
@@ -1078,7 +1126,7 @@ async function initializePanel() {
     let uuidLookupWarmPromise = null;
     const warmUuidLookupConnection = async () => {
         if (uuidLookupWarmPromise) return uuidLookupWarmPromise;
-        uuidLookupWarmPromise = fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}/health`, {
+        uuidLookupWarmPromise = fetch(`${triggerServerBaseUrl}/health`, {
             method: 'GET',
             cache: 'no-store'
         }).catch(() => null).finally(() => {
@@ -4836,6 +4884,118 @@ ${error?.message || String(error)}`, 'invalid');
             setLinearTriggerStatus('Could not restart local trigger service.', 'invalid');
             showToast('Could not restart local trigger service.');
         });
+    });
+    const updateTriggerServerSecretRowVisibility = () => {
+        if (!triggerServerSecretRow) return;
+        triggerServerSecretRow.style.display = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL ? 'none' : 'block';
+    };
+    const refreshTriggerServerSecretStatus = async () => {
+        if (!triggerServerSecretStatus) return;
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'getTriggerServerHasSecret' });
+            triggerServerSecretStatus.textContent = response?.hasSecret
+                ? 'A secret is set for this server.'
+                : "No secret set - only fine if that server's own secret isn't required either.";
+        } catch (error) {
+            triggerServerSecretStatus.textContent = 'No secret set.';
+        }
+    };
+    if (triggerServerBaseUrlInput) {
+        triggerServerBaseUrlInput.value = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL ? '' : triggerServerBaseUrl;
+        if (triggerServerBaseUrlStatus) {
+            triggerServerBaseUrlStatus.textContent = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL
+                ? "Using this machine's own trigger server."
+                : `Using trigger server at ${triggerServerBaseUrl}.`;
+        }
+        updateTriggerServerSecretRowVisibility();
+        refreshTriggerServerSecretStatus().catch(() => undefined);
+    }
+    saveTriggerServerBaseUrlBtn?.addEventListener('click', async () => {
+        const rawValue = String(triggerServerBaseUrlInput?.value || '').trim();
+        saveTriggerServerBaseUrlBtn.disabled = true;
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'setTriggerServerBaseUrl',
+                payload: { baseUrl: rawValue }
+            });
+            if (!response?.success) {
+                const message = response?.error || 'Could not save trigger server address.';
+                if (triggerServerBaseUrlStatus) {
+                    triggerServerBaseUrlStatus.textContent = message;
+                    triggerServerBaseUrlStatus.className = 'validation-badge invalid';
+                }
+                showToast(message);
+                return;
+            }
+            await refreshTriggerServerBaseUrl();
+            if (triggerServerBaseUrlStatus) {
+                triggerServerBaseUrlStatus.textContent = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL
+                    ? "Saved. Using this machine's own trigger server."
+                    : `Saved. Using trigger server at ${triggerServerBaseUrl}.`;
+                triggerServerBaseUrlStatus.className = 'validation-badge valid';
+            }
+            updateTriggerServerSecretRowVisibility();
+            showToast('Trigger server address saved.');
+        } catch (error) {
+            if (triggerServerBaseUrlStatus) {
+                triggerServerBaseUrlStatus.textContent = 'Could not save trigger server address.';
+                triggerServerBaseUrlStatus.className = 'validation-badge invalid';
+            }
+            showToast('Could not save trigger server address.');
+        } finally {
+            saveTriggerServerBaseUrlBtn.disabled = false;
+        }
+    });
+    saveTriggerServerSecretBtn?.addEventListener('click', async () => {
+        // Never pre-filled with the current secret (so it's never re-displayed
+        // in plain text on load), so an empty field here just means "leave it
+        // unchanged" rather than "clear it" - use the Clear button for that.
+        const rawValue = String(triggerServerSecretInput?.value || '').trim();
+        if (!rawValue) {
+            showToast('Type a secret first, or use Clear to remove it.');
+            return;
+        }
+        saveTriggerServerSecretBtn.disabled = true;
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'setTriggerServerSecret',
+                payload: { secret: rawValue }
+            });
+            if (!response?.success) {
+                const message = response?.error || 'Could not save trigger server secret.';
+                showToast(message);
+                return;
+            }
+            await refreshTriggerServerSecret();
+            await refreshTriggerServerSecretStatus();
+            triggerServerSecretInput.value = '';
+            showToast('Trigger server secret saved.');
+        } catch (error) {
+            showToast('Could not save trigger server secret.');
+        } finally {
+            saveTriggerServerSecretBtn.disabled = false;
+        }
+    });
+    clearTriggerServerSecretBtn?.addEventListener('click', async () => {
+        clearTriggerServerSecretBtn.disabled = true;
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'setTriggerServerSecret',
+                payload: { secret: '' }
+            });
+            if (!response?.success) {
+                showToast(response?.error || 'Could not clear trigger server secret.');
+                return;
+            }
+            await refreshTriggerServerSecret();
+            await refreshTriggerServerSecretStatus();
+            if (triggerServerSecretInput) triggerServerSecretInput.value = '';
+            showToast('Trigger server secret cleared.');
+        } catch (error) {
+            showToast('Could not clear trigger server secret.');
+        } finally {
+            clearTriggerServerSecretBtn.disabled = false;
+        }
     });
     if (!isServerlessLiteMode) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });

@@ -155,6 +155,64 @@ Defaults:
 - database: `mailroom_prod`
 - user: `reporting`
 
+## 5.2 Sharing One Machine's Trigger Server (Optional)
+
+Instead of every teammate installing their own Level 2 setup (Node.js,
+Cloud SQL Proxy, Linear/Slack keys, `bot-jobs-linear` checkout), one
+machine's trigger server can be shared over the local network. Other
+installs then only need the browser extension itself (Section 1) -
+nothing else - and point it at the shared machine.
+
+**Security note:** the trigger server has no built-in login of any
+kind - by default, anyone who can reach the chosen port on the host
+machine can trigger Linear issues, run Docman automation, and query
+the database through it. Setting `LINEAR_TRIGGER_SHARED_SECRET` (step
+2 below) closes that gap with a shared password both machines must
+send; without it, only do this on a network you fully trust (your own
+office/home network, never a shared or public one).
+
+**On the host machine** (the one already fully set up):
+
+1. Find its LAN IP address (macOS: `ipconfig getifaddr en0`).
+2. Add a shared secret in `MailroomNavigator/.env` - anyone who knows
+   this value can use the server, so treat it like a password:
+   ```bash
+   echo "LINEAR_TRIGGER_SHARED_SECRET=$(openssl rand -hex 24)" >> MailroomNavigator/.env
+   grep LINEAR_TRIGGER_SHARED_SECRET MailroomNavigator/.env
+   ```
+   Note the value it prints - every machine using this server needs it
+   (step 2 below). Leaving this unset skips the check entirely, so a
+   normal single-machine install needs nothing extra.
+3. Re-run the install script with the host machine's LAN IP:
+   ```bash
+   cd MailroomNavigator/automation
+   LINEAR_TRIGGER_SERVER_HOST=<your-LAN-IP> ./install-linear-trigger-launchagent.sh
+   ```
+   This makes the server listen on that specific address only - it
+   will **no longer be reachable via `127.0.0.1` on this same machine**,
+   so the host machine's own extension also needs step 2 below.
+4. If DHCP could reassign this machine a different IP later, set a DHCP
+   reservation for it on the router - otherwise every other install
+   pointing at the old IP will silently stop working whenever it changes.
+5. Make sure the Mac firewall (System Settings → Network → Firewall)
+   allows incoming connections to `node` for this to be reachable from
+   other machines at all.
+
+**On every machine using the shared server** (including the host
+machine's own extension, per step 3 above):
+
+1. Complete Section 1 (Base Install) only - no Node.js, no Cloud SQL
+   Proxy, no `.env` needed on this machine.
+2. Open the extension panel → Linear section → "Trigger server address"
+   field, enter `http://<host-machine-LAN-IP>:4817`, and click Save.
+   A second "Trigger server secret" field appears once that address is
+   set to anything other than blank - paste in the exact value from
+   step 2 above and click Save there too (skip this if the host didn't
+   set a secret).
+3. Leaving the address field blank always means "use this machine's own
+   server at `127.0.0.1:4817`" - clear it to go back to a fully local
+   setup.
+
 ## 6. Upgrade / Reinstall
 
 After pulling updates:
