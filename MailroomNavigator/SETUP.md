@@ -213,6 +213,51 @@ machine's own extension, per step 3 above):
    server at `127.0.0.1:4817`" - clear it to go back to a fully local
    setup.
 
+**Note:** private LAN addresses like `192.168.x.x` only work between
+machines on the *same* physical network. If the other machine is
+somewhere else entirely (different office, different home, different
+WiFi), this straightforward approach won't reach it at all - you'd
+need a mesh VPN (e.g. Tailscale) between the two machines first, or
+just have that machine do its own full local install instead.
+
+## 5.3 Docman Tools (Login, Verify, Clean Processing, etc.)
+
+The panel's "Docman Tools" buttons run a separate tool
+(`docman-tool`, in the sibling `nurdyad/tools` repo) via the same
+local trigger service. Each person needs their own full setup here -
+this isn't part of the trigger-server-sharing option above.
+
+1. Clone the tools repo, next to (not inside) `chrome-extensions`:
+   ```bash
+   git clone https://github.com/nurdyad/tools.git
+   cd tools/docman-tool
+   npm install
+   ```
+2. Create `docman-tool/.env` from `.env.example` in that same folder
+   and fill in:
+   - `BETTERLETTER_BASIC_AUTH_USER` / `BETTERLETTER_BASIC_AUTH_PASS` -
+     the site-wide HTTP basic auth in front of BetterLetter (same for
+     everyone, ask whoever has it).
+   - `BETTERLETTER_USER_EMAIL` / `BETTERLETTER_USER_PASSWORD` - **your
+     own** BetterLetter account login, not someone else's. Actions run
+     under whichever account is configured here.
+   - The `OTP_EMAIL_*` settings, only if your BetterLetter account's
+     2FA codes arrive by email and you want them read automatically -
+     point these at the mailbox that actually receives them (your own,
+     not someone else's).
+3. In `MailroomNavigator/.env`, set `LINEAR_TRIGGER_DOCMAN_TOOL_DIR` to
+   the full path of the `docman-tool` folder from step 1, then restart
+   the trigger service.
+4. `docman-tool.config.json` in that folder defaults to
+   `step4UseCurrentChrome: true`, which expects Chrome already running
+   with `--remote-debugging-port=9222` before you use these buttons.
+   If you don't want to start Chrome that way every time, change it to
+   `false` (and `step4BrowserEngine`/`chromeCdpUrl` become irrelevant)
+   - the tool will then just open its own Chrome window automatically
+     using your regular installed Chrome, no extra steps needed.
+5. Cloud SQL is unrelated to this section entirely - none of the
+   Docman Tools actions need it.
+
 ## 6. Upgrade / Reinstall
 
 After pulling updates:
