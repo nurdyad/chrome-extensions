@@ -155,6 +155,48 @@ Defaults:
 - database: `mailroom_prod`
 - user: `reporting`
 
+## 5.2 Sharing One Machine's Trigger Server (Optional)
+
+Instead of every teammate installing their own Level 2 setup (Node.js,
+Cloud SQL Proxy, Linear/Slack keys, `bot-jobs-linear` checkout), one
+machine's trigger server can be shared over the local network. Other
+installs then only need the browser extension itself (Section 1) -
+nothing else - and point it at the shared machine.
+
+**Security note:** the trigger server has no authentication. Anyone who
+can reach the chosen port on the host machine can trigger Linear
+issues, run Docman automation, and query the database through it. Only
+do this on a network you trust (e.g. your own office/home network), not
+a shared or public one.
+
+**On the host machine** (the one already fully set up):
+
+1. Find its LAN IP address (macOS: `ipconfig getifaddr en0`).
+2. Re-run the install script with that IP:
+   ```bash
+   cd MailroomNavigator/automation
+   LINEAR_TRIGGER_SERVER_HOST=<your-LAN-IP> ./install-linear-trigger-launchagent.sh
+   ```
+   This makes the server listen on that specific address only - it
+   will **no longer be reachable via `127.0.0.1` on this same machine**,
+   so the host machine's own extension also needs step 2 below.
+3. If DHCP could reassign this machine a different IP later, set a DHCP
+   reservation for it on the router - otherwise every other install
+   pointing at the old IP will silently stop working whenever it changes.
+4. Make sure the Mac firewall (System Settings → Network → Firewall)
+   allows incoming connections to `node` for this to be reachable from
+   other machines at all.
+
+**On every machine using the shared server** (including the host
+machine's own extension, per step 2 above):
+
+1. Complete Section 1 (Base Install) only - no Node.js, no Cloud SQL
+   Proxy, no `.env` needed on this machine.
+2. Open the extension panel → Linear section → "Trigger server address"
+   field, enter `http://<host-machine-LAN-IP>:4817`, and click Save.
+3. Leaving the field blank always means "use this machine's own server
+   at `127.0.0.1:4817`" - clear it to go back to a fully local setup.
+
 ## 6. Upgrade / Reinstall
 
 After pulling updates:

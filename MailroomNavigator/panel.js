@@ -45,7 +45,26 @@ const PANEL_FORCED_TOOL_ID = (() => {
     }
 })();
 
-const LINEAR_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const DEFAULT_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
+const TRIGGER_SERVER_BASE_URL_STORAGE_KEY = 'mailroomNavigatorTriggerServerBaseUrl';
+// Kept in sync with background.js's own copy of this lookup - both read the
+// same chrome.storage.local key. Cached here (rather than re-read on every
+// UUID lookup) and refreshed on load and right after a successful save from
+// the settings field, since this direct fetch to the trigger server bypasses
+// background.js's message-passing layer entirely.
+let triggerServerBaseUrl = DEFAULT_TRIGGER_SERVER_BASE_URL;
+
+async function refreshTriggerServerBaseUrl() {
+    try {
+        const result = await chrome.storage.local.get(TRIGGER_SERVER_BASE_URL_STORAGE_KEY);
+        const stored = String(result?.[TRIGGER_SERVER_BASE_URL_STORAGE_KEY] || '').trim();
+        triggerServerBaseUrl = stored || DEFAULT_TRIGGER_SERVER_BASE_URL;
+    } catch (error) {
+        triggerServerBaseUrl = DEFAULT_TRIGGER_SERVER_BASE_URL;
+    }
+    return triggerServerBaseUrl;
+}
+
 const UUID_LOOKUP_REQUEST_TIMEOUT_MS = 26000;
 const UUID_LOOKUP_LOADING_DELAY_MS = 120;
 const DOCKED_PANEL_TITLES = {
@@ -399,6 +418,7 @@ async function initializePanel() {
     if (panelInitializationStarted) return;
     panelInitializationStarted = true;
     try {
+    await refreshTriggerServerBaseUrl();
     if (PANEL_FORCED_VIEW_ID) {
         document.body.classList.add('bl-panel-single-view');
     }
@@ -912,6 +932,9 @@ async function initializePanel() {
     const triggerLinearBotJobsBtn = document.getElementById('triggerLinearBotJobsBtn');
     const reconcileLinearBotIssuesBtn = document.getElementById('reconcileLinearBotIssuesBtn');
     const restartLinearTriggerServerBtn = document.getElementById('restartLinearTriggerServerBtn');
+    const triggerServerBaseUrlInput = document.getElementById('triggerServerBaseUrlInput');
+    const saveTriggerServerBaseUrlBtn = document.getElementById('saveTriggerServerBaseUrlBtn');
+    const triggerServerBaseUrlStatus = document.getElementById('triggerServerBaseUrlStatus');
     const triggerLinearDryRunInput = document.getElementById('triggerLinearDryRunInput');
     const reconcileLinearDryRunInput = document.getElementById('reconcileLinearDryRunInput');
     const linearTriggerStatus = document.getElementById('linearTriggerStatus');
@@ -1013,7 +1036,7 @@ async function initializePanel() {
     };
 
     const buildUuidLookupUrl = (uuid) => {
-        return `${LINEAR_TRIGGER_SERVER_BASE_URL}/uuid-status?uuid=${encodeURIComponent(uuid)}`;
+        return `${triggerServerBaseUrl}/uuid-status?uuid=${encodeURIComponent(uuid)}`;
     };
 
     const normalizeUuidLookupError = (message, status = 0) => {
@@ -1078,7 +1101,7 @@ async function initializePanel() {
     let uuidLookupWarmPromise = null;
     const warmUuidLookupConnection = async () => {
         if (uuidLookupWarmPromise) return uuidLookupWarmPromise;
-        uuidLookupWarmPromise = fetch(`${LINEAR_TRIGGER_SERVER_BASE_URL}/health`, {
+        uuidLookupWarmPromise = fetch(`${triggerServerBaseUrl}/health`, {
             method: 'GET',
             cache: 'no-store'
         }).catch(() => null).finally(() => {
@@ -4836,6 +4859,49 @@ ${error?.message || String(error)}`, 'invalid');
             setLinearTriggerStatus('Could not restart local trigger service.', 'invalid');
             showToast('Could not restart local trigger service.');
         });
+    });
+    if (triggerServerBaseUrlInput) {
+        triggerServerBaseUrlInput.value = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL ? '' : triggerServerBaseUrl;
+        if (triggerServerBaseUrlStatus) {
+            triggerServerBaseUrlStatus.textContent = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL
+                ? "Using this machine's own trigger server."
+                : `Using trigger server at ${triggerServerBaseUrl}.`;
+        }
+    }
+    saveTriggerServerBaseUrlBtn?.addEventListener('click', async () => {
+        const rawValue = String(triggerServerBaseUrlInput?.value || '').trim();
+        saveTriggerServerBaseUrlBtn.disabled = true;
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'setTriggerServerBaseUrl',
+                payload: { baseUrl: rawValue }
+            });
+            if (!response?.success) {
+                const message = response?.error || 'Could not save trigger server address.';
+                if (triggerServerBaseUrlStatus) {
+                    triggerServerBaseUrlStatus.textContent = message;
+                    triggerServerBaseUrlStatus.className = 'validation-badge invalid';
+                }
+                showToast(message);
+                return;
+            }
+            await refreshTriggerServerBaseUrl();
+            if (triggerServerBaseUrlStatus) {
+                triggerServerBaseUrlStatus.textContent = triggerServerBaseUrl === DEFAULT_TRIGGER_SERVER_BASE_URL
+                    ? "Saved. Using this machine's own trigger server."
+                    : `Saved. Using trigger server at ${triggerServerBaseUrl}.`;
+                triggerServerBaseUrlStatus.className = 'validation-badge valid';
+            }
+            showToast('Trigger server address saved.');
+        } catch (error) {
+            if (triggerServerBaseUrlStatus) {
+                triggerServerBaseUrlStatus.textContent = 'Could not save trigger server address.';
+                triggerServerBaseUrlStatus.className = 'validation-badge invalid';
+            }
+            showToast('Could not save trigger server address.');
+        } finally {
+            saveTriggerServerBaseUrlBtn.disabled = false;
+        }
     });
     if (!isServerlessLiteMode) {
         const isLinearRunActiveOnLoad = await pollLinearTriggerStatus({ silent: true });

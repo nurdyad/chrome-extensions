@@ -807,6 +807,14 @@
         <div id="linearServiceControls" style="margin-top: 8px;">
           <button id="restartLinearTriggerServerBtn" class="btn btn-sm btn-ghost" style="width: 100%;" type="button">Restart Trigger Service</button>
         </div>
+        <div style="margin-top: 8px;">
+          <label for="triggerServerBaseUrlInput" style="font-size: 12px;">Trigger server address (leave blank for this machine)</label>
+          <div style="display: flex; gap: 6px; margin-top: 4px;">
+            <input id="triggerServerBaseUrlInput" type="text" autocomplete="off" placeholder="http://192.168.1.42:4817" style="flex: 1;">
+            <button id="saveTriggerServerBaseUrlBtn" class="btn btn-sm btn-ghost" type="button">Save</button>
+          </div>
+          <div id="triggerServerBaseUrlStatus" class="validation-badge neutral" style="margin-top: 4px;">Using this machine's own trigger server.</div>
+        </div>
         <label id="triggerLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
           <input id="triggerLinearDryRunInput" type="checkbox">
           Trigger Linear in Dry Run mode (no new issues created)
