@@ -32,6 +32,15 @@ function normalizeTriggerServerHost(rawHost) {
 
 const HOST = normalizeTriggerServerHost(process.env.LINEAR_TRIGGER_SERVER_HOST || "127.0.0.1");
 const PORT = Number(process.env.LINEAR_TRIGGER_SERVER_PORT || 4817);
+// Optional: when set, every request (except /health) must send this exact
+// value back in the X-MailroomNav-Trigger-Secret header. Unset by default
+// so a normal single-machine localhost install needs nothing extra; set
+// this whenever LINEAR_TRIGGER_SERVER_HOST is bound to a LAN address other
+// installs will share, since that server otherwise has no authentication
+// at all - anyone who can reach the port can trigger issues, run Docman
+// automation, or query the database through it.
+const TRIGGER_SHARED_SECRET = String(process.env.LINEAR_TRIGGER_SHARED_SECRET || "").trim();
+const TRIGGER_SECRET_HEADER = "x-mailroomnav-trigger-secret";
 function resolveDefaultBotJobsDir() {
   const candidates = [
     resolve(REPO_ROOT, "..", "bot-jobs-linear"),
@@ -3431,7 +3440,7 @@ function corsHeaders(origin) {
   const headers = {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": `Content-Type, ${TRIGGER_SECRET_HEADER}`,
   };
   if (isOriginAllowed(origin)) {
     headers["Access-Control-Allow-Origin"] = origin || "*";
@@ -4176,6 +4185,20 @@ const server = createServer(async (req, res) => {
       error: "Forbidden origin.",
     });
     return;
+  }
+
+  // /health is exempt so the extension can distinguish "wrong address, no
+  // server there at all" from "right address, wrong/missing secret" - it
+  // only returns non-sensitive status booleans, not secrets or data.
+  if (TRIGGER_SHARED_SECRET && path !== "/health") {
+    const providedSecret = String(req.headers[TRIGGER_SECRET_HEADER] || "").trim();
+    if (providedSecret !== TRIGGER_SHARED_SECRET) {
+      sendJson(res, 401, origin, {
+        ok: false,
+        error: "Missing or incorrect trigger server secret.",
+      });
+      return;
+    }
   }
 
   try {

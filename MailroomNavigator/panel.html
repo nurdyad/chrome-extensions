@@ -815,6 +815,15 @@
           </div>
           <div id="triggerServerBaseUrlStatus" class="validation-badge neutral" style="margin-top: 4px;">Using this machine's own trigger server.</div>
         </div>
+        <div id="triggerServerSecretRow" style="margin-top: 8px; display: none;">
+          <label for="triggerServerSecretInput" style="font-size: 12px;">Trigger server secret (only needed if the server above requires one)</label>
+          <div style="display: flex; gap: 6px; margin-top: 4px;">
+            <input id="triggerServerSecretInput" type="password" autocomplete="off" placeholder="Type a new secret to set/change it">
+            <button id="saveTriggerServerSecretBtn" class="btn btn-sm btn-ghost" type="button">Save</button>
+            <button id="clearTriggerServerSecretBtn" class="btn btn-sm btn-ghost" type="button">Clear</button>
+          </div>
+          <div id="triggerServerSecretStatus" class="validation-badge neutral" style="margin-top: 4px;">No secret set.</div>
+        </div>
         <label id="triggerLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
           <input id="triggerLinearDryRunInput" type="checkbox">
           Trigger Linear in Dry Run mode (no new issues created)

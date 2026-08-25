@@ -29,6 +29,8 @@ const LIVE_COUNTS_TEMP_TAB_RESULT_WAIT_MS = 4500;
 const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 3200;
 const DEFAULT_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const TRIGGER_SERVER_BASE_URL_STORAGE_KEY = 'mailroomNavigatorTriggerServerBaseUrl';
+const TRIGGER_SERVER_SECRET_STORAGE_KEY = 'mailroomNavigatorTriggerServerSecret';
+const TRIGGER_SECRET_HEADER_NAME = 'X-MailroomNav-Trigger-Secret';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
 const UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS = 26000;
 const LINEAR_SLACK_PREFS_STORAGE_KEY = 'linearSlackPrefsV1';
@@ -1004,9 +1006,43 @@ async function handleSetTriggerServerBaseUrl(payload = {}) {
     return { success: true, baseUrl: result.value || DEFAULT_TRIGGER_SERVER_BASE_URL };
 }
 
+// Paired with the server-side LINEAR_TRIGGER_SHARED_SECRET check (see
+// linear-trigger-server.mjs) - sent on every request so a shared server can
+// require it. Left blank here just means "no secret configured", which is
+// fine as long as the server one isn't set either (the normal single-
+// machine case); if the server does require one, requests without a
+// matching header get rejected with 401.
+async function getTriggerServerSecret() {
+    try {
+        const result = await chrome.storage.local.get(TRIGGER_SERVER_SECRET_STORAGE_KEY);
+        return String(result?.[TRIGGER_SERVER_SECRET_STORAGE_KEY] || '').trim();
+    } catch (error) {
+        return '';
+    }
+}
+
+async function handleSetTriggerServerSecret(payload = {}) {
+    const trimmed = String(payload?.secret || '').trim();
+    try {
+        if (trimmed) {
+            await chrome.storage.local.set({ [TRIGGER_SERVER_SECRET_STORAGE_KEY]: trimmed });
+        } else {
+            await chrome.storage.local.remove(TRIGGER_SERVER_SECRET_STORAGE_KEY);
+        }
+    } catch (error) {
+        return { success: false, error: 'Could not save trigger server secret.' };
+    }
+    return { success: true, hasSecret: Boolean(trimmed) };
+}
+
 async function callLinearTriggerServer(path, options = {}) {
     const baseUrl = await getTriggerServerBaseUrl();
-    return callJsonService(baseUrl, path, options);
+    const secret = await getTriggerServerSecret();
+    const extraHeaders = { ...(options.extraHeaders || {}) };
+    if (secret) {
+        extraHeaders[TRIGGER_SECRET_HEADER_NAME] = secret;
+    }
+    return callJsonService(baseUrl, path, { ...options, extraHeaders });
 }
 
 function sanitizeSqlPracticeDetails(rawPractice = null) {
@@ -4463,6 +4499,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         if (message.action === 'setTriggerServerBaseUrl') {
             return await handleSetTriggerServerBaseUrl(message.payload);
+        }
+
+        if (message.action === 'getTriggerServerHasSecret') {
+            return { success: true, hasSecret: Boolean(await getTriggerServerSecret()) };
+        }
+
+        if (message.action === 'setTriggerServerSecret') {
+            return await handleSetTriggerServerSecret(message.payload);
         }
 
         if (CACHE_REQUIRED_ACTIONS.has(message?.action)) {
