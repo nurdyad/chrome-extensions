@@ -876,7 +876,11 @@ function sanitizeDocmanToolRun(rawRun = null) {
                     requestedUsername: sanitizeSingleLine(entry?.requestedUsername, 120),
                     docmanUsername: sanitizeSingleLine(entry?.docmanUsername, 120),
                     exists: Boolean(entry?.exists),
-                    detail: sanitizeSingleLine(entry?.detail, 180)
+                    detail: sanitizeSingleLine(entry?.detail, 180),
+                    partialMatches: Array.isArray(entry?.partialMatches)
+                        ? entry.partialMatches.map((value) => sanitizeSingleLine(value, 120)).filter(Boolean).slice(0, 8)
+                        : [],
+                    needsManualReview: Boolean(entry?.needsManualReview)
                 })).slice(0, 500)
                 : [],
             groupName: sanitizeSingleLine(rawResultData.groupName, 240),

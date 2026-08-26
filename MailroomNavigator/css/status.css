@@ -854,6 +854,11 @@
     background: linear-gradient(180deg, #fff6f6 0%, #fef0f0 100%);
 }
 
+.docman-tool-verify-item.is-partial {
+    border-color: #f0dba8;
+    background: linear-gradient(180deg, #fffbf1 0%, #fdf4de 100%);
+}
+
 .docman-tool-verify-main {
     min-width: 0;
     display: flex;
@@ -891,6 +896,10 @@
 
 .docman-tool-verify-item.is-missing .docman-tool-verify-state {
     color: #b43b3b;
+}
+
+.docman-tool-verify-item.is-partial .docman-tool-verify-state {
+    color: #9a6b0c;
 }
 
 .docman-tool-log-details {

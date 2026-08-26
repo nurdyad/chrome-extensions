@@ -985,6 +985,13 @@ async function main() {
                 || "",
               180,
             ),
+            partialMatches: Array.isArray(entry?.partialMatches)
+              ? entry.partialMatches
+                .map((value) => sanitizeSingleLine(value, 120))
+                .filter(Boolean)
+                .slice(0, 8)
+              : [],
+            needsManualReview: Boolean(entry?.needsManualReview),
           }))
           : [],
       });

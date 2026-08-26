@@ -1745,15 +1745,33 @@ async function initializePanel() {
                     const requested = trimDocmanField(entry?.requestedUsername, 120) || 'Username';
                     const found = trimDocmanField(entry?.docmanUsername, 120);
                     const detail = trimDocmanField(entry?.detail, 180);
+                    const partialMatches = Array.isArray(entry?.partialMatches)
+                        ? entry.partialMatches.map((value) => trimDocmanField(value, 120)).filter(Boolean)
+                        : [];
                     const isFound = Boolean(entry?.exists && found);
+                    const hasPartial = !isFound && (partialMatches.length > 0 || Boolean(entry?.needsManualReview));
+                    const tone = isFound ? 'is-found' : hasPartial ? 'is-partial' : 'is-missing';
+                    const stateLabel = isFound ? 'Found' : hasPartial ? 'Review' : 'Missing';
+                    const foundText = isFound
+                        ? `Matched: ${found}`
+                        : hasPartial
+                            ? (partialMatches.length === 1
+                                ? `Possible match: ${partialMatches[0]}`
+                                : `${partialMatches.length} possible matches`)
+                            : 'No exact Docman match';
                     return `
-                        <div class="docman-tool-verify-item ${isFound ? 'is-found' : 'is-missing'}">
+                        <div class="docman-tool-verify-item ${tone}">
                             <div class="docman-tool-verify-main">
                                 <div class="docman-tool-verify-requested">${escapeHtml(requested)}</div>
-                                <div class="docman-tool-verify-found">${escapeHtml(isFound ? `Matched: ${found}` : 'No exact Docman match')}</div>
+                                <div class="docman-tool-verify-found">${escapeHtml(foundText)}</div>
                                 ${detail ? `<div class="docman-tool-verify-detail">${escapeHtml(detail)}</div>` : ''}
+                                ${hasPartial && partialMatches.length > 1 ? `
+                                    <div class="docman-tool-meta-row">
+                                        ${partialMatches.map((name) => `<span class="docman-tool-chip">${escapeHtml(name)}</span>`).join('')}
+                                    </div>
+                                ` : ''}
                             </div>
-                            <div class="docman-tool-verify-state">${isFound ? 'Found' : 'Missing'}</div>
+                            <div class="docman-tool-verify-state">${stateLabel}</div>
                         </div>
                     `;
                 }).join('')}
