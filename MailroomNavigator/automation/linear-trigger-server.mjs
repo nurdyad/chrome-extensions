@@ -752,9 +752,23 @@ function sanitizeDocmanResultData(rawResult = null) {
   }
 
   if (type === "clean-processing" || type === "clean-filing") {
+    const totalDocuments = Number.isFinite(Number(rawResult.totalDocuments)) ? Number(rawResult.totalDocuments) : 0;
+    const matchedDocuments = Number.isFinite(Number(rawResult.matchedDocuments)) ? Number(rawResult.matchedDocuments) : 0;
+    const movedDocuments = Number.isFinite(Number(rawResult.movedDocuments)) ? Number(rawResult.movedDocuments) : 0;
+    const failedDocuments = Number.isFinite(Number(rawResult.failedDocuments))
+      ? Number(rawResult.failedDocuments)
+      : Math.max(0, matchedDocuments - movedDocuments);
     return {
       type,
       cleanType: sanitizeSingleLine(rawResult.cleanType, 80),
+      outcome: sanitizeSingleLine(rawResult.outcome, 40) || "success",
+      sourceFolder: sanitizeDocmanFolderName(rawResult.sourceFolder),
+      destinationFolder: sanitizeDocmanFolderName(rawResult.destinationFolder),
+      totalDocuments,
+      matchedDocuments,
+      movedDocuments,
+      failedDocuments,
+      errorMessage: rawResult.outcome === "failed" ? sanitizeSingleLine(rawResult.errorMessage, 400) : "",
     };
   }
 
@@ -3627,6 +3641,9 @@ function sanitizeDocmanRunPayload(rawPayload = {}) {
     onboardingInputFolderName: sanitizeDocmanFolderName(rawPayload?.onboardingInputFolderName),
     docmanUsername: sanitizeSingleLine(rawPayload?.docmanUsername, 240),
     docmanPassword: sanitizeDocmanCredential(rawPayload?.docmanPassword),
+    docmanInputFolder: sanitizeDocmanFolderName(rawPayload?.docmanInputFolder),
+    docmanProcessingFolder: sanitizeDocmanFolderName(rawPayload?.docmanProcessingFolder),
+    docmanFilingFolder: sanitizeDocmanFolderName(rawPayload?.docmanFilingFolder),
   };
 }
 
@@ -3670,6 +3687,9 @@ async function hydrateDocmanRunPayloadFromSql(payload) {
     docmanUsername: sanitizedPayload.docmanUsername || practice.docmanUsername,
     docmanPassword: sanitizedPayload.docmanPassword || practice.docmanPassword,
     onboardingInputFolderName: sanitizedPayload.onboardingInputFolderName || practice.docmanInputFolder,
+    docmanInputFolder: sanitizedPayload.docmanInputFolder || practice.docmanInputFolder,
+    docmanProcessingFolder: sanitizedPayload.docmanProcessingFolder || practice.docmanProcessingFolder,
+    docmanFilingFolder: sanitizedPayload.docmanFilingFolder || practice.docmanFilingFolder,
   });
 }
 
@@ -3709,6 +3729,9 @@ function buildDocmanToolLaunch(payload) {
     env: {
       MAILROOM_DOCMAN_USERNAME: payload.docmanUsername,
       MAILROOM_DOCMAN_PASSWORD: payload.docmanPassword,
+      MAILROOM_DOCMAN_INPUT_FOLDER: payload.docmanInputFolder,
+      MAILROOM_DOCMAN_PROCESSING_FOLDER: payload.docmanProcessingFolder,
+      MAILROOM_DOCMAN_FILING_FOLDER: payload.docmanFilingFolder,
     },
   };
 }
