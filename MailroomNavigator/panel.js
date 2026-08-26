@@ -5681,9 +5681,7 @@ function enterCompactMode() {
 // be a one-time move like the rest of enterCompactMode() - it re-runs
 // wherever Practice Details itself gets refreshed (this function's own
 // callers), relocating whatever grid currently exists into its compact
-// slot and, the first time it sees each fresh instance, restyling its
-// buttons into icon-hover-btn pills (wrapping each button's plain label
-// text in a .icon-hover-label span so the shared hover-reveal CSS applies).
+// slot.
 function syncCompactModeDocmanActions() {
   const slot = document.getElementById('compactDocmanActionsSlot');
   const statusDisplay = document.getElementById('statusDisplay');
@@ -5704,21 +5702,11 @@ function syncCompactModeDocmanActions() {
     // Every status re-render (a cached snapshot immediately, then the real
     // fetched status moments later) builds a brand-new grid node - clear
     // whatever grid is already sitting here first, or the old one never
-    // gets removed and just accumulates alongside each new one.
+    // gets removed and just accumulates alongside each new one. Its buttons
+    // already render as icon-hover-btn pills from buildPracticeStatusHtml
+    // (navigator.js) - no extra restyling needed here now, just relocation.
     slot.replaceChildren(grid);
   }
-  grid.querySelectorAll('.btn[data-docman-action]').forEach((btn) => {
-    if (btn.querySelector('.icon-hover-label')) return;
-    btn.classList.add('icon-hover-btn');
-    const labelNode = Array.from(btn.childNodes).find(
-      (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()
-    );
-    if (!labelNode) return;
-    const span = document.createElement('span');
-    span.className = 'icon-hover-label';
-    span.textContent = labelNode.textContent.trim();
-    labelNode.replaceWith(span);
-  });
 }
 
 // Docman Tools' grid gets physically relocated out of #statusDisplay (see

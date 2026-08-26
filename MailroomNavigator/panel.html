@@ -238,19 +238,26 @@
     body.bl-panel-compact #statusDisplay .practice-status-docman-head {
       display: none;
     }
-    #compactDocmanActionsSlot .practice-status-docman-grid {
+    /* Both the compact-mode slot and the full panel's own Practice
+       Navigator section hold .nav-action-grid (Collection/Preparing/
+       Rejected/Settings/Recipients, and - once relocated into the slot -
+       Docman Tools too) - flex+wrap instead of their normal
+       grid-template-columns lets all the buttons in either group wrap
+       into a couple of tight rows instead of a fixed-column grid. */
+    #compactDocmanActionsSlot .practice-status-docman-grid,
+    #practiceNavigatorCoreSection .nav-action-grid {
       display: flex !important;
       flex-wrap: wrap;
       gap: 6px;
     }
     /* .action-grid/.nav-action-grid .btn (layout.css/buttons.css) set
        width:100%, gap, min-height and svg sizing meant for the full panel's
-       labeled grid cells - the grid these buttons came from still carries
-       those ancestor classes after being relocated here, so every one of
-       those properties needs an explicit override, not just the new ones,
-       or the higher-specificity ID selector below only wins on the
-       properties it happens to redeclare. */
-    #compactDocmanActionsSlot .icon-hover-btn {
+       previous labeled grid cells - every one of those properties needs an
+       explicit override here, not just the new ones, or the higher-
+       specificity ID selector below only wins on the properties it happens
+       to redeclare. */
+    #compactDocmanActionsSlot .icon-hover-btn,
+    #practiceNavigatorCoreSection .icon-hover-btn {
       width: auto;
       min-width: 28px;
       height: 28px;
@@ -268,15 +275,27 @@
       font-weight: 500;
       font-size: 0;
     }
-    #compactDocmanActionsSlot .icon-hover-btn:hover {
+    #compactDocmanActionsSlot .icon-hover-btn:hover,
+    #practiceNavigatorCoreSection .icon-hover-btn:hover:not(:disabled) {
       background: #f3f4f6;
     }
-    #compactDocmanActionsSlot .icon-hover-btn svg {
+    #compactDocmanActionsSlot .icon-hover-btn svg,
+    #practiceNavigatorCoreSection .icon-hover-btn svg {
       width: 14px;
       height: 14px;
     }
-    #compactDocmanActionsSlot .icon-hover-btn .icon-hover-label {
+    #compactDocmanActionsSlot .icon-hover-btn .icon-hover-label,
+    #practiceNavigatorCoreSection .icon-hover-btn .icon-hover-label {
       font-size: 11px;
+    }
+    /* The count badge (Preparing/Rejected) should stay visible at a glance,
+       not hidden behind the hover-reveal label next to it. */
+    #practiceNavigatorCoreSection .icon-hover-btn .nav-action-count {
+      font-size: 9px;
+    }
+    #practiceNavigatorCoreSection .icon-hover-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
     }
     #compactDocmanActionsSlot .icon-hover-btn.docman-primary-action {
       border-color: var(--primary-color);
@@ -663,49 +682,49 @@
         <div id="practiceIdentityStrip" class="practice-identity-strip"></div>
 
         <div class="action-grid nav-action-grid">
-          <button id="collectionBtn" class="btn btn-sm" disabled>
+          <button id="collectionBtn" class="btn btn-sm icon-hover-btn" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
                 <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
                 <line x1="12" y1="22.08" x2="12" y2="12"></line>
             </svg>
-            Collection
+            <span class="icon-hover-label">Collection</span>
           </button>
 
-          <button id="preparingBtn" class="btn btn-sm" disabled>
+          <button id="preparingBtn" class="btn btn-sm icon-hover-btn" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"></circle>
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
-            Preparing
+            <span class="icon-hover-label">Preparing</span>
             <span class="nav-action-count" data-nav-action-count></span>
           </button>
 
-          <button id="rejectedBtn" class="btn btn-sm" disabled>
+          <button id="rejectedBtn" class="btn btn-sm icon-hover-btn" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
-            Rejected
+            <span class="icon-hover-label">Rejected</span>
             <span class="nav-action-count" data-nav-action-count></span>
           </button>
 
-          <button id="openEhrSettingsBtn" class="btn btn-sm" disabled>
+          <button id="openEhrSettingsBtn" class="btn btn-sm icon-hover-btn" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2"></rect>
               <line x1="12" y1="8" x2="12" y2="16"></line>
               <line x1="8" y1="12" x2="16" y2="12"></line>
             </svg>
-            Settings
+            <span class="icon-hover-label">Settings</span>
           </button>
 
-          <button id="taskRecipientsBtn" class="btn btn-sm" disabled title="Task Recipients">
+          <button id="taskRecipientsBtn" class="btn btn-sm icon-hover-btn" disabled title="Task Recipients">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="8.5" cy="7" r="4"></circle>
               <line x1="20" y1="8" x2="20" y2="14"></line>
               <line x1="23" y1="11" x2="17" y2="11"></line>
             </svg>
-            Recipients
+            <span class="icon-hover-label">Recipients</span>
           </button>
         </div>
 
