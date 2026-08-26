@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BetterLetter All-in-One",
-  "version": "1.76.0",
+  "version": "1.79.0",
   "description": "Combines BetterLetter Mailroom document processing, Jobs Dashboard management, Practice Navigation, and Password Tools into a single extension.",
   "permissions": [
     "activeTab",
