@@ -243,22 +243,40 @@
       flex-wrap: wrap;
       gap: 6px;
     }
+    /* .action-grid/.nav-action-grid .btn (layout.css/buttons.css) set
+       width:100%, gap, min-height and svg sizing meant for the full panel's
+       labeled grid cells - the grid these buttons came from still carries
+       those ancestor classes after being relocated here, so every one of
+       those properties needs an explicit override, not just the new ones,
+       or the higher-specificity ID selector below only wins on the
+       properties it happens to redeclare. */
     #compactDocmanActionsSlot .icon-hover-btn {
+      width: auto;
       min-width: 28px;
       height: 28px;
+      min-height: 28px;
       padding: 0 7px;
       border-radius: 14px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      gap: 0;
       background: #ffffff;
       color: #4b5563;
       border: 1px solid rgba(15, 23, 42, 0.16);
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
       font-weight: 500;
+      font-size: 0;
     }
     #compactDocmanActionsSlot .icon-hover-btn:hover {
       background: #f3f4f6;
+    }
+    #compactDocmanActionsSlot .icon-hover-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+    #compactDocmanActionsSlot .icon-hover-btn .icon-hover-label {
+      font-size: 11px;
     }
     #compactDocmanActionsSlot .icon-hover-btn.docman-primary-action {
       border-color: var(--primary-color);

@@ -5696,23 +5696,29 @@ function syncCompactModeDocmanActions() {
     return;
   }
   const grid = statusDisplay.querySelector('.practice-status-docman-grid');
-  if (grid && slot.firstChild !== grid) {
-    slot.appendChild(grid);
+  if (!grid) {
+    slot.replaceChildren();
+    return;
   }
-  if (grid) {
-    grid.querySelectorAll('.btn[data-docman-action]').forEach((btn) => {
-      if (btn.querySelector('.icon-hover-label')) return;
-      btn.classList.add('icon-hover-btn');
-      const labelNode = Array.from(btn.childNodes).find(
-        (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()
-      );
-      if (!labelNode) return;
-      const span = document.createElement('span');
-      span.className = 'icon-hover-label';
-      span.textContent = labelNode.textContent.trim();
-      labelNode.replaceWith(span);
-    });
+  if (slot.firstChild !== grid) {
+    // Every status re-render (a cached snapshot immediately, then the real
+    // fetched status moments later) builds a brand-new grid node - clear
+    // whatever grid is already sitting here first, or the old one never
+    // gets removed and just accumulates alongside each new one.
+    slot.replaceChildren(grid);
   }
+  grid.querySelectorAll('.btn[data-docman-action]').forEach((btn) => {
+    if (btn.querySelector('.icon-hover-label')) return;
+    btn.classList.add('icon-hover-btn');
+    const labelNode = Array.from(btn.childNodes).find(
+      (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+    );
+    if (!labelNode) return;
+    const span = document.createElement('span');
+    span.className = 'icon-hover-label';
+    span.textContent = labelNode.textContent.trim();
+    labelNode.replaceWith(span);
+  });
 }
 
 // Docman Tools' grid gets physically relocated out of #statusDisplay (see
