@@ -223,6 +223,15 @@
       border-left: 4px solid var(--primary-color);
       margin-bottom: 0;
     }
+    /* .practice-identity-strip's own margin-top: 6px (css/inputs.css) is
+       sized for full mode, where it sits directly under the quick-links
+       row with no other spacing between them. In compact mode it's the
+       first child of #compactPracticeDetailsSlot, which already gets an
+       8px gap from #compactSearchBar's flex layout - without this, the
+       two stack into a much bigger gap than between any other card here. */
+    body.bl-panel-compact #practiceIdentityStrip {
+      margin-top: 0;
+    }
     /* Docman Tools, relocated here from Practice Details (see
        syncCompactModeDocmanActions() in panel.js) - a compact row of
        icon-hover-btn pills instead of the full panel's labeled 3-column
@@ -336,6 +345,26 @@
       gap: 8px;
     }
     .compact-accordion-body[hidden] {
+      display: none;
+    }
+    /* Quick Document Search and UUID Lookup are relocated into an accordion
+       body wholesale, .section-container chrome and <h3> title included -
+       the accordion itself already provides both (its toggle label, its
+       own card), so left alone they double up into a card nested inside a
+       card with the same title twice. Strip the inner copy down to just
+       its actual content. */
+    body.bl-panel-compact .compact-accordion-body > .section-container {
+      background: none;
+      padding: 0;
+      margin-bottom: 0;
+      box-shadow: none;
+      border-left: none;
+    }
+    body.bl-panel-compact .compact-accordion-body > .section-container:hover {
+      transform: none;
+      box-shadow: none;
+    }
+    body.bl-panel-compact .compact-accordion-body > .section-container > h3 {
       display: none;
     }
     /* Dark mode: a single filter on the whole page instead of hand-picking
