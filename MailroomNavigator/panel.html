@@ -10,11 +10,10 @@
   <link rel="stylesheet" href="css/status.css">
   <style>
     /* Compact mode: only meaningful in the standalone floating window (not the
-       docked sidebar). The toggle button lives inside the floating tab dock
-       (position: fixed, right edge) instead of its own dedicated row, so that
-       dock stays visible too, but everything else inside it (the actual
-       tabs) and the view content area hide. */
-    body.bl-panel-compact .extension-wrapper > *:not(.panel-body-layout):not(#compactSearchBar) {
+       docked sidebar). The compact-mode/dark-mode toggles live in their own
+       .panel-utility-bar row, which (like #compactSearchBar) stays visible;
+       everything else - the tab dock and the view content area - hides. */
+    body.bl-panel-compact .extension-wrapper > *:not(.panel-utility-bar):not(.panel-body-layout):not(#compactSearchBar) {
       display: none !important;
     }
     body.bl-panel-compact .panel-body-content {
