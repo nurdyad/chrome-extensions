@@ -215,23 +215,13 @@
     /* Give the relocated practice-search block the same card treatment as
        .section-container, so compact mode doesn't look like a bare input
        floating with no visual grouping. */
-    body.bl-panel-compact #practiceSearchBlock,
-    body.bl-panel-compact .nav-action-grid {
+    body.bl-panel-compact #practiceSearchBlock {
       background-color: white;
       border-radius: var(--border-radius);
       padding: 10px;
       box-shadow: var(--box-shadow);
       border-left: 4px solid var(--primary-color);
       margin-bottom: 0;
-    }
-    /* Nested inside an accordion body, the outer accordion already provides
-       the card look, so drop the nav-action-grid's own card styling there to
-       avoid a card-within-a-card. */
-    body.bl-panel-compact .compact-accordion-body .nav-action-grid {
-      background: none;
-      padding: 0;
-      box-shadow: none;
-      border-left: none;
     }
     .compact-accordion {
       background-color: white;
@@ -433,6 +423,26 @@
             <polyline points="12 6 12 12 16 14"></polyline>
           </svg>
         </button>
+        <button type="button" id="compactRejectedLinkBtn" class="panel-utility-icon-btn" title="Open Rejected queue" aria-label="Open Rejected queue">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+        <button type="button" id="compactEhrSettingsLinkBtn" class="panel-utility-icon-btn" title="Open EHR Settings" aria-label="Open EHR Settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+            <line x1="12" y1="8" x2="12" y2="16"></line>
+            <line x1="8" y1="12" x2="16" y2="12"></line>
+          </svg>
+        </button>
+        <button type="button" id="compactTaskRecipientsLinkBtn" class="panel-utility-icon-btn" title="Open Task Recipients" aria-label="Open Task Recipients">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8.5" cy="7" r="4"></circle>
+            <line x1="20" y1="8" x2="20" y2="14"></line>
+            <line x1="23" y1="11" x2="17" y2="11"></line>
+          </svg>
+        </button>
       </div>
       <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -468,15 +478,6 @@
            above, inside #practiceSearchBlock) so picking a practice doesn't
            bury its details behind an accordion click. -->
       <div id="compactPracticeDetailsSlot"></div>
-      <div id="compactPracticeToolsAccordion" class="compact-accordion" hidden>
-        <button type="button" id="compactPracticeToolsToggle" class="compact-accordion-toggle">
-          <span>Practice Tools</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-        <div id="compactPracticeToolsBody" class="compact-accordion-body" hidden></div>
-      </div>
       <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
           <span>Quick Document Search</span>
