@@ -318,6 +318,38 @@
       gap: 6px;
       padding: 6px 10px 0;
     }
+    /* Compact mode only: a couple of one-click shortcuts to the pages
+       reached most often from here, filling the otherwise-empty space next
+       to the collapse/dark-mode toggles instead of requiring an accordion
+       expand first. Hidden outside compact mode - the full panel already
+       has these as labeled buttons in the practice quick-links row. */
+    .panel-utility-quicklinks {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      margin-right: auto;
+    }
+    body.bl-panel-compact .panel-utility-quicklinks {
+      display: flex;
+    }
+    .panel-utility-icon-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 1px solid rgba(15, 23, 42, 0.16);
+      background: #ffffff;
+      color: #4b5563;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+      flex-shrink: 0;
+    }
+    .panel-utility-icon-btn:hover {
+      background: #f3f4f6;
+    }
     .dark-mode-toggle-btn {
       position: static;
       width: 28px;
@@ -351,6 +383,21 @@
 <body>
   <div class="extension-wrapper">
     <div class="panel-utility-bar">
+      <div class="panel-utility-quicklinks" id="compactQuickLinksBar">
+        <button type="button" id="compactPreparingLinkBtn" class="panel-utility-icon-btn" title="Open Preparing queue" aria-label="Open Preparing queue">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </button>
+        <button type="button" id="compactBotDashboardLinkBtn" class="panel-utility-icon-btn" title="Open Bot Jobs Dashboard" aria-label="Open Bot Jobs Dashboard">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+          </svg>
+        </button>
+      </div>
       <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="4 14 10 14 10 20"></polyline>

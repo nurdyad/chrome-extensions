@@ -664,6 +664,15 @@ async function initializePanel() {
     document.getElementById('preparingBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
     document.getElementById('rejectedBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
 
+    // Compact mode's utility-bar shortcuts to the same two destinations -
+    // kept as separate always-enabled buttons (rather than proxying a click
+    // to #preparingBtn/#collectionBtn) since those get disabled until a
+    // practice or "All practices" is selected, and a disabled button can't
+    // be clicked programmatically either; going through openUrl directly
+    // still shows the same "select a practice first" toast when needed.
+    document.getElementById('compactBotDashboardLinkBtn')?.addEventListener('click', () => openUrl('dashboard', { allowAllPractices: true }));
+    document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
+
     // F. EHR & Task Settings
     document.getElementById('taskRecipientsBtn')?.addEventListener('click', async () => {
         try {
