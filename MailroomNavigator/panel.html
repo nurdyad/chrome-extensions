@@ -322,17 +322,17 @@
       display: flex;
     }
     .panel-utility-icon-btn {
-      width: 28px;
+      min-width: 28px;
       height: 28px;
-      border-radius: 50%;
+      border-radius: 14px;
       border: 1px solid rgba(15, 23, 42, 0.16);
       background: #ffffff;
       color: #4b5563;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      padding: 0;
+      padding: 0 7px;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
       flex-shrink: 0;
     }
@@ -341,22 +341,51 @@
     }
     .dark-mode-toggle-btn {
       position: static;
-      width: 28px;
+      min-width: 28px;
       height: 28px;
-      border-radius: 50%;
+      border-radius: 14px;
       border: 1px solid rgba(15, 23, 42, 0.16);
       background: #ffffff;
       color: #4b5563;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      padding: 0;
+      padding: 0 7px;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
       flex-shrink: 0;
     }
     .dark-mode-toggle-btn:hover {
       background: #f3f4f6;
+    }
+    /* Hover-to-reveal label: every top-bar icon button (view switcher,
+       practice quick links, collapse/dark-mode toggles) grows into a pill
+       on hover, sliding a short text label in next to the icon instead of
+       relying on the native browser tooltip (title/aria-label stay put for
+       screen readers and as a fallback, just visually silent here). */
+    .icon-hover-btn {
+      gap: 0;
+      transition: padding 0.2s ease;
+    }
+    .icon-hover-label {
+      display: inline-block;
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      font-size: 11px;
+      font-weight: 700;
+      margin-left: 0;
+      transition: max-width 0.2s ease, opacity 0.15s ease, margin-left 0.2s ease;
+    }
+    .icon-hover-btn:hover .icon-hover-label,
+    .icon-hover-btn:focus-visible .icon-hover-label {
+      max-width: 80px;
+      opacity: 1;
+      margin-left: 6px;
+    }
+    .icon-hover-btn svg {
+      flex-shrink: 0;
     }
     .dark-mode-toggle-btn .dark-mode-icon-sun {
       display: none;
@@ -373,20 +402,22 @@
   <div class="extension-wrapper">
     <div class="panel-utility-bar">
       <div class="btn-row global-nav-buttons-row">
-        <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle" data-role="toggle" aria-label="Navigator" title="Navigator">
+        <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Navigator">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <line x1="12" y1="8" x2="12" y2="12"></line>
             <line x1="12" y1="16" x2="12.01" y2="16"></line>
           </svg>
+          <span class="icon-hover-label">Navigator</span>
         </button>
-        <button type="button" id="jobManagerGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Job Panel" title="Job Panel">
+        <button type="button" id="jobManagerGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Job Panel">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
             <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
           </svg>
+          <span class="icon-hover-label">Job Panel</span>
         </button>
-        <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Others" title="Others">
+        <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Others">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"></rect>
             <rect x="14" y="3" width="7" height="7" rx="1"></rect>
@@ -394,65 +425,74 @@
             <path d="M14 17h7"></path>
             <path d="M17.5 14v7"></path>
           </svg>
+          <span class="icon-hover-label">Others</span>
         </button>
-        <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Bookmarklet Tools" title="Bookmarklet Tools">
+        <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Bookmarklet Tools">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
           </svg>
+          <span class="icon-hover-label">Bookmarklet</span>
         </button>
       </div>
       <div class="panel-utility-quicklinks" id="compactQuickLinksBar">
-        <button type="button" id="compactCollectionLinkBtn" class="panel-utility-icon-btn" title="Open Collection (docman_import, paused)" aria-label="Open Collection">
+        <button type="button" id="compactCollectionLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open Collection">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
             <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
             <line x1="12" y1="22.08" x2="12" y2="12"></line>
           </svg>
+          <span class="icon-hover-label">Collection</span>
         </button>
-        <button type="button" id="compactBotDashboardLinkBtn" class="panel-utility-icon-btn" title="Open Bot Jobs Dashboard" aria-label="Open Bot Jobs Dashboard">
+        <button type="button" id="compactBotDashboardLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open Bot Jobs Dashboard">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7"></rect>
             <rect x="14" y="3" width="7" height="7"></rect>
             <rect x="14" y="14" width="7" height="7"></rect>
             <rect x="3" y="14" width="7" height="7"></rect>
           </svg>
+          <span class="icon-hover-label">Dashboard</span>
         </button>
-        <button type="button" id="compactPreparingLinkBtn" class="panel-utility-icon-btn" title="Open Preparing queue" aria-label="Open Preparing queue">
+        <button type="button" id="compactPreparingLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open Preparing queue">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
           </svg>
+          <span class="icon-hover-label">Preparing</span>
         </button>
-        <button type="button" id="compactRejectedLinkBtn" class="panel-utility-icon-btn" title="Open Rejected queue" aria-label="Open Rejected queue">
+        <button type="button" id="compactRejectedLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open Rejected queue">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
+          <span class="icon-hover-label">Rejected</span>
         </button>
-        <button type="button" id="compactEhrSettingsLinkBtn" class="panel-utility-icon-btn" title="Open EHR Settings" aria-label="Open EHR Settings">
+        <button type="button" id="compactEhrSettingsLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open EHR Settings">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"></rect>
             <line x1="12" y1="8" x2="12" y2="16"></line>
             <line x1="8" y1="12" x2="16" y2="12"></line>
           </svg>
+          <span class="icon-hover-label">Settings</span>
         </button>
-        <button type="button" id="compactTaskRecipientsLinkBtn" class="panel-utility-icon-btn" title="Open Task Recipients" aria-label="Open Task Recipients">
+        <button type="button" id="compactTaskRecipientsLinkBtn" class="panel-utility-icon-btn icon-hover-btn" aria-label="Open Task Recipients">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="8.5" cy="7" r="4"></circle>
             <line x1="20" y1="8" x2="20" y2="14"></line>
             <line x1="23" y1="11" x2="17" y2="11"></line>
           </svg>
+          <span class="icon-hover-label">Recipients</span>
         </button>
       </div>
-      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
+      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost icon-hover-btn" type="button" aria-label="Shrink to a small search-only bar">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="4 14 10 14 10 20"></polyline>
           <polyline points="20 10 14 10 14 4"></polyline>
           <line x1="14" y1="10" x2="21" y2="3"></line>
           <line x1="3" y1="21" x2="10" y2="14"></line>
         </svg>
+        <span class="icon-hover-label">Collapse</span>
       </button>
-      <button type="button" id="darkModeToggleBtn" class="dark-mode-toggle-btn" title="Switch to dark mode" aria-label="Switch to dark mode">
+      <button type="button" id="darkModeToggleBtn" class="dark-mode-toggle-btn icon-hover-btn" aria-label="Switch to dark mode">
         <svg class="dark-mode-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
         </svg>
@@ -467,6 +507,7 @@
           <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
           <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
         </svg>
+        <span class="icon-hover-label">Dark Mode</span>
       </button>
     </div>
     <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">

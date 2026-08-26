@@ -5555,6 +5555,8 @@ function applyDarkMode(isDark) {
   const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
   toggleBtn.title = label;
   toggleBtn.setAttribute('aria-label', label);
+  const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
+  if (hoverLabel) hoverLabel.textContent = isDark ? 'Light Mode' : 'Dark Mode';
 }
 
 function setupDarkModeToggle() {
@@ -5667,6 +5669,8 @@ function enterCompactMode() {
     toggleBtn.title = 'Show the full panel';
     toggleBtn.setAttribute('aria-label', 'Show the full panel');
     toggleBtn.classList.add('is-expanded');
+    const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
+    if (hoverLabel) hoverLabel.textContent = 'Expand';
   }
   saveCompactModePreference(true);
   resizeToFitCompactContent();
@@ -5706,6 +5710,8 @@ function exitCompactMode() {
     toggleBtn.title = 'Shrink to a small search-only bar';
     toggleBtn.setAttribute('aria-label', 'Shrink to a small search-only bar');
     toggleBtn.classList.remove('is-expanded');
+    const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
+    if (hoverLabel) hoverLabel.textContent = 'Collapse';
   }
   saveCompactModePreference(false);
   resizePanelWindow(PANEL_HEIGHT);
