@@ -855,21 +855,35 @@ async function main() {
       }
     }
 
-    session = await runStepWithRetry({
-      label: "open_browser_session",
-      logger: runLogger,
-      retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
-      withRetry,
-      classifyError,
-      task: async () =>
-        getBrowserSession({
-          window: config?.browser?.window,
-          headless: !shouldUseVisibleSession,
-          browserEngine: config?.browser?.step4BrowserEngine || "chrome",
-          attachToExistingChrome: shouldUseExternalChrome,
-          chromeCdpUrl: resolvedChromeCdpUrl,
-        }),
-    });
+    const openBrowserSession = (attachToExistingChrome) =>
+      runStepWithRetry({
+        label: "open_browser_session",
+        logger: runLogger,
+        retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
+        withRetry,
+        classifyError,
+        task: async () =>
+          getBrowserSession({
+            window: config?.browser?.window,
+            headless: !shouldUseVisibleSession,
+            browserEngine: config?.browser?.step4BrowserEngine || "chrome",
+            attachToExistingChrome,
+            chromeCdpUrl: attachToExistingChrome ? resolvedChromeCdpUrl : undefined,
+          }),
+      });
+
+    try {
+      session = await openBrowserSession(shouldUseExternalChrome);
+    } catch (error) {
+      if (shouldUseExternalChrome && bootstrapDocmanSession.isCdpAttachConnectionError(error)) {
+        console.log(
+          `⚠ Could not attach to existing Chrome at ${resolvedChromeCdpUrl} (${error?.message || error}). Falling back to a fresh Chrome window.`
+        );
+        session = await openBrowserSession(false);
+      } else {
+        throw error;
+      }
+    }
 
     const removedCookies = await clearDocmanAuthFromContext(session.context);
     console.log(`🧹 Cleared Docman auth artifacts at startup (${removedCookies} cookie(s) removed).`);
