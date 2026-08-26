@@ -664,43 +664,40 @@ async function initializePanel() {
     document.getElementById('preparingBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
     document.getElementById('rejectedBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
 
-    // Compact mode's utility-bar shortcuts - kept as separate always-enabled
-    // buttons (rather than proxying a click to #preparingBtn/#collectionBtn)
-    // since those get disabled until a practice or "All practices" is
-    // selected, and a disabled button can't be clicked programmatically
-    // either. Preparing still goes through openUrl for its practice-scoped
-    // filtering and "select a practice first" guard; the dashboard shortcut
-    // is deliberately the plain, unfiltered dashboard, not Collection's
-    // docman_import+emis_prepare/paused filter, so it opens directly.
-    document.getElementById('compactBotDashboardLinkBtn')?.addEventListener('click', () => {
-        openTabWithTimeout('https://app.betterletter.ai/admin_panel/bots/dashboard');
-    });
-    document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
-
     // F. EHR & Task Settings
-    document.getElementById('taskRecipientsBtn')?.addEventListener('click', async () => {
+    const openPracticeSettingType = async (settingType) => {
         try {
             const ods = Navigator.requireSelectedOdsCode();
             await chrome.runtime.sendMessage({
                 action: 'openPractice',
                 input: ods,
-                settingType: 'task_recipients',
+                settingType,
                 ...getProtectedActionPayload()
             });
         } catch (err) { showToast(describeExtensionError(err)); }
-    });
+    };
+    document.getElementById('taskRecipientsBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
+    document.getElementById('openEhrSettingsBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
 
-    document.getElementById('openEhrSettingsBtn')?.addEventListener('click', async () => {
-        try {
-            const ods = Navigator.requireSelectedOdsCode();
-            await chrome.runtime.sendMessage({
-                action: 'openPractice',
-                input: ods,
-                settingType: 'ehr_settings',
-                ...getProtectedActionPayload()
-            });
-        } catch (e) { showToast(e.message); }
+    // Compact mode's utility-bar shortcuts - the full set of practice quick
+    // links (normally behind the Practice Tools accordion), fit into the
+    // same row as the collapse/dark-mode toggles instead of an extra click
+    // away. Kept as separate always-enabled buttons (rather than proxying a
+    // click to their #...Btn counterparts) since those get disabled until a
+    // practice or "All practices"/concrete practice is selected, and a
+    // disabled button can't be clicked programmatically either - going
+    // through the same underlying logic still shows the right "select a
+    // practice first" toast when needed.
+    document.getElementById('compactBotDashboardLinkBtn')?.addEventListener('click', () => {
+        // Deliberately the plain, unfiltered dashboard, not Collection's
+        // docman_import+emis_prepare/paused filter, so it opens directly
+        // instead of going through openUrl('dashboard', ...).
+        openTabWithTimeout('https://app.betterletter.ai/admin_panel/bots/dashboard');
     });
+    document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
+    document.getElementById('compactRejectedLinkBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
+    document.getElementById('compactEhrSettingsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
+    document.getElementById('compactTaskRecipientsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
 
     // Job Dashboard Filters (checkbox multi-select)
     const botJobsChecklistNav = document.getElementById('botJobsChecklistNav');
