@@ -433,15 +433,11 @@
         </button>
         <div id="compactPracticeToolsBody" class="compact-accordion-body" hidden></div>
       </div>
-      <div id="compactPracticeDetailsAccordion" class="compact-accordion" hidden>
-        <button type="button" id="compactPracticeDetailsToggle" class="compact-accordion-toggle">
-          <span>Practice Details</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-        <div id="compactPracticeDetailsBody" class="compact-accordion-body" hidden></div>
-      </div>
+      <!-- No accordion here, unlike the sections around it - #statusDisplay
+           (moved in below) is its own card and already shows/hides itself
+           based on whether a practice is selected, so wrapping it in a
+           second collapsible layer was just an extra click to nothing. -->
+      <div id="compactPracticeDetailsSlot"></div>
       <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
           <span>Quick Document Search</span>

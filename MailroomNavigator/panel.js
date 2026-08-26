@@ -2417,11 +2417,12 @@ async function initializePanel() {
 
     document.addEventListener('mailroomNavigator:statusDisplayRendered', () => {
         syncDocmanToolButtons();
-        autoExpandCompactPracticeDetails();
+        resizeCompactModeForPracticeDetails();
     });
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
         syncDocmanToolButtons();
+        resizeCompactModeForPracticeDetails();
         const displayedRunOds = trimDocmanField(
             docmanToolStatus?.querySelector('[data-docman-run-ods]')?.getAttribute('data-docman-run-ods'),
             16
@@ -5462,7 +5463,6 @@ function setupCompactAccordions() {
   compactAccordionsBound = true;
   [
     ['compactPracticeToolsToggle', 'compactPracticeToolsBody'],
-    ['compactPracticeDetailsToggle', 'compactPracticeDetailsBody'],
     ['compactQuickDocToggle', 'compactQuickDocBody'],
     ['compactUuidLookupToggle', 'compactUuidLookupBody']
   ].forEach(([toggleId, bodyId]) => {
@@ -5629,8 +5629,7 @@ function enterCompactMode() {
   const uuidLookupSection = document.getElementById('uuidLookupSection');
   const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
   const practiceToolsBody = document.getElementById('compactPracticeToolsBody');
-  const practiceDetailsAccordion = document.getElementById('compactPracticeDetailsAccordion');
-  const practiceDetailsBody = document.getElementById('compactPracticeDetailsBody');
+  const practiceDetailsSlot = document.getElementById('compactPracticeDetailsSlot');
   const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
   const quickDocBody = document.getElementById('compactQuickDocBody');
   const uuidLookupAccordion = document.getElementById('compactUuidLookupAccordion');
@@ -5654,20 +5653,14 @@ function enterCompactMode() {
 
   bar.insertBefore(practiceSearchBlock, bar.firstChild);
   toMoveIntoPracticeTools.forEach((el) => practiceToolsBody?.appendChild(el));
-  toMoveIntoPracticeDetails.forEach((el) => practiceDetailsBody?.appendChild(el));
+  toMoveIntoPracticeDetails.forEach((el) => practiceDetailsSlot?.appendChild(el));
   toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
   toMoveIntoUuidLookup.forEach((el) => uuidLookupBody?.appendChild(el));
 
   if (practiceToolsAccordion) practiceToolsAccordion.hidden = false;
-  if (practiceDetailsAccordion) practiceDetailsAccordion.hidden = false;
   if (quickDocAccordion) quickDocAccordion.hidden = false;
   if (uuidLookupAccordion) uuidLookupAccordion.hidden = false;
   setCompactAccordionExpanded('compactPracticeToolsToggle', 'compactPracticeToolsBody', false);
-  // Practice Details starts expanded only if a practice is already selected
-  // (e.g. re-entering compact mode) - otherwise there's nothing to show yet,
-  // and autoExpandCompactPracticeDetails() opens it the moment one is picked.
-  const hasSelectedPractice = practiceDetails?.style.display === 'block';
-  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', hasSelectedPractice);
   setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
   setCompactAccordionExpanded('compactUuidLookupToggle', 'compactUuidLookupBody', false);
 
@@ -5682,12 +5675,12 @@ function enterCompactMode() {
   resizeToFitCompactContent();
 }
 
-// Practice Details is the payoff of a search - once one is picked, open it
-// immediately in compact mode instead of leaving the user an extra click
-// away from the Docman buttons and EHR settings that live inside it.
-function autoExpandCompactPracticeDetails() {
+// #statusDisplay (Practice Details) shows/hides itself based on whether a
+// practice is selected - no accordion to expand here, just keep the
+// floating window sized to match as that content appears or disappears.
+function resizeCompactModeForPracticeDetails() {
   if (!compactModeMovedElements) return;
-  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', true);
+  resizeToFitCompactContent();
 }
 
 function exitCompactMode() {
