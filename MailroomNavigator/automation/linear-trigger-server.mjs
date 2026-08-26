@@ -702,6 +702,8 @@ function sanitizeDocmanVerifyResultEntry(rawEntry = {}, index = 0) {
         || "",
       180,
     ),
+    partialMatches: sanitizeStringList(rawEntry?.partialMatches, 8, 120),
+    needsManualReview: Boolean(rawEntry?.needsManualReview),
   };
 }
 
