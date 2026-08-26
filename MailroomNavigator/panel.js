@@ -2404,6 +2404,7 @@ async function initializePanel() {
 
     document.addEventListener('mailroomNavigator:statusDisplayRendered', () => {
         syncDocmanToolButtons();
+        autoExpandCompactPracticeDetails();
     });
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
@@ -5448,7 +5449,9 @@ function setupCompactAccordions() {
   compactAccordionsBound = true;
   [
     ['compactPracticeToolsToggle', 'compactPracticeToolsBody'],
-    ['compactQuickDocToggle', 'compactQuickDocBody']
+    ['compactPracticeDetailsToggle', 'compactPracticeDetailsBody'],
+    ['compactQuickDocToggle', 'compactQuickDocBody'],
+    ['compactUuidLookupToggle', 'compactUuidLookupBody']
   ].forEach(([toggleId, bodyId]) => {
     const toggleBtn = document.getElementById(toggleId);
     if (!toggleBtn) return;
@@ -5608,28 +5611,52 @@ function enterCompactMode() {
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
   const recentPracticesSection = document.getElementById('recentPracticesSection');
   const practiceQuickLinks = document.querySelector('.nav-action-grid');
+  const practiceDetails = document.getElementById('statusDisplay');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
+  const uuidLookupSection = document.getElementById('uuidLookupSection');
   const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
   const practiceToolsBody = document.getElementById('compactPracticeToolsBody');
+  const practiceDetailsAccordion = document.getElementById('compactPracticeDetailsAccordion');
+  const practiceDetailsBody = document.getElementById('compactPracticeDetailsBody');
   const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
   const quickDocBody = document.getElementById('compactQuickDocBody');
+  const uuidLookupAccordion = document.getElementById('compactUuidLookupAccordion');
+  const uuidLookupBody = document.getElementById('compactUuidLookupBody');
   if (!bar || !practiceSearchBlock || !quickDocumentSearchCard) return;
 
   setupCompactAccordions();
 
   const toMoveIntoPracticeTools = [recentPracticesSection, practiceQuickLinks].filter(Boolean);
+  const toMoveIntoPracticeDetails = [practiceDetails].filter(Boolean);
   const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
-  const allMoved = [practiceSearchBlock, ...toMoveIntoPracticeTools, ...toMoveIntoQuickDoc];
+  const toMoveIntoUuidLookup = [uuidLookupSection].filter(Boolean);
+  const allMoved = [
+    practiceSearchBlock,
+    ...toMoveIntoPracticeTools,
+    ...toMoveIntoPracticeDetails,
+    ...toMoveIntoQuickDoc,
+    ...toMoveIntoUuidLookup
+  ];
   compactModeMovedElements = allMoved.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
 
   bar.insertBefore(practiceSearchBlock, bar.firstChild);
   toMoveIntoPracticeTools.forEach((el) => practiceToolsBody?.appendChild(el));
+  toMoveIntoPracticeDetails.forEach((el) => practiceDetailsBody?.appendChild(el));
   toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
+  toMoveIntoUuidLookup.forEach((el) => uuidLookupBody?.appendChild(el));
 
   if (practiceToolsAccordion) practiceToolsAccordion.hidden = false;
+  if (practiceDetailsAccordion) practiceDetailsAccordion.hidden = false;
   if (quickDocAccordion) quickDocAccordion.hidden = false;
+  if (uuidLookupAccordion) uuidLookupAccordion.hidden = false;
   setCompactAccordionExpanded('compactPracticeToolsToggle', 'compactPracticeToolsBody', false);
+  // Practice Details starts expanded only if a practice is already selected
+  // (e.g. re-entering compact mode) - otherwise there's nothing to show yet,
+  // and autoExpandCompactPracticeDetails() opens it the moment one is picked.
+  const hasSelectedPractice = practiceDetails?.style.display === 'block';
+  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', hasSelectedPractice);
   setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
+  setCompactAccordionExpanded('compactUuidLookupToggle', 'compactUuidLookupBody', false);
 
   document.body.classList.add('bl-panel-compact');
   setElementVisible(bar, true, 'flex');
@@ -5640,6 +5667,14 @@ function enterCompactMode() {
   }
   saveCompactModePreference(true);
   resizeToFitCompactContent();
+}
+
+// Practice Details is the payoff of a search - once one is picked, open it
+// immediately in compact mode instead of leaving the user an extra click
+// away from the Docman buttons and EHR settings that live inside it.
+function autoExpandCompactPracticeDetails() {
+  if (!compactModeMovedElements) return;
+  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', true);
 }
 
 function exitCompactMode() {
