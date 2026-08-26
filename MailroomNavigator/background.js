@@ -957,6 +957,11 @@ async function callJsonService(baseUrl, path, {
         }
 
         return { response, payload };
+    } catch (error) {
+        if (error && typeof error === 'object') {
+            error.targetUrl = targetUrl;
+        }
+        throw error;
     } finally {
         clearTimeout(timeout);
     }
@@ -1347,7 +1352,10 @@ function normalizeLinearTriggerError(error) {
     }
 
     if (message.toLowerCase().includes('failed to fetch')) {
-        return 'Local trigger service is unavailable. Run install-linear-trigger-launchagent.sh.';
+        const targetUrl = sanitizeSingleLine(error?.targetUrl, 200);
+        return targetUrl
+            ? `Local trigger service is unavailable at ${targetUrl}. Run install-linear-trigger-launchagent.sh.`
+            : 'Local trigger service is unavailable. Run install-linear-trigger-launchagent.sh.';
     }
 
     return message;

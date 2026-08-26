@@ -377,6 +377,9 @@ function ensureSqlClientErrorHandler(client) {
   });
   client.on("error", (error) => {
     appendServerLog(`[${nowIso()}] sql client error: ${String(error?.message || error)}`).catch(() => undefined);
+    if (isTransientSqlConnectionError(error)) {
+      resetSqlPoolAfterConnectionError(error?.message || error).catch(() => undefined);
+    }
   });
 }
 
@@ -395,6 +398,28 @@ function isTransientSqlConnectionError(error) {
     || message.includes("read econnreset")
   );
 }
+
+function installSqlProcessErrorGuard() {
+  const handleMaybeTransientSqlError = (error, origin) => {
+    const stack = String(error?.stack || "");
+    const isPgClientError = stack.includes("/node_modules/pg/") || stack.includes("\\node_modules\\pg\\");
+    if (!isPgClientError || !isTransientSqlConnectionError(error)) {
+      console.error(error);
+      process.exitCode = 1;
+      setTimeout(() => process.exit(1), 10).unref?.();
+      return;
+    }
+
+    const message = sanitizeSingleLine(error?.message || error, 220);
+    appendServerLog(`[${nowIso()}] sql ${origin} handled without service exit: ${message}`).catch(() => undefined);
+    resetSqlPoolAfterConnectionError(message).catch(() => undefined);
+  };
+
+  process.on("uncaughtException", (error) => handleMaybeTransientSqlError(error, "uncaught exception"));
+  process.on("unhandledRejection", (reason) => handleMaybeTransientSqlError(reason, "unhandled rejection"));
+}
+
+installSqlProcessErrorGuard();
 
 async function runSqlQuery(text, values = [], options = {}) {
   const pool = getSqlPool();
@@ -583,7 +608,7 @@ async function lookupPracticesFromSql(query, { includeSecrets = false, limit = 1
     throw new Error("Practice lookup query is required.");
   }
   const safeLimit = Math.min(50, Math.max(1, Number.parseInt(String(limit || 12), 10) || 12));
-  const result = await runSqlQuery(PRACTICE_LOOKUP_SQL, [normalizedQuery, safeLimit]);
+  const result = await runSqlQueryWithConnectionRetry(PRACTICE_LOOKUP_SQL, [normalizedQuery, safeLimit]);
   return result.rows.map((row) => sanitizePracticeLookupRow(row, { includeSecrets }));
 }
 
@@ -638,7 +663,7 @@ async function lookupPracticeLiveCountsFromSql(odsCode) {
   if (!normalizedOds) {
     throw new Error("Valid ODS code is required.");
   }
-  const result = await runSqlQuery(PRACTICE_LIVE_COUNTS_SQL, [normalizedOds]);
+  const result = await runSqlQueryWithConnectionRetry(PRACTICE_LIVE_COUNTS_SQL, [normalizedOds]);
   return sanitizeLiveCountRow(result.rows[0] || {});
 }
 
@@ -689,6 +714,7 @@ function sanitizeDocmanVerifyResultEntry(rawEntry = {}, index = 0) {
     120,
   );
   const exists = Boolean(rawEntry?.exists);
+  const partialMatches = sanitizeStringList(rawEntry?.partialMatches, 8, 120);
   return {
     index: Number.isFinite(Number(rawEntry?.index)) ? Number(rawEntry.index) : index,
     requestedUsername,
@@ -702,8 +728,8 @@ function sanitizeDocmanVerifyResultEntry(rawEntry = {}, index = 0) {
         || "",
       180,
     ),
-    partialMatches: sanitizeStringList(rawEntry?.partialMatches, 8, 120),
-    needsManualReview: Boolean(rawEntry?.needsManualReview),
+    partialMatches,
+    needsManualReview: Boolean(rawEntry?.needsManualReview || partialMatches.length),
   };
 }
 
@@ -2945,7 +2971,7 @@ limit $1
 `;
 
 async function collectSqlReconcileDashboardRows(report) {
-  const result = await runSqlQuery(
+  const result = await runSqlQueryWithConnectionRetry(
     SQL_RECONCILE_PAUSED_BOT_JOBS_SQL,
     [SQL_RECONCILE_MAX_ROWS],
     { timeoutMs: SQL_RECONCILE_QUERY_TIMEOUT_MS },

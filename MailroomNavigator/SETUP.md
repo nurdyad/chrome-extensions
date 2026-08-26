@@ -157,19 +157,45 @@ Defaults:
 
 ## 5.2 Sharing One Machine's Trigger Server (Optional)
 
-Instead of every teammate installing their own Level 2 setup (Node.js,
-Cloud SQL Proxy, Linear/Slack keys, `bot-jobs-linear` checkout), one
-machine's trigger server can be shared over the local network. Other
-installs then only need the browser extension itself (Section 1) -
-nothing else - and point it at the shared machine.
+### First, work out which setup a teammate actually needs
+
+MailroomNavigator's buttons fall into two different groups, and only
+one of those groups can be shared over the network. Before setting
+anything up, check which one your teammate needs:
+
+**Group A - can be shared (this section covers these):**
+`Trigger Linear`, `Reconcile Linear`, `Create Linear Issue`, and the
+`UUID Lookup` field in the Job Panel. These just make a request to a
+computer program (Linear, Slack, the practice database) - it doesn't
+matter which machine that request is sent from, so one person's
+already-configured machine can do this on behalf of everyone.
+
+**Group B - cannot be shared, ever:**
+The Docman buttons - `Login`, `Verify`, `Create Group`, `Clean
+Processing`, `Clean Filing`, `Onboarding`. These work by controlling
+an actual Chrome browser window on one specific computer and clicking
+through the real Docman website in it. If your teammate points their
+extension at someone else's machine, these buttons would try to
+control *that other person's* browser, not your teammate's - so it
+simply can't work that way, no matter how it's configured.
+
+**What this means in practice:** if a teammate only ever uses Group A
+buttons, they can skip almost all setup and just follow the steps
+below. If they also need any Docman button, they need their own full
+local setup, including their own `docman-tool` install on their own
+machine - the same as the host machine has. There is no way around
+this for Docman specifically; ask whoever maintains this repo for help
+setting up `docman-tool` if that's needed.
 
 **Security note:** the trigger server has no built-in login of any
 kind - by default, anyone who can reach the chosen port on the host
-machine can trigger Linear issues, run Docman automation, and query
-the database through it. Setting `LINEAR_TRIGGER_SHARED_SECRET` (step
-2 below) closes that gap with a shared password both machines must
-send; without it, only do this on a network you fully trust (your own
-office/home network, never a shared or public one).
+machine can use the Group A buttons and query the database through it.
+Setting `LINEAR_TRIGGER_SHARED_SECRET` (step 2 below) closes that gap
+with a shared password both machines must send; without it, only do
+this on a network you fully trust (your own office/home network, never
+a shared or public one).
+
+### Step by step
 
 **On the host machine** (the one already fully set up):
 
@@ -200,6 +226,10 @@ office/home network, never a shared or public one).
 
 **On every machine using the shared server** (including the host
 machine's own extension, per step 3 above):
+
+Only do this if the person only needs Group A buttons (see above). If
+they need any Docman button too, stop here and set them up with their
+own full local install and their own `docman-tool` instead.
 
 1. Complete Section 1 (Base Install) only - no Node.js, no Cloud SQL
    Proxy, no `.env` needed on this machine.
