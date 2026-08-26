@@ -3760,11 +3760,14 @@ function appendDocmanRunTail(run, rawText, channel = "stdout") {
     run.summaryTail = [];
   }
   for (const line of lines) {
-    const normalized = sanitizeSingleLine(line, 240);
-    if (!normalized) continue;
-    if (normalized.startsWith("__DOCMAN_RESULT__")) {
+    const rawTrimmed = String(line || "").trim();
+    if (rawTrimmed.startsWith("__DOCMAN_RESULT__")) {
+      // Parse from the untruncated line - the JSON payload (verify results,
+      // clean-processing folder names/counts, etc.) routinely exceeds the
+      // 240-char cap used for human-readable log lines below, and truncating
+      // it first breaks JSON.parse, silently leaving resultData unset.
       try {
-        const parsed = JSON.parse(normalized.slice("__DOCMAN_RESULT__".length));
+        const parsed = JSON.parse(rawTrimmed.slice("__DOCMAN_RESULT__".length));
         const resultData = sanitizeDocmanResultData(parsed);
         if (resultData) {
           run.resultData = resultData;
@@ -3774,6 +3777,8 @@ function appendDocmanRunTail(run, rawText, channel = "stdout") {
       }
       continue;
     }
+    const normalized = sanitizeSingleLine(line, 240);
+    if (!normalized) continue;
     run.logLines.push(`${prefix}${normalized}`);
     if (run.logLines.length > 160) {
       run.logLines = run.logLines.slice(-160);
