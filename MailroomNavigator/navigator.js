@@ -1123,11 +1123,11 @@ function buildPracticeStatusHtml(status) {
     ].join('');
 
     const docmanActionButtonsHtml = DOCMAN_ACTION_BUTTONS.map(([action, label, isPrimary, iconPaths]) => `
-        <button type="button" class="btn btn-sm${isPrimary ? ' docman-primary-action' : ''}" data-docman-action="${action}">
+        <button type="button" class="btn btn-sm icon-hover-btn${isPrimary ? ' docman-primary-action' : ''}" data-docman-action="${action}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 ${iconPaths}
             </svg>
-            ${escapeHtml(label)}
+            <span class="icon-hover-label">${escapeHtml(label)}</span>
         </button>
     `).join('');
 
