@@ -327,7 +327,6 @@
       display: none;
       align-items: center;
       gap: 6px;
-      margin-right: auto;
     }
     body.bl-panel-compact .panel-utility-quicklinks {
       display: flex;
@@ -383,38 +382,55 @@
 <body>
   <div class="extension-wrapper">
     <div class="panel-utility-bar">
+      <div class="btn-row global-nav-buttons-row">
+        <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle" data-role="toggle" aria-label="Navigator" title="Navigator">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </button>
+        <button type="button" id="jobManagerGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Job Panel" title="Job Panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+        </button>
+        <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Others" title="Others">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+            <path d="M14 17h7"></path>
+            <path d="M17.5 14v7"></path>
+          </svg>
+        </button>
+        <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Bookmarklet Tools" title="Bookmarklet Tools">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </button>
+      </div>
       <div class="panel-utility-quicklinks" id="compactQuickLinksBar">
-        <button type="button" id="compactBotDashboardLinkBtn" class="panel-utility-icon-btn" title="Open Bot Jobs Dashboard" aria-label="Open Bot Jobs Dashboard">
+        <button type="button" id="compactCollectionLinkBtn" class="panel-utility-icon-btn" title="Open Collection (docman_import, paused)" aria-label="Open Collection">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
             <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
             <line x1="12" y1="22.08" x2="12" y2="12"></line>
           </svg>
         </button>
+        <button type="button" id="compactBotDashboardLinkBtn" class="panel-utility-icon-btn" title="Open Bot Jobs Dashboard" aria-label="Open Bot Jobs Dashboard">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </button>
         <button type="button" id="compactPreparingLinkBtn" class="panel-utility-icon-btn" title="Open Preparing queue" aria-label="Open Preparing queue">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
-          </svg>
-        </button>
-        <button type="button" id="compactRejectedLinkBtn" class="panel-utility-icon-btn" title="Open Rejected queue" aria-label="Open Rejected queue">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-        <button type="button" id="compactEhrSettingsLinkBtn" class="panel-utility-icon-btn" title="Open EHR Settings" aria-label="Open EHR Settings">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-            <line x1="12" y1="8" x2="12" y2="16"></line>
-            <line x1="8" y1="12" x2="16" y2="12"></line>
-          </svg>
-        </button>
-        <button type="button" id="compactTaskRecipientsLinkBtn" class="panel-utility-icon-btn" title="Open Task Recipients" aria-label="Open Task Recipients">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="8.5" cy="7" r="4"></circle>
-            <line x1="20" y1="8" x2="20" y2="14"></line>
-            <line x1="23" y1="11" x2="17" y2="11"></line>
           </svg>
         </button>
       </div>
@@ -480,41 +496,11 @@
         <div id="compactUuidLookupBody" class="compact-accordion-body" hidden></div>
       </div>
     </div>
-    <!-- Top-level view switcher: independent binder-style tabs floating
-         over the right edge of the window (position: fixed), separate from
-         the content flow so the window never needs to be widened to reach
-         them. -->
+    <!-- global-nav-buttons-row (Navigator/Job Panel/Others/Bookmarklet Tools)
+         moved up into .panel-utility-bar above - was an independent
+         position:fixed dock protruding from the right edge; now an inline
+         row alongside the collapse/dark-mode toggles instead. -->
     <div class="panel-body-layout">
-    <div class="btn-row global-nav-buttons-row">
-      <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle" data-role="toggle" aria-label="Navigator" title="Navigator">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="8" x2="12" y2="12"></line>
-          <line x1="12" y1="16" x2="12.01" y2="16"></line>
-        </svg>
-      </button>
-      <button type="button" id="jobManagerGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Job Panel" title="Job Panel">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
-          <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-        </svg>
-      </button>
-      <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Others" title="Others">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1"></rect>
-          <rect x="14" y="3" width="7" height="7" rx="1"></rect>
-          <rect x="3" y="14" width="7" height="7" rx="1"></rect>
-          <path d="M14 17h7"></path>
-          <path d="M17.5 14v7"></path>
-        </svg>
-      </button>
-      <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Bookmarklet Tools" title="Bookmarklet Tools">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
-        </svg>
-      </button>
-    </div>
-
     <div class="panel-body-content">
     <div id="dockedPanelHeader" class="docked-panel-header" hidden>
       <h1 id="dockedPanelTitle">Mailroom Navigator</h1>
