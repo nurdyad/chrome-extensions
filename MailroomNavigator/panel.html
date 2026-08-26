@@ -424,6 +424,14 @@
       </button>
     </div>
     <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">
+      <!-- No accordion here, unlike the sections around it - #statusDisplay
+           (moved in below) is its own card and already shows/hides itself
+           based on whether a practice is selected, so wrapping it in a
+           second collapsible layer was just an extra click to nothing. Sits
+           right under the search field/recent practices (which stay put
+           above, inside #practiceSearchBlock) so picking a practice doesn't
+           bury its details behind an accordion click. -->
+      <div id="compactPracticeDetailsSlot"></div>
       <div id="compactPracticeToolsAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactPracticeToolsToggle" class="compact-accordion-toggle">
           <span>Practice Tools</span>
@@ -433,11 +441,6 @@
         </button>
         <div id="compactPracticeToolsBody" class="compact-accordion-body" hidden></div>
       </div>
-      <!-- No accordion here, unlike the sections around it - #statusDisplay
-           (moved in below) is its own card and already shows/hides itself
-           based on whether a practice is selected, so wrapping it in a
-           second collapsible layer was just an extra click to nothing. -->
-      <div id="compactPracticeDetailsSlot"></div>
       <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
           <span>Quick Document Search</span>

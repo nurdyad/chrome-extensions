@@ -5612,17 +5612,19 @@ try {
   console.warn('[Panel] Unable to attach compact-mode sync listener:', error);
 }
 
-// Relocates the existing practice-search block, its quick-link buttons, and
-// the Quick Document Search card (with all their working autocomplete/lookup
-// behavior intact, since moving a DOM node keeps its listeners) into a small
-// standalone bar, instead of building a second copy of that search logic.
-// Only the search input shows right away; the rest lives behind the two
-// accordions above, collapsed until the user asks for them.
+// Relocates the existing practice-search block (recent practices travel
+// with it, already nested inside), its quick-link buttons, Practice
+// Details, and the Quick Document Search/UUID Lookup cards - with all
+// their working autocomplete/lookup behavior intact, since moving a DOM
+// node keeps its listeners - into a small standalone bar, instead of
+// building a second copy of that logic. Search + recent practices and
+// Practice Details always show; the quick-link buttons and the two
+// document-lookup tools live behind their own accordions, collapsed
+// until asked for.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
-  const recentPracticesSection = document.getElementById('recentPracticesSection');
   const practiceQuickLinks = document.querySelector('.nav-action-grid');
   const practiceDetails = document.getElementById('statusDisplay');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
@@ -5638,7 +5640,7 @@ function enterCompactMode() {
 
   setupCompactAccordions();
 
-  const toMoveIntoPracticeTools = [recentPracticesSection, practiceQuickLinks].filter(Boolean);
+  const toMoveIntoPracticeTools = [practiceQuickLinks].filter(Boolean);
   const toMoveIntoPracticeDetails = [practiceDetails].filter(Boolean);
   const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
   const toMoveIntoUuidLookup = [uuidLookupSection].filter(Boolean);
