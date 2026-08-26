@@ -665,29 +665,39 @@ async function initializePanel() {
     document.getElementById('rejectedBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
 
     // F. EHR & Task Settings
-    document.getElementById('taskRecipientsBtn')?.addEventListener('click', async () => {
+    const openPracticeSettingType = async (settingType) => {
         try {
             const ods = Navigator.requireSelectedOdsCode();
             await chrome.runtime.sendMessage({
                 action: 'openPractice',
                 input: ods,
-                settingType: 'task_recipients',
+                settingType,
                 ...getProtectedActionPayload()
             });
         } catch (err) { showToast(describeExtensionError(err)); }
-    });
+    };
+    document.getElementById('taskRecipientsBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
+    document.getElementById('openEhrSettingsBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
 
-    document.getElementById('openEhrSettingsBtn')?.addEventListener('click', async () => {
-        try {
-            const ods = Navigator.requireSelectedOdsCode();
-            await chrome.runtime.sendMessage({
-                action: 'openPractice',
-                input: ods,
-                settingType: 'ehr_settings',
-                ...getProtectedActionPayload()
-            });
-        } catch (e) { showToast(e.message); }
+    // Compact mode's utility-bar shortcuts - the full set of practice quick
+    // links (normally behind the Practice Tools accordion), fit into the
+    // same row as the collapse/dark-mode toggles instead of an extra click
+    // away. Kept as separate always-enabled buttons (rather than proxying a
+    // click to their #...Btn counterparts) since those get disabled until a
+    // practice or "All practices"/concrete practice is selected, and a
+    // disabled button can't be clicked programmatically either - going
+    // through the same underlying logic still shows the right "select a
+    // practice first" toast when needed.
+    document.getElementById('compactBotDashboardLinkBtn')?.addEventListener('click', () => {
+        // Deliberately the plain, unfiltered dashboard, not Collection's
+        // docman_import+emis_prepare/paused filter, so it opens directly
+        // instead of going through openUrl('dashboard', ...).
+        openTabWithTimeout('https://app.betterletter.ai/admin_panel/bots/dashboard');
     });
+    document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
+    document.getElementById('compactRejectedLinkBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
+    document.getElementById('compactEhrSettingsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
+    document.getElementById('compactTaskRecipientsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
 
     // Job Dashboard Filters (checkbox multi-select)
     const botJobsChecklistNav = document.getElementById('botJobsChecklistNav');
@@ -2404,11 +2414,12 @@ async function initializePanel() {
 
     document.addEventListener('mailroomNavigator:statusDisplayRendered', () => {
         syncDocmanToolButtons();
-        autoExpandCompactPracticeDetails();
+        resizeCompactModeForPracticeDetails();
     });
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
         syncDocmanToolButtons();
+        resizeCompactModeForPracticeDetails();
         const displayedRunOds = trimDocmanField(
             docmanToolStatus?.querySelector('[data-docman-run-ods]')?.getAttribute('data-docman-run-ods'),
             16
@@ -5449,7 +5460,6 @@ function setupCompactAccordions() {
   compactAccordionsBound = true;
   [
     ['compactPracticeToolsToggle', 'compactPracticeToolsBody'],
-    ['compactPracticeDetailsToggle', 'compactPracticeDetailsBody'],
     ['compactQuickDocToggle', 'compactQuickDocBody'],
     ['compactUuidLookupToggle', 'compactUuidLookupBody']
   ].forEach(([toggleId, bodyId]) => {
@@ -5599,25 +5609,26 @@ try {
   console.warn('[Panel] Unable to attach compact-mode sync listener:', error);
 }
 
-// Relocates the existing practice-search block, its quick-link buttons, and
-// the Quick Document Search card (with all their working autocomplete/lookup
-// behavior intact, since moving a DOM node keeps its listeners) into a small
-// standalone bar, instead of building a second copy of that search logic.
-// Only the search input shows right away; the rest lives behind the two
-// accordions above, collapsed until the user asks for them.
+// Relocates the existing practice-search block (recent practices travel
+// with it, already nested inside), its quick-link buttons, Practice
+// Details, and the Quick Document Search/UUID Lookup cards - with all
+// their working autocomplete/lookup behavior intact, since moving a DOM
+// node keeps its listeners - into a small standalone bar, instead of
+// building a second copy of that logic. Search + recent practices and
+// Practice Details always show; the quick-link buttons and the two
+// document-lookup tools live behind their own accordions, collapsed
+// until asked for.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
-  const recentPracticesSection = document.getElementById('recentPracticesSection');
   const practiceQuickLinks = document.querySelector('.nav-action-grid');
   const practiceDetails = document.getElementById('statusDisplay');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
   const uuidLookupSection = document.getElementById('uuidLookupSection');
   const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
   const practiceToolsBody = document.getElementById('compactPracticeToolsBody');
-  const practiceDetailsAccordion = document.getElementById('compactPracticeDetailsAccordion');
-  const practiceDetailsBody = document.getElementById('compactPracticeDetailsBody');
+  const practiceDetailsSlot = document.getElementById('compactPracticeDetailsSlot');
   const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
   const quickDocBody = document.getElementById('compactQuickDocBody');
   const uuidLookupAccordion = document.getElementById('compactUuidLookupAccordion');
@@ -5626,7 +5637,7 @@ function enterCompactMode() {
 
   setupCompactAccordions();
 
-  const toMoveIntoPracticeTools = [recentPracticesSection, practiceQuickLinks].filter(Boolean);
+  const toMoveIntoPracticeTools = [practiceQuickLinks].filter(Boolean);
   const toMoveIntoPracticeDetails = [practiceDetails].filter(Boolean);
   const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
   const toMoveIntoUuidLookup = [uuidLookupSection].filter(Boolean);
@@ -5641,20 +5652,14 @@ function enterCompactMode() {
 
   bar.insertBefore(practiceSearchBlock, bar.firstChild);
   toMoveIntoPracticeTools.forEach((el) => practiceToolsBody?.appendChild(el));
-  toMoveIntoPracticeDetails.forEach((el) => practiceDetailsBody?.appendChild(el));
+  toMoveIntoPracticeDetails.forEach((el) => practiceDetailsSlot?.appendChild(el));
   toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
   toMoveIntoUuidLookup.forEach((el) => uuidLookupBody?.appendChild(el));
 
   if (practiceToolsAccordion) practiceToolsAccordion.hidden = false;
-  if (practiceDetailsAccordion) practiceDetailsAccordion.hidden = false;
   if (quickDocAccordion) quickDocAccordion.hidden = false;
   if (uuidLookupAccordion) uuidLookupAccordion.hidden = false;
   setCompactAccordionExpanded('compactPracticeToolsToggle', 'compactPracticeToolsBody', false);
-  // Practice Details starts expanded only if a practice is already selected
-  // (e.g. re-entering compact mode) - otherwise there's nothing to show yet,
-  // and autoExpandCompactPracticeDetails() opens it the moment one is picked.
-  const hasSelectedPractice = practiceDetails?.style.display === 'block';
-  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', hasSelectedPractice);
   setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
   setCompactAccordionExpanded('compactUuidLookupToggle', 'compactUuidLookupBody', false);
 
@@ -5669,12 +5674,12 @@ function enterCompactMode() {
   resizeToFitCompactContent();
 }
 
-// Practice Details is the payoff of a search - once one is picked, open it
-// immediately in compact mode instead of leaving the user an extra click
-// away from the Docman buttons and EHR settings that live inside it.
-function autoExpandCompactPracticeDetails() {
+// #statusDisplay (Practice Details) shows/hides itself based on whether a
+// practice is selected - no accordion to expand here, just keep the
+// floating window sized to match as that content appears or disappears.
+function resizeCompactModeForPracticeDetails() {
   if (!compactModeMovedElements) return;
-  setCompactAccordionExpanded('compactPracticeDetailsToggle', 'compactPracticeDetailsBody', true);
+  resizeToFitCompactContent();
 }
 
 function exitCompactMode() {
