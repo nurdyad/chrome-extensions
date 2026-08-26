@@ -5616,20 +5616,22 @@ try {
 }
 
 // Relocates the existing practice-search block (recent practices travel
-// with it, already nested inside), Practice Details, and the Quick
-// Document Search/UUID Lookup cards - with all their working
-// autocomplete/lookup behavior intact, since moving a DOM node keeps its
-// listeners - into a small standalone bar, instead of building a second
-// copy of that logic. The practice quick links (Collection/Preparing/
-// Rejected/Settings/Recipients) aren't moved at all - compact mode's
-// utility-bar icon buttons cover the same actions independently. Search +
-// recent practices and Practice Details always show; the two
-// document-lookup tools live behind their own accordions, collapsed
+// with it, already nested inside), the practice identity strip (ODS/CDB/
+// EHR/quota/live counts), Practice Details, and the Quick Document
+// Search/UUID Lookup cards - with all their working autocomplete/lookup
+// behavior intact, since moving a DOM node keeps its listeners - into a
+// small standalone bar, instead of building a second copy of that logic.
+// The practice quick links (Collection/Preparing/Rejected/Settings/
+// Recipients) aren't moved at all - compact mode's utility-bar icon
+// buttons cover the same actions independently. Search + recent
+// practices, the identity strip, and Practice Details always show; the
+// two document-lookup tools live behind their own accordions, collapsed
 // until asked for.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
+  const practiceIdentityStrip = document.getElementById('practiceIdentityStrip');
   const practiceDetails = document.getElementById('statusDisplay');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
   const uuidLookupSection = document.getElementById('uuidLookupSection');
@@ -5642,7 +5644,10 @@ function enterCompactMode() {
 
   setupCompactAccordions();
 
-  const toMoveIntoPracticeDetails = [practiceDetails].filter(Boolean);
+  // Unlike Docman Tools, the identity strip's own outer element is stable
+  // across renders (updatePracticeIdentityStrip only replaces its
+  // innerHTML) - a one-time move here is enough, same as practiceDetails.
+  const toMoveIntoPracticeDetails = [practiceIdentityStrip, practiceDetails].filter(Boolean);
   const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
   const toMoveIntoUuidLookup = [uuidLookupSection].filter(Boolean);
   const allMoved = [
