@@ -645,6 +645,9 @@ async function initializePanel() {
             if (suffix === 'dashboard') {
                 url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=docman_import+emis_prepare&status=paused`;
                 if (hasPracticeFilter) url += `&practice_ids=${encodeURIComponent(selectedPracticeCode)}`;
+            } else if (suffix === 'collection') {
+                url = `https://app.betterletter.ai/admin_panel/bots/dashboard?job_types=docman_import&status=paused`;
+                if (hasPracticeFilter) url += `&practice_ids=${encodeURIComponent(selectedPracticeCode)}`;
             } else if (suffix === 'preparing') {
                 url = `https://app.betterletter.ai/mailroom/preparing?only_action_items=true&service=self&sort=upload_date&sort_dir=asc&urgent=false`;
                 if (hasPracticeFilter) url += `&practice=${encodeURIComponent(selectedPracticeCode)}`;
@@ -679,22 +682,26 @@ async function initializePanel() {
     document.getElementById('taskRecipientsBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
     document.getElementById('openEhrSettingsBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
 
-    // Compact mode's utility-bar shortcuts - the full set of practice quick
-    // links (normally behind the Practice Tools accordion), fit into the
-    // same row as the collapse/dark-mode toggles instead of an extra click
-    // away. Kept as separate always-enabled buttons (rather than proxying a
-    // click to their #...Btn counterparts) since those get disabled until a
-    // practice or "All practices"/concrete practice is selected, and a
-    // disabled button can't be clicked programmatically either - going
-    // through the same underlying logic still shows the right "select a
-    // practice first" toast when needed.
+    // Compact mode's utility-bar shortcuts - Collection/Dashboard/Preparing,
+    // the three used most, fit into the same row as the collapse/dark-mode
+    // toggles instead of an extra click away. Kept as separate
+    // always-enabled buttons (rather than proxying a click to their #...Btn
+    // counterparts) since those get disabled until a practice or "All
+    // practices"/concrete practice is selected, and a disabled button can't
+    // be clicked programmatically either - going through the same
+    // underlying logic still shows the right "select a practice first"
+    // toast when needed.
+    document.getElementById('compactCollectionLinkBtn')?.addEventListener('click', () => openUrl('collection', { allowAllPractices: true }));
     document.getElementById('compactBotDashboardLinkBtn')?.addEventListener('click', () => {
         // Deliberately the plain, unfiltered dashboard, not Collection's
-        // docman_import+emis_prepare/paused filter, so it opens directly
-        // instead of going through openUrl('dashboard', ...).
+        // docman_import(+emis_prepare)/paused filter, so it opens directly
+        // instead of going through openUrl(...).
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/bots/dashboard');
     });
     document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
+    // Rejected/EHR Settings/Task Recipients moved out of this row - these
+    // listeners are harmless no-ops until their buttons land somewhere else
+    // in compact mode (openPracticeSettingType/openUrl are reused as-is).
     document.getElementById('compactRejectedLinkBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
     document.getElementById('compactEhrSettingsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
     document.getElementById('compactTaskRecipientsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
