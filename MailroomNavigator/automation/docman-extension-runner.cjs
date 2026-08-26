@@ -755,6 +755,9 @@ async function main() {
     const usernames = sanitizeUsernames(cliOptions.usernames);
     const docmanUsername = sanitizeSingleLine(process.env.MAILROOM_DOCMAN_USERNAME, 240);
     const docmanPassword = sanitizeSecret(process.env.MAILROOM_DOCMAN_PASSWORD, 240);
+    const docmanInputFolder = sanitizeSingleLine(process.env.MAILROOM_DOCMAN_INPUT_FOLDER, 240);
+    const docmanProcessingFolder = sanitizeSingleLine(process.env.MAILROOM_DOCMAN_PROCESSING_FOLDER, 240);
+    const docmanFilingFolder = sanitizeSingleLine(process.env.MAILROOM_DOCMAN_FILING_FOLDER, 240);
 
     resolvedAction = action;
 
@@ -852,21 +855,35 @@ async function main() {
       }
     }
 
-    session = await runStepWithRetry({
-      label: "open_browser_session",
-      logger: runLogger,
-      retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
-      withRetry,
-      classifyError,
-      task: async () =>
-        getBrowserSession({
-          window: config?.browser?.window,
-          headless: !shouldUseVisibleSession,
-          browserEngine: config?.browser?.step4BrowserEngine || "chrome",
-          attachToExistingChrome: shouldUseExternalChrome,
-          chromeCdpUrl: resolvedChromeCdpUrl,
-        }),
-    });
+    const openBrowserSession = (attachToExistingChrome) =>
+      runStepWithRetry({
+        label: "open_browser_session",
+        logger: runLogger,
+        retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
+        withRetry,
+        classifyError,
+        task: async () =>
+          getBrowserSession({
+            window: config?.browser?.window,
+            headless: !shouldUseVisibleSession,
+            browserEngine: config?.browser?.step4BrowserEngine || "chrome",
+            attachToExistingChrome,
+            chromeCdpUrl: attachToExistingChrome ? resolvedChromeCdpUrl : undefined,
+          }),
+      });
+
+    try {
+      session = await openBrowserSession(shouldUseExternalChrome);
+    } catch (error) {
+      if (shouldUseExternalChrome && bootstrapDocmanSession.isCdpAttachConnectionError(error)) {
+        console.log(
+          `⚠ Could not attach to existing Chrome at ${resolvedChromeCdpUrl} (${error?.message || error}). Falling back to a fresh Chrome window.`
+        );
+        session = await openBrowserSession(false);
+      } else {
+        throw error;
+      }
+    }
 
     const removedCookies = await clearDocmanAuthFromContext(session.context);
     console.log(`🧹 Cleared Docman auth artifacts at startup (${removedCookies} cookie(s) removed).`);
@@ -1054,6 +1071,21 @@ async function main() {
       const cleanType = action === "clean-processing" ? "processing" : "filing";
       console.log(`🧹 Starting CLEAN workflow (${cleanType})…`);
 
+      // Each practice names its Docman folders however it likes (e.g.
+      // "1.For BetterLetter" / "2.Processing by BetterLetter", not the
+      // generic "BetterLetter: X" / "zz BL X. Do not touch" conventions
+      // cleanBetterLetterProcessing otherwise falls back to guessing at) -
+      // these come straight from the practice's own ehr_settings in Cloud
+      // SQL (see hydrateDocmanRunPayloadFromSql), which is exactly what the
+      // practice's EHR Settings page in BetterLetter itself is backed by.
+      const ehrSourceFolder = cleanType === "processing" ? docmanProcessingFolder : docmanFilingFolder;
+      if (ehrSourceFolder) {
+        console.log(`✔ CLEAN source folder from practice's EHR Settings: ${ehrSourceFolder}`);
+      }
+      if (docmanInputFolder) {
+        console.log(`✔ CLEAN destination folder from practice's EHR Settings: ${docmanInputFolder}`);
+      }
+
       if (typeof bootstrapDocmanSession.gotoDocmanFilingAndActivate === "function") {
         console.log("➡ Preparing Docman Filing for CLEAN workflow…");
         await runStepWithRetry({
@@ -1070,7 +1102,7 @@ async function main() {
         });
       }
 
-      await runStepWithRetry({
+      const cleanResult = await runStepWithRetry({
         label: "clean_workflow",
         logger: runLogger,
         retryPolicy: { attempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
@@ -1087,6 +1119,8 @@ async function main() {
               destinationFolder: config?.clean?.defaultDestinationFolder,
             },
             inputs: {
+              sourceFolder: ehrSourceFolder,
+              destinationFolder: docmanInputFolder,
               autoConfirmMove: true,
               nonInteractive: true,
             },
@@ -1098,6 +1132,12 @@ async function main() {
 
       emitStructuredResult(action, {
         cleanType,
+        outcome: cleanResult?.outcome || "success",
+        sourceFolder: cleanResult?.sourceFolder || "",
+        destinationFolder: cleanResult?.destinationFolder || "",
+        totalDocuments: cleanResult?.totalDocuments ?? 0,
+        matchedDocuments: cleanResult?.matchedDocuments ?? 0,
+        movedDocuments: cleanResult?.movedDocuments ?? 0,
       });
       console.log("✅ CLEAN workflow finished.");
       return;
@@ -1112,6 +1152,21 @@ async function main() {
     });
     console.error(`\n❌ FAILED: ${error?.message || error}`);
     process.exitCode = 1;
+
+    if (resolvedAction === "clean-processing" || resolvedAction === "clean-filing") {
+      const partial = error?.docmanCleanResult;
+      emitStructuredResult(resolvedAction, {
+        cleanType: resolvedAction === "clean-processing" ? "processing" : "filing",
+        outcome: "failed",
+        errorMessage: error?.message || String(error),
+        sourceFolder: partial?.sourceFolder || "",
+        destinationFolder: partial?.destinationFolder || "",
+        totalDocuments: partial?.totalDocuments ?? 0,
+        matchedDocuments: partial?.matchedDocuments ?? 0,
+        movedDocuments: partial?.movedDocuments ?? 0,
+        failedDocuments: partial?.failedDocuments ?? 0,
+      });
+    }
   } finally {
     runLogger?.close?.({ outcome: runOutcome });
 
