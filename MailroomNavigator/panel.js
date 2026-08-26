@@ -1572,7 +1572,7 @@ async function initializePanel() {
         if (!value) return '';
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return trimDocmanField(value, 80);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
     const getDocmanActionButtons = () => Array.from(
         document.querySelectorAll('#statusDisplay [data-docman-action]')
@@ -1604,6 +1604,7 @@ async function initializePanel() {
         docmanToolStatus.classList.add('validation-badge', 'docman-tool-status-host');
         docmanToolStatus.textContent = normalizedMessage;
     };
+    const isDocmanCleanAction = (action) => action === 'clean-processing' || action === 'clean-filing';
     const getDocmanRunStatusTone = (run, isActive = false) => {
         if (isActive || String(run?.status || '').toLowerCase() === 'running') return 'running';
         const action = trimDocmanField(run?.action, 40);
@@ -1613,6 +1614,13 @@ async function initializePanel() {
             const matched = Number(resultData?.matched) || 0;
             if (checked > 0 && matched <= 0) return 'warning';
             if (checked > 0 && matched < checked) return 'warning';
+        }
+        if (isDocmanCleanAction(action) && String(run?.status || '').toLowerCase() === 'success') {
+            const outcome = trimDocmanField(resultData?.outcome, 40);
+            if (outcome === 'cancelled') return 'warning';
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            if (matched > 0 && moved < matched) return 'warning';
         }
         return String(run?.status || '').toLowerCase() === 'success' ? 'success' : 'failed';
     };
@@ -1626,6 +1634,10 @@ async function initializePanel() {
                 const checked = Number(resultData?.checked) || Number(run?.usernamesCount) || 0;
                 const matched = Number(resultData?.matched) || 0;
                 if (checked > 0 && matched <= 0) return 'No Matches';
+                return 'Partial';
+            }
+            if (isDocmanCleanAction(action)) {
+                if (trimDocmanField(resultData?.outcome, 40) === 'cancelled') return 'Cancelled';
                 return 'Partial';
             }
             return 'Attention';
@@ -1652,6 +1664,24 @@ async function initializePanel() {
                 return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}, but no exact Docman matches were found.`;
             }
             return `Verify finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''} with partial matches (${matched} matched, ${missing} missing).`;
+        }
+        if (isDocmanCleanAction(trimDocmanField(run.action, 40))) {
+            const outcome = trimDocmanField(resultData?.outcome, 40);
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            const failed = Number.isFinite(Number(resultData?.failedDocuments)) ? Number(resultData.failedDocuments) : Math.max(0, matched - moved);
+            const destination = trimDocmanField(resultData?.destinationFolder, 80);
+            const destinationSuffix = destination ? ` to "${destination}"` : '';
+            if (outcome === 'cancelled') return `${actionLabel} cancelled for ${practiceLabel} — no documents were moved.`;
+            if (outcome === 'nothing_to_move') return `${actionLabel} found no documents to move for ${practiceLabel}.`;
+            if (tone === 'failed') {
+                const reason = trimDocmanField(run.error, 140) || 'Run failed';
+                return moved > 0
+                    ? `Moved ${moved} of ${matched} documents${destinationSuffix} before failing. ${reason}`
+                    : `${actionLabel} failed for ${practiceLabel}. ${reason}`;
+            }
+            if (failed > 0) return `Moved ${moved} of ${matched} documents${destinationSuffix} — ${failed} did not move.`;
+            return `Moved ${moved} document${moved === 1 ? '' : 's'}${destinationSuffix}.`;
         }
         if (String(run.status || '').toLowerCase() === 'success') {
             return `${actionLabel} finished for ${practiceLabel}${endedAt ? ` at ${endedAt}` : ''}.`;
@@ -1687,6 +1717,17 @@ async function initializePanel() {
                 { label: 'Folder #4', value: trimDocmanField(resultData?.inputFolderName || run.onboardingInputFolderName, 48) || 'Default', tone: 'is-primary' },
                 { label: 'Folders', value: String(folderCount || 0), tone: 'is-info' },
                 { label: 'Already There', value: String(existingCount || 0), tone: existingCount > 0 ? 'is-warning' : 'is-neutral' }
+            ];
+        }
+        if (isDocmanCleanAction(action)) {
+            const total = Number(resultData?.totalDocuments) || 0;
+            const matched = Number(resultData?.matchedDocuments) || 0;
+            const moved = Number(resultData?.movedDocuments) || 0;
+            const notMoved = Number.isFinite(Number(resultData?.failedDocuments)) ? Number(resultData.failedDocuments) : Math.max(0, matched - moved);
+            return [
+                { label: 'Found', value: String(matched || total || 0), tone: 'is-primary' },
+                { label: 'Moved', value: String(moved), tone: moved > 0 ? 'is-success' : 'is-neutral' },
+                { label: 'Not Moved', value: String(notMoved), tone: notMoved > 0 ? 'is-danger' : 'is-neutral' }
             ];
         }
         return [
@@ -1730,11 +1771,12 @@ async function initializePanel() {
         const exactMatches = Array.isArray(resultData?.exactMatches) ? resultData.exactMatches.map((value) => trimDocmanField(value, 120)).filter(Boolean).slice(0, 40) : [];
         const chips = [];
         const odsCode = trimDocmanField(run.odsCode, 16);
-        if (odsCode) chips.push(`ODS ${odsCode}`);
-        if (startedAt) chips.push(`Started ${startedAt}`);
-        if (!isActive && endedAt) chips.push(`Finished ${endedAt}`);
+        if (startedAt && !isActive && endedAt) chips.push(`Started ${startedAt} · Finished ${endedAt}`);
+        else if (startedAt) chips.push(`Started ${startedAt}`);
+        else if (!isActive && endedAt) chips.push(`Finished ${endedAt}`);
         if (trimDocmanField(run.groupName, 120)) chips.push(`Group ${trimDocmanField(run.groupName, 120)}`);
         if (trimDocmanField(run.onboardingInputFolderName, 120)) chips.push(`Folder #4 ${trimDocmanField(run.onboardingInputFolderName, 120)}`);
+        const practiceSubtitle = `${trimDocmanField(run.practiceName, 160) || 'Selected practice'}${odsCode ? ` · ${odsCode}` : ''}`;
 
         docmanToolStatus.classList.remove('validation-badge', 'neutral', 'valid', 'invalid');
         docmanToolStatus.classList.add('docman-tool-status-host');
@@ -1749,7 +1791,7 @@ async function initializePanel() {
                         <div class="docman-tool-compact-icon" aria-hidden="true">${tone === 'success' ? '✓' : tone === 'running' ? '…' : '!'}</div>
                         <div class="docman-tool-compact-copy">
                             <div class="docman-tool-status-title">${escapeHtml(getDocmanRunHeadline(run, isActive))}</div>
-                            <div class="docman-tool-status-subtitle">${escapeHtml(trimDocmanField(run.practiceName, 160) || 'Selected practice')}</div>
+                            <div class="docman-tool-status-subtitle">${escapeHtml(practiceSubtitle)}</div>
                         </div>
                     </div>
                     ${chips.length ? `<div class="docman-tool-meta-row docman-tool-compact-meta">${chips.map((chip) => `<span class="docman-tool-chip">${escapeHtml(chip)}</span>`).join('')}</div>` : ''}
@@ -1770,9 +1812,9 @@ async function initializePanel() {
                     <div class="docman-tool-status-pill is-${tone}">${escapeHtml(getDocmanRunStatusLabel(run, isActive))}</div>
                 </div>
                 <div class="docman-tool-status-title">${escapeHtml(getDocmanRunHeadline(run, isActive))}</div>
-                <div class="docman-tool-status-subtitle">${escapeHtml(trimDocmanField(run.practiceName, 160) || 'Selected practice')}</div>
+                <div class="docman-tool-status-subtitle">${escapeHtml(practiceSubtitle)}</div>
                 ${summaryCards.length ? `
-                    <div class="docman-tool-summary-grid">
+                    <div class="docman-tool-summary-grid" style="grid-template-columns: repeat(${Math.min(summaryCards.length, 4)}, minmax(0, 1fr));">
                         ${summaryCards.map((item) => `
                             <div class="docman-tool-summary-card ${escapeHtml(item.tone || 'is-primary')}">
                                 <span class="docman-tool-summary-label">${escapeHtml(item.label || '')}</span>
