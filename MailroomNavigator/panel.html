@@ -303,11 +303,15 @@
     body.bl-dark-mode video {
       filter: invert(1) hue-rotate(180deg);
     }
+    .panel-utility-bar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      padding: 6px 10px 0;
+    }
     .dark-mode-toggle-btn {
-      position: fixed;
-      top: 8px;
-      left: 8px;
-      z-index: 999999;
+      position: static;
       width: 28px;
       height: 28px;
       border-radius: 50%;
@@ -320,6 +324,7 @@
       cursor: pointer;
       padding: 0;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+      flex-shrink: 0;
     }
     .dark-mode-toggle-btn:hover {
       background: #f3f4f6;
@@ -336,23 +341,33 @@
   </style>
 </head>
 <body>
-  <button type="button" id="darkModeToggleBtn" class="dark-mode-toggle-btn" title="Switch to dark mode" aria-label="Switch to dark mode">
-    <svg class="dark-mode-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-    </svg>
-    <svg class="dark-mode-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="5"></circle>
-      <line x1="12" y1="1" x2="12" y2="3"></line>
-      <line x1="12" y1="21" x2="12" y2="23"></line>
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-      <line x1="1" y1="12" x2="3" y2="12"></line>
-      <line x1="21" y1="12" x2="23" y2="12"></line>
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-    </svg>
-  </button>
   <div class="extension-wrapper">
+    <div class="panel-utility-bar">
+      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 14 10 14 10 20"></polyline>
+          <polyline points="20 10 14 10 14 4"></polyline>
+          <line x1="14" y1="10" x2="21" y2="3"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
+      </button>
+      <button type="button" id="darkModeToggleBtn" class="dark-mode-toggle-btn" title="Switch to dark mode" aria-label="Switch to dark mode">
+        <svg class="dark-mode-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+        <svg class="dark-mode-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </button>
+    </div>
     <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">
       <div id="compactPracticeToolsAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactPracticeToolsToggle" class="compact-accordion-toggle">
@@ -363,6 +378,15 @@
         </button>
         <div id="compactPracticeToolsBody" class="compact-accordion-body" hidden></div>
       </div>
+      <div id="compactPracticeDetailsAccordion" class="compact-accordion" hidden>
+        <button type="button" id="compactPracticeDetailsToggle" class="compact-accordion-toggle">
+          <span>Practice Details</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <div id="compactPracticeDetailsBody" class="compact-accordion-body" hidden></div>
+      </div>
       <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
         <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
           <span>Quick Document Search</span>
@@ -371,6 +395,15 @@
           </svg>
         </button>
         <div id="compactQuickDocBody" class="compact-accordion-body" hidden></div>
+      </div>
+      <div id="compactUuidLookupAccordion" class="compact-accordion" hidden>
+        <button type="button" id="compactUuidLookupToggle" class="compact-accordion-toggle">
+          <span>UUID Lookup</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <div id="compactUuidLookupBody" class="compact-accordion-body" hidden></div>
       </div>
     </div>
     <!-- Top-level view switcher: independent binder-style tabs floating
@@ -404,14 +437,6 @@
       <button type="button" id="bookmarkletToolsGlobalToggleBtn" class="btn bl-sidebar-toggle" data-role="toggle" aria-label="Bookmarklet Tools" title="Bookmarklet Tools">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
-        </svg>
-      </button>
-      <button id="compactModeToggleBtn" class="btn btn-sm btn-ghost" type="button" title="Shrink to a small search-only bar" aria-label="Shrink to a small search-only bar">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="4 14 10 14 10 20"></polyline>
-          <polyline points="20 10 14 10 14 4"></polyline>
-          <line x1="14" y1="10" x2="21" y2="3"></line>
-          <line x1="3" y1="21" x2="10" y2="14"></line>
         </svg>
       </button>
     </div>
