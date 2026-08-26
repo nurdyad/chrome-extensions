@@ -35,6 +35,15 @@
     body.bl-panel-compact .extension-wrapper {
       min-height: 0;
     }
+    /* The full-panel 10px padding leaves the utility bar's two small
+       buttons looking lost in a sea of margin around them - tighten it for
+       compact mode specifically, where a snug fit is the whole point. */
+    body.bl-panel-compact .extension-wrapper {
+      padding: 6px;
+    }
+    body.bl-panel-compact .panel-utility-bar {
+      padding: 0 0 6px;
+    }
     /* Single-view mode: set when this panel is loaded inside one of the
        docked per-view sidebars (background.js mounts one independent
        toggle handle per view, each pointing its own iframe at

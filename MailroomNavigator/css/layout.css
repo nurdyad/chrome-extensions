@@ -1037,14 +1037,16 @@ body.bl-panel-single-view .job-manager-container {
     border: 1px solid #c6ddf4 !important;
 }
 
+/* Lives in .panel-utility-bar next to the dark-mode toggle - matches its
+   circular 28px sizing so the pair reads as one deliberate row instead of
+   mismatched leftovers from when this button sat in .global-nav-buttons-row. */
 #compactModeToggleBtn {
     flex: 0 0 auto;
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
     padding: 0;
-    margin-top: 8px;
-    border-radius: 8px;
+    border-radius: 50%;
     opacity: 1;
 }
 
