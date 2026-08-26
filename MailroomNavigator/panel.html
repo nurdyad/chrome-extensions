@@ -223,6 +223,47 @@
       border-left: 4px solid var(--primary-color);
       margin-bottom: 0;
     }
+    /* Docman Tools, relocated here from Practice Details (see
+       syncCompactModeDocmanActions() in panel.js) - a compact row of
+       icon-hover-btn pills instead of the full panel's labeled 3-column
+       grid, so it fits directly under the search/recent-practices area. */
+    #compactDocmanActionsSlot:not(:empty) {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e9f0;
+    }
+    /* Only the grid itself is relocated into the slot above - the "Docman
+       Tools" caption stays behind in Practice Details (it's redundant now
+       the buttons live under the search card instead), so hide it there. */
+    body.bl-panel-compact #statusDisplay .practice-status-docman-head {
+      display: none;
+    }
+    #compactDocmanActionsSlot .practice-status-docman-grid {
+      display: flex !important;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    #compactDocmanActionsSlot .icon-hover-btn {
+      min-width: 28px;
+      height: 28px;
+      padding: 0 7px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+      color: #4b5563;
+      border: 1px solid rgba(15, 23, 42, 0.16);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+      font-weight: 500;
+    }
+    #compactDocmanActionsSlot .icon-hover-btn:hover {
+      background: #f3f4f6;
+    }
+    #compactDocmanActionsSlot .icon-hover-btn.docman-primary-action {
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+    }
     .compact-accordion {
       background-color: white;
       border-radius: var(--border-radius);
@@ -593,6 +634,12 @@
 	          <div id="recentPracticesSection" class="recent-practices-section" hidden>
 	            <div id="recentPracticesList" class="recent-practices-list"></div>
 	          </div>
+	          <!-- Compact mode only: the Docman Tools action grid (normally
+	               rendered inside #statusDisplay's Practice Details card) gets
+	               relocated here once a practice is selected, restyled into
+	               icon-hover-btn pills - see syncCompactModeDocmanActions() in
+	               panel.js. Empty and inert outside compact mode. -->
+	          <div id="compactDocmanActionsSlot"></div>
 	        </div>
 
         <div id="practiceIdentityStrip" class="practice-identity-strip"></div>

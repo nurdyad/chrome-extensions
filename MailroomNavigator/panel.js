@@ -2419,12 +2419,12 @@ async function initializePanel() {
 
     document.addEventListener('mailroomNavigator:statusDisplayRendered', () => {
         syncDocmanToolButtons();
-        resizeCompactModeForPracticeDetails();
+        syncCompactModePracticeDetails();
     });
 
     document.addEventListener('mailroomNavigator:practiceSelectionChanged', () => {
         syncDocmanToolButtons();
-        resizeCompactModeForPracticeDetails();
+        syncCompactModePracticeDetails();
         const displayedRunOds = trimDocmanField(
             docmanToolStatus?.querySelector('[data-docman-run-ods]')?.getAttribute('data-docman-run-ods'),
             16
@@ -5673,19 +5673,75 @@ function enterCompactMode() {
     if (hoverLabel) hoverLabel.textContent = 'Expand';
   }
   saveCompactModePreference(true);
-  resizeToFitCompactContent();
+  syncCompactModePracticeDetails();
+}
+
+// Docman Tools is rendered fresh into #statusDisplay on every status
+// render (displayPracticeStatus/renderPracticeStatusHtml), so this can't
+// be a one-time move like the rest of enterCompactMode() - it re-runs
+// wherever Practice Details itself gets refreshed (this function's own
+// callers), relocating whatever grid currently exists into its compact
+// slot and, the first time it sees each fresh instance, restyling its
+// buttons into icon-hover-btn pills (wrapping each button's plain label
+// text in a .icon-hover-label span so the shared hover-reveal CSS applies).
+function syncCompactModeDocmanActions() {
+  const slot = document.getElementById('compactDocmanActionsSlot');
+  const statusDisplay = document.getElementById('statusDisplay');
+  if (!slot) return;
+  // No practice currently shown (statusDisplay hides itself the same way) -
+  // clear any stale grid left over from a previously selected practice
+  // instead of leaving it visible with nothing backing it.
+  if (!statusDisplay || statusDisplay.style.display === 'none') {
+    slot.replaceChildren();
+    return;
+  }
+  const grid = statusDisplay.querySelector('.practice-status-docman-grid');
+  if (grid && slot.firstChild !== grid) {
+    slot.appendChild(grid);
+  }
+  if (grid) {
+    grid.querySelectorAll('.btn[data-docman-action]').forEach((btn) => {
+      if (btn.querySelector('.icon-hover-label')) return;
+      btn.classList.add('icon-hover-btn');
+      const labelNode = Array.from(btn.childNodes).find(
+        (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+      );
+      if (!labelNode) return;
+      const span = document.createElement('span');
+      span.className = 'icon-hover-label';
+      span.textContent = labelNode.textContent.trim();
+      labelNode.replaceWith(span);
+    });
+  }
+}
+
+// Docman Tools' grid gets physically relocated out of #statusDisplay (see
+// syncCompactModeDocmanActions above) - put it back where
+// buildPracticeStatusHtml() renders it before restoring #statusDisplay
+// itself, or the full panel would come back missing its Docman Tools
+// buttons after leaving compact mode.
+function restoreDocmanActionsFromCompactMode() {
+  const slot = document.getElementById('compactDocmanActionsSlot');
+  const grid = slot?.querySelector('.practice-status-docman-grid');
+  const head = document.querySelector('#statusDisplay .practice-status-docman-head');
+  if (grid && head) {
+    head.insertAdjacentElement('afterend', grid);
+  }
 }
 
 // #statusDisplay (Practice Details) shows/hides itself based on whether a
-// practice is selected - no accordion to expand here, just keep the
-// floating window sized to match as that content appears or disappears.
-function resizeCompactModeForPracticeDetails() {
+// practice is selected - no accordion to expand here, just keep Docman
+// Tools synced into its compact slot and the floating window sized to
+// match as that content appears, disappears, or gets re-rendered.
+function syncCompactModePracticeDetails() {
   if (!compactModeMovedElements) return;
+  syncCompactModeDocmanActions();
   resizeToFitCompactContent();
 }
 
 function exitCompactMode() {
   if (!compactModeMovedElements) return;
+  restoreDocmanActionsFromCompactMode();
   // Restore in reverse order: if two moved elements were originally adjacent
   // siblings, a later element's recorded nextSibling may point at an earlier
   // one still sitting in the compact bar. Restoring back-to-front guarantees
