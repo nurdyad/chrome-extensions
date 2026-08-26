@@ -682,9 +682,10 @@ async function initializePanel() {
     document.getElementById('taskRecipientsBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
     document.getElementById('openEhrSettingsBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
 
-    // Compact mode's utility-bar shortcuts - Collection/Dashboard/Preparing,
-    // the three used most, fit into the same row as the collapse/dark-mode
-    // toggles instead of an extra click away. Kept as separate
+    // Compact mode's utility-bar shortcuts - the full set of practice quick
+    // links, fit into the same row as the collapse/dark-mode toggles instead
+    // of the old Practice Tools accordion (removed - this row is now the
+    // only place these live in compact mode). Kept as separate
     // always-enabled buttons (rather than proxying a click to their #...Btn
     // counterparts) since those get disabled until a practice or "All
     // practices"/concrete practice is selected, and a disabled button can't
@@ -699,9 +700,6 @@ async function initializePanel() {
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/bots/dashboard');
     });
     document.getElementById('compactPreparingLinkBtn')?.addEventListener('click', () => openUrl('preparing', { allowAllPractices: true }));
-    // Rejected/EHR Settings/Task Recipients moved out of this row - these
-    // listeners are harmless no-ops until their buttons land somewhere else
-    // in compact mode (openPracticeSettingType/openUrl are reused as-is).
     document.getElementById('compactRejectedLinkBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
     document.getElementById('compactEhrSettingsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
     document.getElementById('compactTaskRecipientsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
@@ -5466,7 +5464,6 @@ function setupCompactAccordions() {
   if (compactAccordionsBound) return;
   compactAccordionsBound = true;
   [
-    ['compactPracticeToolsToggle', 'compactPracticeToolsBody'],
     ['compactQuickDocToggle', 'compactQuickDocBody'],
     ['compactUuidLookupToggle', 'compactUuidLookupBody']
   ].forEach(([toggleId, bodyId]) => {
@@ -5617,24 +5614,23 @@ try {
 }
 
 // Relocates the existing practice-search block (recent practices travel
-// with it, already nested inside), its quick-link buttons, Practice
-// Details, and the Quick Document Search/UUID Lookup cards - with all
-// their working autocomplete/lookup behavior intact, since moving a DOM
-// node keeps its listeners - into a small standalone bar, instead of
-// building a second copy of that logic. Search + recent practices and
-// Practice Details always show; the quick-link buttons and the two
+// with it, already nested inside), Practice Details, and the Quick
+// Document Search/UUID Lookup cards - with all their working
+// autocomplete/lookup behavior intact, since moving a DOM node keeps its
+// listeners - into a small standalone bar, instead of building a second
+// copy of that logic. The practice quick links (Collection/Preparing/
+// Rejected/Settings/Recipients) aren't moved at all - compact mode's
+// utility-bar icon buttons cover the same actions independently. Search +
+// recent practices and Practice Details always show; the two
 // document-lookup tools live behind their own accordions, collapsed
 // until asked for.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
   const practiceSearchBlock = document.getElementById('practiceSearchBlock');
-  const practiceQuickLinks = document.querySelector('.nav-action-grid');
   const practiceDetails = document.getElementById('statusDisplay');
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
   const uuidLookupSection = document.getElementById('uuidLookupSection');
-  const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
-  const practiceToolsBody = document.getElementById('compactPracticeToolsBody');
   const practiceDetailsSlot = document.getElementById('compactPracticeDetailsSlot');
   const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
   const quickDocBody = document.getElementById('compactQuickDocBody');
@@ -5644,13 +5640,11 @@ function enterCompactMode() {
 
   setupCompactAccordions();
 
-  const toMoveIntoPracticeTools = [practiceQuickLinks].filter(Boolean);
   const toMoveIntoPracticeDetails = [practiceDetails].filter(Boolean);
   const toMoveIntoQuickDoc = [quickDocumentSearchCard].filter(Boolean);
   const toMoveIntoUuidLookup = [uuidLookupSection].filter(Boolean);
   const allMoved = [
     practiceSearchBlock,
-    ...toMoveIntoPracticeTools,
     ...toMoveIntoPracticeDetails,
     ...toMoveIntoQuickDoc,
     ...toMoveIntoUuidLookup
@@ -5658,15 +5652,12 @@ function enterCompactMode() {
   compactModeMovedElements = allMoved.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
 
   bar.insertBefore(practiceSearchBlock, bar.firstChild);
-  toMoveIntoPracticeTools.forEach((el) => practiceToolsBody?.appendChild(el));
   toMoveIntoPracticeDetails.forEach((el) => practiceDetailsSlot?.appendChild(el));
   toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
   toMoveIntoUuidLookup.forEach((el) => uuidLookupBody?.appendChild(el));
 
-  if (practiceToolsAccordion) practiceToolsAccordion.hidden = false;
   if (quickDocAccordion) quickDocAccordion.hidden = false;
   if (uuidLookupAccordion) uuidLookupAccordion.hidden = false;
-  setCompactAccordionExpanded('compactPracticeToolsToggle', 'compactPracticeToolsBody', false);
   setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
   setCompactAccordionExpanded('compactUuidLookupToggle', 'compactUuidLookupBody', false);
 
@@ -5704,9 +5695,7 @@ function exitCompactMode() {
   });
   compactModeMovedElements = null;
 
-  const practiceToolsAccordion = document.getElementById('compactPracticeToolsAccordion');
   const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
-  if (practiceToolsAccordion) practiceToolsAccordion.hidden = true;
   if (quickDocAccordion) quickDocAccordion.hidden = true;
 
   document.body.classList.remove('bl-panel-compact');
