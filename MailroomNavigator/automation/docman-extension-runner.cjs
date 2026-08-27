@@ -227,6 +227,19 @@ function getChromeCdpUrl(config = {}) {
 }
 
 function getChromeExecutableCandidates() {
+  if (process.platform === "win32") {
+    const programFiles = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
+      .filter(Boolean);
+    return programFiles.map((base) => path.join(base, "Google", "Chrome", "Application", "chrome.exe"));
+  }
+  if (process.platform === "linux") {
+    return [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+    ];
+  }
   return [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
