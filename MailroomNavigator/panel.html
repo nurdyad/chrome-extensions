@@ -588,11 +588,24 @@
        popup window - it already has these as labeled buttons in the
        practice quick-links row, and the left side of this bar is already
        full there with the Navigator/Job Panel/Others/Bookmarklet tabs. */
+    /* nowrap + horizontal scroll rather than wrap: with 10 icon buttons in
+       here, each growing wider on :hover to reveal its label (see
+       .icon-hover-label below), flex-wrap let that growth push the row
+       past its wrap threshold and jump the hovered button onto a
+       different line - out from under the cursor, which dropped :hover,
+       which shrank it back, which snapped it back under the cursor,
+       re-triggering :hover in a tight flicker loop. overflow-x other than
+       visible also gives this flex item an automatic minimum size of 0,
+       so it can't force .panel-utility-bar itself to wrap either. */
     .panel-utility-quicklinks {
       display: none;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       align-items: center;
       gap: 6px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      min-width: 0;
+      max-width: 100%;
     }
     body.bl-panel-compact .panel-utility-quicklinks,
     body.bl-panel-single-view .panel-utility-quicklinks {
