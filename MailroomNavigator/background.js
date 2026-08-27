@@ -30,6 +30,9 @@ const LIVE_COUNTS_TEMP_TAB_HYDRATE_WINDOW_MS = 3200;
 const DEFAULT_TRIGGER_SERVER_BASE_URL = 'http://127.0.0.1:4817';
 const TRIGGER_SERVER_BASE_URL_STORAGE_KEY = 'mailroomNavigatorTriggerServerBaseUrl';
 const TRIGGER_SERVER_SECRET_STORAGE_KEY = 'mailroomNavigatorTriggerServerSecret';
+const STANDALONE_PANEL_PINNED_STORAGE_KEY = 'mailroomNavigatorStandalonePanelPinnedV1';
+const STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY = 'mailroomNavigatorStandalonePanelPinWindowIdV1';
+const STANDALONE_PANEL_HIDDEN_BOUNDS_STORAGE_KEY = 'mailroomNavigatorStandalonePanelHiddenBoundsV1';
 const TRIGGER_SECRET_HEADER_NAME = 'X-MailroomNav-Trigger-Secret';
 const LINEAR_TRIGGER_SERVER_TIMEOUT_MS = 12000;
 const UUID_LOOKUP_TRIGGER_SERVER_TIMEOUT_MS = 26000;
@@ -3761,6 +3764,110 @@ async function findExistingPanelPopupWindow() {
     return null;
 }
 
+async function getStandalonePanelPinState() {
+    const result = await chrome.storage.local.get([
+        STANDALONE_PANEL_PINNED_STORAGE_KEY,
+        STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY
+    ]);
+    const pinned = Boolean(result[STANDALONE_PANEL_PINNED_STORAGE_KEY]);
+    const windowId = Number(result[STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY]);
+    return {
+        pinned,
+        windowId: Number.isFinite(windowId) ? windowId : null
+    };
+}
+
+async function setStandalonePanelPinState(pinned, sender = null) {
+    const shouldPin = Boolean(pinned);
+    let windowId = Number(sender?.tab?.windowId);
+    if (shouldPin && !Number.isFinite(windowId)) {
+        const existing = await findExistingPanelPopupWindow().catch(() => null);
+        windowId = Number(existing?.id);
+    }
+    if (shouldPin) {
+        await chrome.storage.local.set({
+            [STANDALONE_PANEL_PINNED_STORAGE_KEY]: true,
+            [STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY]: Number.isFinite(windowId) ? windowId : null
+        });
+    } else {
+        await chrome.storage.local.set({ [STANDALONE_PANEL_PINNED_STORAGE_KEY]: false });
+        await chrome.storage.local.remove(STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY);
+    }
+    return {
+        success: true,
+        pinned: shouldPin,
+        windowId: shouldPin && Number.isFinite(windowId) ? windowId : null
+    };
+}
+
+async function registerStandalonePanelPinWindow(sender = null) {
+    const state = await getStandalonePanelPinState();
+    let windowId = Number(sender?.tab?.windowId);
+    if (!Number.isFinite(windowId)) {
+        const existing = await findExistingPanelPopupWindow().catch(() => null);
+        windowId = Number(existing?.id);
+    }
+    if (state.pinned && Number.isFinite(windowId)) {
+        await chrome.storage.local.set({ [STANDALONE_PANEL_PIN_WINDOW_ID_STORAGE_KEY]: windowId });
+        return { success: true, pinned: true, windowId };
+    }
+    return { success: true, pinned: state.pinned, windowId: state.windowId };
+}
+
+async function getSenderOrPanelPopupWindowId(sender = null) {
+    const senderWindowId = Number(sender?.tab?.windowId);
+    if (Number.isFinite(senderWindowId)) return senderWindowId;
+    const existing = await findExistingPanelPopupWindow().catch(() => null);
+    const existingWindowId = Number(existing?.id);
+    return Number.isFinite(existingWindowId) ? existingWindowId : null;
+}
+
+async function hideStandalonePanelWindow(sender = null) {
+    const windowId = await getSenderOrPanelPopupWindowId(sender);
+    if (!Number.isFinite(windowId)) return { success: false, error: 'No panel window found.' };
+    const currentWindow = await chrome.windows.get(windowId).catch(() => null);
+    if (currentWindow) {
+        await chrome.storage.local.set({
+            [STANDALONE_PANEL_HIDDEN_BOUNDS_STORAGE_KEY]: {
+                left: Number(currentWindow.left),
+                top: Number(currentWindow.top),
+                width: Number(currentWindow.width),
+                height: Number(currentWindow.height)
+            }
+        });
+    }
+    await chrome.windows.update(windowId, { state: 'minimized' });
+    return { success: true, windowId, fallback: 'minimized' };
+}
+
+async function restoreStandalonePanelWindow(sender = null) {
+    const state = await getStandalonePanelPinState();
+    let windowId = Number(state.windowId);
+    if (!Number.isFinite(windowId)) windowId = await getSenderOrPanelPopupWindowId(sender);
+    const result = await chrome.storage.local.get(STANDALONE_PANEL_HIDDEN_BOUNDS_STORAGE_KEY);
+    const savedBounds = result[STANDALONE_PANEL_HIDDEN_BOUNDS_STORAGE_KEY] || {};
+    const restoreBounds = {};
+    ['left', 'top', 'width', 'height'].forEach((key) => {
+        const value = Number(savedBounds[key]);
+        if (Number.isFinite(value)) restoreBounds[key] = value;
+    });
+
+    let restoredWindow = null;
+    if (Number.isFinite(windowId)) {
+        restoredWindow = await chrome.windows.get(windowId).catch(() => null);
+    }
+    if (!restoredWindow) {
+        restoredWindow = await openPanelPopup();
+        windowId = Number(restoredWindow?.id);
+    }
+    if (!Number.isFinite(windowId)) return { success: false, error: 'No panel window found.' };
+
+    await chrome.windows.update(windowId, { state: 'normal' }).catch(() => undefined);
+    await chrome.windows.update(windowId, { ...restoreBounds, focused: true });
+    await chrome.storage.local.remove(STANDALONE_PANEL_HIDDEN_BOUNDS_STORAGE_KEY);
+    return { success: true, windowId };
+}
+
 async function openPanelPopup(hostTabId = null) {
     const existing = await findExistingPanelPopupWindow();
     if (existing) {
@@ -3774,14 +3881,14 @@ async function openPanelPopup(hostTabId = null) {
         if (panelTab?.id) {
             chrome.tabs.sendMessage(panelTab.id, { type: 'BL_SYNC_COMPACT_MODE' }).catch(() => undefined);
         }
-        return;
+        return existing;
     }
 
     const url = new URL(chrome.runtime.getURL('panel.html'));
     if (typeof hostTabId === 'number' && Number.isFinite(hostTabId)) {
         url.searchParams.set('hostTabId', String(hostTabId));
     }
-    await chrome.windows.create({
+    return await chrome.windows.create({
         url: url.toString(),
         type: 'popup',
         width: 330,
@@ -3838,7 +3945,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '19';
+            const UI_VERSION = '21';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4503,6 +4610,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const handle = async () => {
         if (message.action === 'setDarkModePreference') {
             return await handleSetDarkModePreference(message.payload);
+        }
+
+        if (message.action === 'getStandalonePanelPinState') {
+            return { success: true, ...await getStandalonePanelPinState() };
+        }
+
+        if (message.action === 'setStandalonePanelPinState') {
+            return await setStandalonePanelPinState(message.pinned, sender);
+        }
+
+        if (message.action === 'registerStandalonePanelPinWindow') {
+            return await registerStandalonePanelPinWindow(sender);
+        }
+
+        if (message.action === 'hideStandalonePanelWindow' || message.action === 'minimizeStandalonePanelWindow') {
+            return await hideStandalonePanelWindow(sender);
+        }
+
+        if (message.action === 'restoreStandalonePanelWindow') {
+            return await restoreStandalonePanelWindow(sender);
         }
 
         if (message.action === 'getTriggerServerBaseUrl') {
