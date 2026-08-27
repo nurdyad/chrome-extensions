@@ -179,6 +179,24 @@ function showView(viewId) {
     if (activeBtn) activeBtn.classList.add('active-tab');
 }
 
+// Single-tool mode (UUID Picker) pins its tool's modal with position: fixed
+// under .panel-utility-bar + #dockedPanelHeader, which can't be given a
+// fixed pixel offset - the utility bar's admin quick-links row wraps onto a
+// second line at 360px wide, so the real combined height varies. Measured
+// instead of hardcoded, and written to a CSS var the modal's inset/height
+// read via calc() (see body.bl-panel-single-tool .bookmarklet-tool-modal in
+// panel.html), so the two can't drift out of sync with each other again.
+function syncDockedHeaderStackHeight() {
+    const utilityBar = document.querySelector('.panel-utility-bar');
+    if (!utilityBar) return;
+    const header = document.getElementById('dockedPanelHeader');
+    const utilityBarRect = utilityBar.getBoundingClientRect();
+    const headerRect = (header && !header.hidden) ? header.getBoundingClientRect() : null;
+    const stackBottom = headerRect ? Math.max(headerRect.bottom, utilityBarRect.bottom) : utilityBarRect.bottom;
+    const stackHeight = Math.round(stackBottom - utilityBarRect.top);
+    document.body.style.setProperty('--bl-docked-header-stack-height', `${stackHeight}px`);
+}
+
 function setupDockedPanelHeader() {
     const header = document.getElementById('dockedPanelHeader');
     const titleEl = document.getElementById('dockedPanelTitle');
@@ -187,6 +205,13 @@ function setupDockedPanelHeader() {
     const title = DOCKED_TOOL_TITLES[PANEL_FORCED_TOOL_ID] || DOCKED_PANEL_TITLES[PANEL_FORCED_VIEW_ID] || 'Mailroom Navigator';
     if (titleEl) titleEl.textContent = title;
     header.hidden = false;
+
+    syncDockedHeaderStackHeight();
+    window.addEventListener('resize', syncDockedHeaderStackHeight);
+    const utilityBar = document.querySelector('.panel-utility-bar');
+    if (utilityBar && typeof ResizeObserver === 'function') {
+        new ResizeObserver(syncDockedHeaderStackHeight).observe(utilityBar);
+    }
 }
 
 function setStandalonePanelPinButtonState(isPinned) {
@@ -893,6 +918,20 @@ async function initializePanel() {
     document.getElementById('compactRejectedLinkBtn')?.addEventListener('click', () => openUrl('rejected', { allowAllPractices: true }));
     document.getElementById('compactEhrSettingsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('ehr_settings'));
     document.getElementById('compactTaskRecipientsLinkBtn')?.addEventListener('click', () => openPracticeSettingType('task_recipients'));
+    // Account-wide admin pages, not scoped to a selected practice - plain
+    // static opens like compactBotDashboardLinkBtn above, not openUrl(...).
+    document.getElementById('compactLettersLinkBtn')?.addEventListener('click', () => {
+        openTabWithTimeout('https://app.betterletter.ai/mailroom/letters?columns[visible][]=urgent&columns[visible][]=combined_status&columns[visible][]=expected_return_date&columns[visible][]=practice_name&columns[visible][]=department&columns[visible][]=letter_type&columns[visible][]=upload_date&columns[order][]=urgent&columns[order][]=combined_status&columns[order][]=expected_return_date&columns[order][]=practice_name&columns[order][]=department&columns[order][]=letter_type&columns[order][]=number_of_pages&columns[order][]=number_of_notes&columns[order][]=nhs_number&columns[order][]=upload_date&columns[order][]=derived_clinic_date&columns[order][]=ingestion_source&columns[order][]=release_date&columns[order][]=assignee_name&columns[order][]=editor_name&columns[order][]=rejector_name&columns[order][]=rejection_reason_label&columns[order][]=rejected_at&columns[order][]=usual_gp_name&columns[order][]=responsibility&columns[order][]=releaser_name&filters[practice]=all&sort[dir]=asc&sort[by]=expected_return_date');
+    });
+    document.getElementById('compactFeatureFlagsLinkBtn')?.addEventListener('click', () => {
+        openTabWithTimeout('https://app.betterletter.ai/admin_panel/feature-flags/flags');
+    });
+    document.getElementById('compactBetterFlowLinkBtn')?.addEventListener('click', () => {
+        openTabWithTimeout('https://app.betterletter.ai/admin_panel/betterflow');
+    });
+    document.getElementById('compactBetterSweepLinkBtn')?.addEventListener('click', () => {
+        openTabWithTimeout('https://app.betterletter.ai/admin_panel/letter_protocols');
+    });
 
     // Job Dashboard Filters (checkbox multi-select)
     const botJobsChecklistNav = document.getElementById('botJobsChecklistNav');
