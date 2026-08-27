@@ -459,6 +459,108 @@
     body.bl-dark-mode video {
       filter: invert(1) hue-rotate(180deg);
     }
+    /* Brand header: full mode only - compact mode, single-view/single-tool
+       docked handles, and the pinned PiP window are all tight on vertical
+       space already, so this stays out of their way entirely rather than
+       shrinking to fit. Purely decorative (the window/tab title already
+       says "BetterLetter All-in-One"), hence aria-hidden. */
+    .brand-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px 4px;
+    }
+    body.bl-panel-compact .brand-header,
+    body.bl-panel-single-view .brand-header,
+    body.bl-panel-single-tool .brand-header {
+      display: none;
+    }
+    .brand-logo-icon {
+      display: inline-flex;
+      flex-shrink: 0;
+      color: var(--primary-color, #3498db);
+      filter: drop-shadow(0 2px 4px rgba(52, 152, 219, 0.25));
+      transition: transform 0.2s ease;
+    }
+    .brand-header:hover .brand-logo-icon {
+      transform: rotate(-6deg) scale(1.06);
+    }
+    .brand-logo-envelope {
+      transform-origin: 14px 16px;
+      animation: brandEnvelopeSettle 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+    .brand-logo-flap {
+      stroke-dasharray: 34;
+      stroke-dashoffset: 34;
+      animation: brandFlapDraw 0.5s ease-out 0.15s both;
+    }
+    .brand-logo-badge {
+      transform-origin: 24px 24px;
+      transform: scale(0);
+      animation:
+        brandBadgePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.55s both,
+        brandBadgePulse 3.2s ease-in-out 1.2s infinite;
+    }
+    .brand-logo-check {
+      stroke-dasharray: 10;
+      stroke-dashoffset: 10;
+      animation: brandCheckDraw 0.3s ease-out 0.75s both;
+    }
+    .brand-wordmark {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-color, #2c3e50);
+      letter-spacing: 0.01em;
+    }
+    .brand-wordmark strong {
+      color: var(--primary-color, #3498db);
+      font-weight: 800;
+    }
+    @keyframes brandEnvelopeSettle {
+      from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.9);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes brandFlapDraw {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+    @keyframes brandBadgePop {
+      to {
+        transform: scale(1);
+      }
+    }
+    @keyframes brandBadgePulse {
+      0%,
+      100% {
+        transform: scale(1);
+      }
+      50% {
+        transform: scale(1.08);
+      }
+    }
+    @keyframes brandCheckDraw {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .brand-logo-envelope,
+      .brand-logo-flap,
+      .brand-logo-badge,
+      .brand-logo-check {
+        animation: none !important;
+      }
+      .brand-header:hover .brand-logo-icon {
+        transform: none;
+      }
+    }
     /* Document PiP windows (the pinned panel) can't be locked to a fixed
        size - there's no API for it, and resizeTo() is blocked outside a
        direct click there. Wrap instead of clipping/overflowing when
@@ -564,6 +666,17 @@
 </head>
 <body>
   <div class="extension-wrapper">
+    <div class="brand-header" id="brandHeader" aria-hidden="true">
+      <span class="brand-logo-icon">
+        <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+          <rect class="brand-logo-envelope" x="2" y="7" width="24" height="18" rx="3" stroke="currentColor" stroke-width="2"></rect>
+          <path class="brand-logo-flap" d="M3 9l11 8.5L25 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+          <circle class="brand-logo-badge" cx="24" cy="24" r="7" fill="var(--success-color, #27ae60)"></circle>
+          <path class="brand-logo-check" d="M21 24l2 2 4-4" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+        </svg>
+      </span>
+      <span class="brand-wordmark">BetterLetter <strong>All-in-One</strong></span>
+    </div>
     <div class="panel-utility-bar">
       <div class="btn-row global-nav-buttons-row">
         <button type="button" id="navigatorGlobalToggleBtn" class="btn active-tab bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Navigator">
