@@ -297,6 +297,17 @@ async function openStandalonePanelPictureInPicture() {
     iframe.src = buildPictureInPicturePanelUrl();
     pipDocument.body.appendChild(iframe);
 
+    // Document PiP windows have no "resizable: false" option - the user can
+    // always drag an edge, and compact mode's fixed-height tab layout isn't
+    // designed to reflow gracefully below its intended size (tab labels
+    // truncate, the utility bar wraps). Snap straight back to the size we
+    // asked for whenever it drifts, so dragging just doesn't do anything
+    // instead of leaving the layout visibly broken.
+    pipWindow.addEventListener('resize', () => {
+        if (pipWindow.innerWidth === pipWidth && pipWindow.innerHeight === pipHeight) return;
+        pipWindow.resizeTo(pipWidth, pipHeight);
+    });
+
     pipWindow.addEventListener('message', (event) => {
         if (event.source !== iframe.contentWindow) return;
         if (event.data?.type !== 'BL_MN_CLOSE_PICTURE_IN_PICTURE_PANEL') return;
