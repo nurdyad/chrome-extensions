@@ -226,9 +226,9 @@
     /* .practice-identity-strip's own margin-top: 6px (css/inputs.css) is
        sized for full mode, where it sits directly under the quick-links
        row with no other spacing between them. In compact mode it's the
-       first child of #compactPracticeDetailsSlot, which already gets an
-       8px gap from #compactSearchBar's flex layout - without this, the
-       two stack into a much bigger gap than between any other card here. */
+       first child of #compactPracticeDetailsSlot, inside the Practices tab
+       panel, which already adds its own gap between children - without
+       this, the two stack into a much bigger gap than anywhere else here. */
     body.bl-panel-compact #practiceIdentityStrip {
       margin-top: 0;
     }
@@ -310,61 +310,98 @@
       border-color: var(--primary-color);
       color: var(--primary-color);
     }
-    .compact-accordion {
-      background-color: white;
-      border-radius: var(--border-radius);
-      box-shadow: var(--box-shadow);
-      border-left: 4px solid var(--primary-color);
-      overflow: hidden;
+    /* Practices/Document/UUID tab bar - hover, click, or keyboard-focus a
+       tab to activate it; see setActiveCompactTab() in panel.js. */
+    .compact-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
     }
-    .compact-accordion-toggle {
+    .compact-tab {
+      flex: 1 1 0;
+      min-width: 0;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      padding: 8px 10px;
-      background: none;
-      border: none;
+      justify-content: center;
+      gap: 5px;
+      padding: 8px 4px;
+      border: 1px solid #d6e4f2;
+      border-radius: 10px;
+      background: #ffffff;
+      color: #5a6b80;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: inherit;
       cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-color);
-      text-align: left;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
     }
-    .compact-accordion-toggle svg {
+    .compact-tab svg {
       flex-shrink: 0;
-      transition: transform 0.15s ease;
     }
-    .compact-accordion-toggle.is-expanded svg {
-      transform: rotate(180deg);
+    .compact-tab span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .compact-accordion-body {
-      padding: 0 10px 10px;
-      display: flex;
+    .compact-tab:hover {
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+    }
+    .compact-tab.is-active {
+      background: linear-gradient(180deg, #eef6ff 0%, #e2efff 100%);
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+      box-shadow: 0 3px 8px rgba(52, 152, 219, 0.18);
+      transform: translateY(-1px);
+    }
+    /* Fixed height regardless of which tab is active or how much its
+       content needs - switching tabs swaps what's visible inside this
+       same box instead of growing/shrinking the window, and content
+       taller than this scrolls internally instead. */
+    .compact-tab-viewport {
+      position: relative;
+      height: 440px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    .compact-tab-panel {
+      display: none;
       flex-direction: column;
       gap: 8px;
     }
-    .compact-accordion-body[hidden] {
-      display: none;
+    .compact-tab-panel.is-active {
+      display: flex;
+      animation: compactTabFadeIn 0.18s ease;
     }
-    /* Quick Document Search and UUID Lookup are relocated into an accordion
-       body wholesale, .section-container chrome and <h3> title included -
-       the accordion itself already provides both (its toggle label, its
-       own card), so left alone they double up into a card nested inside a
-       card with the same title twice. Strip the inner copy down to just
+    @keyframes compactTabFadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    /* Quick Document Search and UUID Lookup are relocated into a tab panel
+       wholesale, .section-container chrome and <h3> title included - the
+       tab itself already provides both (its label, its own fixed-size
+       box), so left alone they double up into a card nested inside a card
+       with the same title shown twice. Strip the inner copy down to just
        its actual content. */
-    body.bl-panel-compact .compact-accordion-body > .section-container {
+    body.bl-panel-compact .compact-tab-panel > .section-container {
       background: none;
       padding: 0;
       margin-bottom: 0;
       box-shadow: none;
       border-left: none;
     }
-    body.bl-panel-compact .compact-accordion-body > .section-container:hover {
+    body.bl-panel-compact .compact-tab-panel > .section-container:hover {
       transform: none;
       box-shadow: none;
     }
-    body.bl-panel-compact .compact-accordion-body > .section-container > h3 {
+    body.bl-panel-compact .compact-tab-panel > .section-container > h3 {
       display: none;
     }
     /* Dark mode: a single filter on the whole page instead of hand-picking
@@ -625,32 +662,47 @@
         <span class="icon-hover-label">Dark Mode</span>
       </button>
     </div>
-    <div id="compactSearchBar" style="display: none; flex-direction: column; gap: 8px;">
-      <!-- No accordion here, unlike the sections around it - #statusDisplay
-           (moved in below) is its own card and already shows/hides itself
-           based on whether a practice is selected, so wrapping it in a
-           second collapsible layer was just an extra click to nothing. Sits
-           right under the search field/recent practices (which stay put
-           above, inside #practiceSearchBlock) so picking a practice doesn't
-           bury its details behind an accordion click. -->
-      <div id="compactPracticeDetailsSlot"></div>
-      <div id="compactQuickDocAccordion" class="compact-accordion" hidden>
-        <button type="button" id="compactQuickDocToggle" class="compact-accordion-toggle">
-          <span>Quick Document Search</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
+    <div id="compactSearchBar" style="display: none; flex-direction: column;">
+      <!-- Practices/Document/UUID: one fixed-height viewport, tabs switch
+           which panel is visible instead of each section growing/shrinking
+           the window as it expands (see setupCompactTabs() in panel.js).
+           Hover or click a tab to activate it - the previous one just stays
+           built (not destroyed), so switching back doesn't lose state. -->
+      <div class="compact-tabs" id="compactTabsBar" role="tablist">
+        <button type="button" class="compact-tab is-active" id="compactTabPractices" data-tab="practices" role="tab" aria-selected="true" aria-controls="compactTabPanelPractices">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
           </svg>
+          <span>Practices</span>
         </button>
-        <div id="compactQuickDocBody" class="compact-accordion-body" hidden></div>
+        <button type="button" class="compact-tab" id="compactTabDocument" data-tab="document" role="tab" aria-selected="false" aria-controls="compactTabPanelDocument">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+          <span>Document</span>
+        </button>
+        <button type="button" class="compact-tab" id="compactTabUuid" data-tab="uuid" role="tab" aria-selected="false" aria-controls="compactTabPanelUuid">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="9" x2="20" y2="9"></line>
+            <line x1="4" y1="15" x2="20" y2="15"></line>
+            <line x1="10" y1="3" x2="8" y2="21"></line>
+            <line x1="16" y1="3" x2="14" y2="21"></line>
+          </svg>
+          <span>UUID</span>
+        </button>
       </div>
-      <div id="compactUuidLookupAccordion" class="compact-accordion" hidden>
-        <button type="button" id="compactUuidLookupToggle" class="compact-accordion-toggle">
-          <span>UUID Lookup</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-        <div id="compactUuidLookupBody" class="compact-accordion-body" hidden></div>
+      <div class="compact-tab-viewport" id="compactTabViewport">
+        <div class="compact-tab-panel is-active" id="compactTabPanelPractices" data-tab-panel="practices" role="tabpanel">
+          <!-- #statusDisplay (moved in here) is its own card and already
+               shows/hides itself based on whether a practice is selected. -->
+          <div id="compactPracticeDetailsSlot"></div>
+        </div>
+        <div class="compact-tab-panel" id="compactTabPanelDocument" data-tab-panel="document" role="tabpanel"></div>
+        <div class="compact-tab-panel" id="compactTabPanelUuid" data-tab-panel="uuid" role="tabpanel"></div>
       </div>
     </div>
     <!-- global-nav-buttons-row (Navigator/Job Panel/Others/Bookmarklet Tools)

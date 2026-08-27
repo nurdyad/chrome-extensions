@@ -253,8 +253,13 @@ async function openStandalonePanelPictureInPicture() {
         return false;
     }
 
-    const pipWidth = 380;
-    const pipHeight = 420;
+    // Sized for compact mode's fixed-height tab viewport (Practices, the
+    // tallest tab, needs to fit search+recent practices, Docman Tools
+    // icons, and the identity strip without scrolling) rather than the
+    // old per-section-accordion layout, which only ever needed to fit
+    // whichever single section was expanded at a time.
+    const pipWidth = 400;
+    const pipHeight = 600;
     const pipWindow = await window.documentPictureInPicture.requestWindow({
         width: pipWidth,
         height: pipHeight
@@ -5608,11 +5613,12 @@ function resizeToFitContent() {
   }
 }
 
-// Only the search input shows by default; Practice Tools and Quick Document
-// Search are collapsed behind their own accordion toggles, each adding to the
-// window height only while expanded.
+// Practices/Document/UUID share one fixed-height viewport (see
+// setActiveCompactTab below); this used to be per-section accordions that
+// each grew the window while expanded, but a fixed viewport made that
+// unnecessary.
 let compactModeMovedElements = null;
-let compactAccordionsBound = false;
+let compactTabsBound = false;
 
 function resizePanelWindow(height) {
   if (window.top !== window) return;
@@ -5636,28 +5642,34 @@ function resizeToFitCompactContent() {
   });
 }
 
-function setCompactAccordionExpanded(toggleId, bodyId, expanded) {
-  const toggleBtn = document.getElementById(toggleId);
-  const body = document.getElementById(bodyId);
-  if (!toggleBtn || !body) return;
-  body.hidden = !expanded;
-  toggleBtn.classList.toggle('is-expanded', expanded);
-  resizeToFitCompactContent();
+// Practices/Document/UUID share one fixed-height viewport - activating a
+// tab just toggles which .compact-tab-panel is visible inside it, so
+// switching tabs never changes the window's total height (unlike the old
+// per-section accordions, each of which added to it while expanded).
+function setActiveCompactTab(tabKey) {
+  if (!tabKey) return;
+  document.querySelectorAll('#compactTabsBar .compact-tab').forEach((tabBtn) => {
+    const isActive = tabBtn.dataset.tab === tabKey;
+    tabBtn.classList.toggle('is-active', isActive);
+    tabBtn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  document.querySelectorAll('#compactTabViewport .compact-tab-panel').forEach((panel) => {
+    panel.classList.toggle('is-active', panel.dataset.tabPanel === tabKey);
+  });
 }
 
-function setupCompactAccordions() {
-  if (compactAccordionsBound) return;
-  compactAccordionsBound = true;
-  [
-    ['compactQuickDocToggle', 'compactQuickDocBody'],
-    ['compactUuidLookupToggle', 'compactUuidLookupBody']
-  ].forEach(([toggleId, bodyId]) => {
-    const toggleBtn = document.getElementById(toggleId);
-    if (!toggleBtn) return;
-    toggleBtn.addEventListener('click', () => {
-      const body = document.getElementById(bodyId);
-      setCompactAccordionExpanded(toggleId, bodyId, Boolean(body?.hidden));
-    });
+function setupCompactTabs() {
+  if (compactTabsBound) return;
+  compactTabsBound = true;
+  document.querySelectorAll('#compactTabsBar .compact-tab').forEach((tabBtn) => {
+    // Hovering, clicking, or tabbing to a tab all activate it the same way -
+    // whichever tab was previously active just stops being shown (its
+    // content and any in-progress typing/state stay intact underneath),
+    // so switching back and forth doesn't lose anything.
+    const activate = () => setActiveCompactTab(tabBtn.dataset.tab);
+    tabBtn.addEventListener('mouseenter', activate);
+    tabBtn.addEventListener('click', activate);
+    tabBtn.addEventListener('focus', activate);
   });
 }
 
@@ -5804,14 +5816,12 @@ try {
 // with it, already nested inside), the practice identity strip (ODS/CDB/
 // EHR/quota/live counts), Practice Details, and the Quick Document
 // Search/UUID Lookup cards - with all their working autocomplete/lookup
-// behavior intact, since moving a DOM node keeps its listeners - into a
-// small standalone bar, instead of building a second copy of that logic.
-// The practice quick links (Collection/Preparing/Rejected/Settings/
-// Recipients) aren't moved at all - compact mode's utility-bar icon
-// buttons cover the same actions independently. Search + recent
-// practices, the identity strip, and Practice Details always show; the
-// two document-lookup tools live behind their own accordions, collapsed
-// until asked for.
+// behavior intact, since moving a DOM node keeps its listeners - into
+// three tab panels (Practices/Document/UUID) sharing one fixed-height
+// viewport, instead of building a second copy of that logic. The practice
+// quick links (Collection/Preparing/Rejected/Settings/Recipients) aren't
+// moved at all - compact mode's utility-bar icon buttons cover the same
+// actions independently.
 function enterCompactMode() {
   const bar = document.getElementById('compactSearchBar');
   const toggleBtn = document.getElementById('compactModeToggleBtn');
@@ -5821,13 +5831,12 @@ function enterCompactMode() {
   const quickDocumentSearchCard = document.querySelector('.quick-document-card');
   const uuidLookupSection = document.getElementById('uuidLookupSection');
   const practiceDetailsSlot = document.getElementById('compactPracticeDetailsSlot');
-  const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
-  const quickDocBody = document.getElementById('compactQuickDocBody');
-  const uuidLookupAccordion = document.getElementById('compactUuidLookupAccordion');
-  const uuidLookupBody = document.getElementById('compactUuidLookupBody');
+  const practicesTabPanel = document.getElementById('compactTabPanelPractices');
+  const documentTabPanel = document.getElementById('compactTabPanelDocument');
+  const uuidTabPanel = document.getElementById('compactTabPanelUuid');
   if (!bar || !practiceSearchBlock || !quickDocumentSearchCard) return;
 
-  setupCompactAccordions();
+  setupCompactTabs();
 
   // Unlike Docman Tools, the identity strip's own outer element is stable
   // across renders (updatePracticeIdentityStrip only replaces its
@@ -5843,15 +5852,12 @@ function enterCompactMode() {
   ];
   compactModeMovedElements = allMoved.map((el) => ({ el, parent: el.parentNode, nextSibling: el.nextSibling }));
 
-  bar.insertBefore(practiceSearchBlock, bar.firstChild);
+  practicesTabPanel?.insertBefore(practiceSearchBlock, practicesTabPanel.firstChild);
   toMoveIntoPracticeDetails.forEach((el) => practiceDetailsSlot?.appendChild(el));
-  toMoveIntoQuickDoc.forEach((el) => quickDocBody?.appendChild(el));
-  toMoveIntoUuidLookup.forEach((el) => uuidLookupBody?.appendChild(el));
+  toMoveIntoQuickDoc.forEach((el) => documentTabPanel?.appendChild(el));
+  toMoveIntoUuidLookup.forEach((el) => uuidTabPanel?.appendChild(el));
 
-  if (quickDocAccordion) quickDocAccordion.hidden = false;
-  if (uuidLookupAccordion) uuidLookupAccordion.hidden = false;
-  setCompactAccordionExpanded('compactQuickDocToggle', 'compactQuickDocBody', false);
-  setCompactAccordionExpanded('compactUuidLookupToggle', 'compactUuidLookupBody', false);
+  setActiveCompactTab('practices');
 
   document.body.classList.add('bl-panel-compact');
   setElementVisible(bar, true, 'flex');
@@ -5938,9 +5944,6 @@ function exitCompactMode() {
     }
   });
   compactModeMovedElements = null;
-
-  const quickDocAccordion = document.getElementById('compactQuickDocAccordion');
-  if (quickDocAccordion) quickDocAccordion.hidden = true;
 
   document.body.classList.remove('bl-panel-compact');
   const bar = document.getElementById('compactSearchBar');
