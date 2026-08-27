@@ -1048,6 +1048,39 @@ body.bl-panel-single-view .job-manager-container {
     transform: rotate(180deg);
 }
 
+.panel-pin-toggle-btn {
+    position: static;
+    min-width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    background: #ffffff;
+    color: #4b5563;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0 7px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+    flex-shrink: 0;
+}
+
+.panel-pin-toggle-btn:hover {
+    background: #f3f4f6;
+}
+
+.panel-pin-toggle-btn.is-pinned,
+.panel-pin-toggle-btn[aria-pressed="true"] {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+
+.panel-pin-toggle-btn.is-pinned:hover,
+.panel-pin-toggle-btn[aria-pressed="true"]:hover {
+    background: #1d4ed8;
+}
+
 .bulk-input {
     width: 100%;
     max-width: 100%;

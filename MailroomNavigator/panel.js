@@ -15,6 +15,13 @@ const PANEL_HOST_TAB_ID = (() => {
         return null;
     }
 })();
+const PANEL_PICTURE_IN_PICTURE_MODE = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get('pip') === '1';
+    } catch (error) {
+        return false;
+    }
+})();
 // Set when this panel is loaded inside one of the docked per-view sidebars
 // (each view gets its own independent host-page toggle handle, see
 // ensureSidebarPanelMounted in background.js) rather than the standalone
@@ -180,6 +187,178 @@ function setupDockedPanelHeader() {
     const title = DOCKED_TOOL_TITLES[PANEL_FORCED_TOOL_ID] || DOCKED_PANEL_TITLES[PANEL_FORCED_VIEW_ID] || 'Mailroom Navigator';
     if (titleEl) titleEl.textContent = title;
     header.hidden = false;
+}
+
+function setStandalonePanelPinButtonState(isPinned) {
+    const toggleBtn = document.getElementById('standalonePanelPinToggleBtn');
+    if (!toggleBtn) return;
+    const pinned = Boolean(isPinned);
+    toggleBtn.classList.toggle('is-pinned', pinned);
+    toggleBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    toggleBtn.title = pinned ? 'Unpin floating window' : 'Pin floating window';
+    toggleBtn.setAttribute('aria-label', pinned ? 'Unpin floating window' : 'Pin floating window');
+    const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
+    if (hoverLabel) hoverLabel.textContent = pinned ? 'Unpin' : 'Pin';
+}
+
+let standalonePanelPictureInPictureWindow = null;
+
+async function setStoredStandalonePanelPinState(isPinned) {
+    try {
+        await chrome.runtime.sendMessage({
+            action: 'setStandalonePanelPinState',
+            pinned: Boolean(isPinned)
+        });
+    } catch (error) {
+        // The visual state is still useful if the storage sync is unavailable.
+    }
+}
+
+function buildPictureInPicturePanelUrl() {
+    const url = new URL(chrome.runtime.getURL('panel.html'));
+    url.searchParams.set('pip', '1');
+    if (typeof PANEL_HOST_TAB_ID === 'number' && Number.isFinite(PANEL_HOST_TAB_ID)) {
+        url.searchParams.set('hostTabId', String(PANEL_HOST_TAB_ID));
+    }
+    return url.toString();
+}
+
+function closeStandalonePanelPictureInPicture() {
+    const pipWindow = standalonePanelPictureInPictureWindow;
+    standalonePanelPictureInPictureWindow = null;
+    setStandalonePanelPinButtonState(false);
+    setStoredStandalonePanelPinState(false);
+    chrome.runtime.sendMessage({ action: 'restoreStandalonePanelWindow' }).catch(() => undefined);
+    if (pipWindow && !pipWindow.closed) {
+        try {
+            pipWindow.close();
+        } catch (error) {
+            // Best effort only.
+        }
+    }
+}
+
+async function openStandalonePanelPictureInPicture() {
+    if (standalonePanelPictureInPictureWindow && !standalonePanelPictureInPictureWindow.closed) {
+        standalonePanelPictureInPictureWindow.focus?.();
+        setStandalonePanelPinButtonState(true);
+        await setStoredStandalonePanelPinState(true);
+        return true;
+    }
+
+    if (!window.documentPictureInPicture?.requestWindow) {
+        showToast('Always-on-top pin needs Chrome Document Picture-in-Picture support.');
+        setStandalonePanelPinButtonState(false);
+        await setStoredStandalonePanelPinState(false);
+        return false;
+    }
+
+    const pipWidth = 380;
+    const pipHeight = 420;
+    const pipWindow = await window.documentPictureInPicture.requestWindow({
+        width: pipWidth,
+        height: pipHeight
+    });
+
+    standalonePanelPictureInPictureWindow = pipWindow;
+    const pipDocument = pipWindow.document;
+    pipDocument.title = 'BetterLetter All-in-One';
+    pipDocument.body.textContent = '';
+
+    const style = pipDocument.createElement('style');
+    style.textContent = `
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #f8fafc;
+        }
+
+        iframe {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: #f8fafc;
+        }
+    `;
+    pipDocument.head.appendChild(style);
+
+    const iframe = pipDocument.createElement('iframe');
+    iframe.title = 'BetterLetter All-in-One pinned panel';
+    iframe.allow = 'clipboard-write';
+    iframe.src = buildPictureInPicturePanelUrl();
+    pipDocument.body.appendChild(iframe);
+
+    pipWindow.addEventListener('message', (event) => {
+        if (event.source !== iframe.contentWindow) return;
+        if (event.data?.type !== 'BL_MN_CLOSE_PICTURE_IN_PICTURE_PANEL') return;
+        closeStandalonePanelPictureInPicture();
+    });
+
+    // Closing the PiP window directly (its own native close control) skips
+    // our Unpin button entirely, so this has to do everything
+    // closeStandalonePanelPictureInPicture() does - including restoring the
+    // original popup window - or that window is left minimized with no way
+    // back short of reopening the extension from scratch.
+    pipWindow.addEventListener('pagehide', () => {
+        if (standalonePanelPictureInPictureWindow === pipWindow) {
+            closeStandalonePanelPictureInPicture();
+        }
+    });
+
+    setStandalonePanelPinButtonState(true);
+    await setStoredStandalonePanelPinState(true);
+    setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'minimizeStandalonePanelWindow' }).catch(() => undefined);
+    }, 150);
+    return true;
+}
+
+async function setupStandalonePanelPinToggle() {
+    const toggleBtn = document.getElementById('standalonePanelPinToggleBtn');
+    if (!toggleBtn) return;
+
+    if (PANEL_PICTURE_IN_PICTURE_MODE) {
+        setStandalonePanelPinButtonState(true);
+        toggleBtn.addEventListener('click', () => {
+            setStoredStandalonePanelPinState(false);
+            window.parent?.postMessage({ type: 'BL_MN_CLOSE_PICTURE_IN_PICTURE_PANEL' }, '*');
+        });
+        return;
+    }
+
+    if (window.top !== window) {
+        setElementVisible(toggleBtn, false);
+        return;
+    }
+
+    setStandalonePanelPinButtonState(false);
+    await setStoredStandalonePanelPinState(false);
+
+    window.addEventListener('message', (event) => {
+        if (event.source !== standalonePanelPictureInPictureWindow) return;
+        if (event.data?.type !== 'BL_MN_CLOSE_PICTURE_IN_PICTURE_PANEL') return;
+        closeStandalonePanelPictureInPicture();
+    });
+
+    toggleBtn.addEventListener('click', async () => {
+        const shouldPin = toggleBtn.getAttribute('aria-pressed') !== 'true';
+        if (shouldPin) {
+            try {
+                const opened = await openStandalonePanelPictureInPicture();
+                if (!opened) setStandalonePanelPinButtonState(false);
+            } catch (error) {
+                showToast(`Could not open pinned panel: ${describeExtensionError(error)}`);
+                setStandalonePanelPinButtonState(false);
+                await setStoredStandalonePanelPinState(false);
+            }
+        } else {
+            closeStandalonePanelPictureInPicture();
+        }
+    });
 }
 
 function setElementVisible(elementOrId, shouldShow, displayValue = '') {
@@ -437,6 +616,9 @@ async function initializePanel() {
     try {
     await refreshTriggerServerBaseUrl();
     await refreshTriggerServerSecret();
+    if (PANEL_PICTURE_IN_PICTURE_MODE) {
+        document.body.classList.add('bl-panel-pip');
+    }
     if (PANEL_FORCED_VIEW_ID) {
         document.body.classList.add('bl-panel-single-view');
     }
@@ -465,9 +647,12 @@ async function initializePanel() {
     Navigator.cleanDuplicateButtons();
     await Navigator.initializeRecentPractices();
 
+    await setupStandalonePanelPinToggle();
     setupCompactModeToggle();
     setupDarkModeToggle();
-    if (window.top === window && await loadCompactModePreference()) {
+    if (PANEL_PICTURE_IN_PICTURE_MODE) {
+        enterCompactMode();
+    } else if (window.top === window && await loadCompactModePreference()) {
         enterCompactMode();
     } else {
         resizeToFitContent();
@@ -5601,7 +5786,7 @@ try {
 // re-check the saved preference; background.js asks it to sync explicitly.
 try {
   chrome.runtime.onMessage?.addListener?.((message) => {
-    if (message?.type !== 'BL_SYNC_COMPACT_MODE' || window.top !== window) return;
+    if (message?.type !== 'BL_SYNC_COMPACT_MODE' || window.top !== window || PANEL_PICTURE_IN_PICTURE_MODE) return;
     loadCompactModePreference().then((shouldBeCompact) => {
       const isCurrentlyCompact = Boolean(compactModeMovedElements);
       if (shouldBeCompact && !isCurrentlyCompact) {
@@ -5677,7 +5862,7 @@ function enterCompactMode() {
     const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
     if (hoverLabel) hoverLabel.textContent = 'Expand';
   }
-  saveCompactModePreference(true);
+  if (!PANEL_PICTURE_IN_PICTURE_MODE) saveCompactModePreference(true);
   syncCompactModePracticeDetails();
 }
 
@@ -5768,7 +5953,7 @@ function exitCompactMode() {
     const hoverLabel = toggleBtn.querySelector('.icon-hover-label');
     if (hoverLabel) hoverLabel.textContent = 'Collapse';
   }
-  saveCompactModePreference(false);
+  if (!PANEL_PICTURE_IN_PICTURE_MODE) saveCompactModePreference(false);
   resizePanelWindow(PANEL_HEIGHT);
 }
 
