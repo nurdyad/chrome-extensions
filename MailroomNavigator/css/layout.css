@@ -57,7 +57,15 @@ h1::after {
     justify-content: center;
     min-height: 56px;
     padding: 4px 16px 8px;
-    margin: -10px -10px 12px;
+    /* The -10px top margin used to cancel .extension-wrapper's own 10px
+       padding back when this was the first element in the wrapper's flow.
+       .panel-utility-bar (nav row + dark-mode toggle) now sits above it as
+       a real sibling, and since neither .panel-body-layout nor
+       .panel-body-content have padding/border to stop margin collapsing,
+       that negative margin reached straight through both and pulled this
+       sticky header up over the utility bar. A small positive gap instead
+       just sits below it like any other block. */
+    margin: 8px -10px 12px;
     background: linear-gradient(180deg, #f7f8fb 0%, rgba(247, 248, 251, 0.96) 100%);
     border-bottom: 1px solid #d9e3ef;
     box-sizing: border-box;
