@@ -55,9 +55,24 @@ h1::after {
     display: none;
     align-items: center;
     justify-content: center;
-    min-height: 56px;
-    padding: 4px 16px 8px;
-    margin: -10px -10px 12px;
+    min-height: 40px;
+    padding: 4px 16px 6px;
+    /* The -10px top margin used to cancel .extension-wrapper's own 10px
+       padding back when this was the first element in the wrapper's flow.
+       .panel-utility-bar (nav row + dark-mode toggle) now sits above it as
+       a real sibling, and since neither .panel-body-layout nor
+       .panel-body-content have padding/border to stop margin collapsing,
+       that negative margin reached straight through both and pulled this
+       sticky header up over the utility bar. A small positive gap instead
+       just sits below it like any other block. min-height was also trimmed
+       from 56px to 40px (still comfortably fits the one-line title) since
+       stacked on top of .panel-utility-bar it was eating a third of a
+       360px-wide docked panel's height before any real content appeared.
+       If either this or .panel-utility-bar's height changes again, update
+       the matching offsets in panel.html's .bookmarklet-tool-modal rules
+       for single-tool mode (UUID Picker) - position: fixed there can't
+       measure this stack's real height itself. */
+    margin: 4px -10px 8px;
     background: linear-gradient(180deg, #f7f8fb 0%, rgba(247, 248, 251, 0.96) 100%);
     border-bottom: 1px solid #d9e3ef;
     box-sizing: border-box;
