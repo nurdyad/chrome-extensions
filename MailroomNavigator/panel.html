@@ -606,6 +606,12 @@
       overflow-y: hidden;
       min-width: 0;
       max-width: 100%;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .panel-utility-quicklinks::-webkit-scrollbar {
+      display: none;
     }
     body.bl-panel-compact .panel-utility-quicklinks,
     body.bl-panel-single-view .panel-utility-quicklinks {
@@ -717,6 +723,14 @@
             <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
           </svg>
           <span class="icon-hover-label">Job Panel</span>
+        </button>
+        <button type="button" id="linearReconcileGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Reconcile">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9m9 0-4-4m4 4-4 4M4 17h9m-9 0 4-4m-4 4 4 4"></path></svg>
+          <span class="icon-hover-label">Reconcile</span>
+        </button>
+        <button type="button" id="linearServiceGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Restart Service">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"></path></svg>
+          <span class="icon-hover-label">Restart Service</span>
         </button>
         <button type="button" id="emailFormatterGlobalToggleBtn" class="btn bl-sidebar-toggle icon-hover-btn" data-role="toggle" aria-label="Others">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1214,115 +1228,50 @@
 
     </div>
 
-    <!-- View 3: Others (Linear issue + access control) -->
+    <!-- View 3: Others -->
     <div id="emailFormatterView" class="email-formatter-container view-transition" style="display: none;">
-
-      <div id="linearIssueSection" class="section-container collapsible-section" style="margin-top: 12px;">
-        <button id="linearIssueSectionToggle" class="section-toggle-btn" type="button" aria-expanded="true" aria-controls="linearIssueSectionBody">
-          <span class="section-toggle-copy">
-            <span class="section-toggle-title">Linear Issue</span>
-            <span id="linearIssueSectionSubtitle" class="section-toggle-subtitle">Create issues, trigger runs, and Slack updates.</span>
-          </span>
-          <span class="section-toggle-chevron" aria-hidden="true"></span>
-        </button>
-
-        <div id="linearIssueSectionBody" class="section-collapse-body">
-        <div id="linearServerlessLiteNotice" class="validation-badge neutral" style="display: none; margin-bottom: 8px; white-space: pre-wrap;">Serverless Lite keeps draft generation only. Generate the issue details below and copy them into Linear manually.</div>
-        <div id="linearCreateIssueControls">
-          <label for="linearIssueSourceInput">Document ID or Stuck-Letter Details</label>
-          <textarea id="linearIssueSourceInput" class="bulk-input" placeholder="Paste a Document ID (e.g. 2566364) or the full details block with Letter ID / Failed job ID / File size / Practice."></textarea>
-
-          <div class="linear-slack-grid">
-            <div>
-              <label for="linearIssuePriorityInput">Priority</label>
-              <select id="linearIssuePriorityInput">
-                <option value="0">No priority</option>
-                <option value="1">Urgent</option>
-                <option value="2">High</option>
-                <option value="3">Normal</option>
-                <option value="4">Low</option>
-              </select>
-            </div>
-            <div style="display: flex; align-items: end;">
-              <button id="generateLinearIssueDraftBtn" class="btn btn-sm btn-ghost" style="width: 100%;">Generate Details</button>
-            </div>
-          </div>
-
-          <label for="linearIssueTitleInput">Issue Title</label>
-          <input id="linearIssueTitleInput" type="text" autocomplete="off" placeholder="Generated from Document ID">
-
-          <label for="linearIssueDescriptionInput">Issue Description</label>
-          <textarea id="linearIssueDescriptionInput" class="bulk-input" placeholder="Generated details will appear here."></textarea>
+      <div id="linearAssignmentPolicyPanel" class="section-container linear-assignment-policy" hidden>
+        <div class="linear-assignment-policy-head">
+          <strong>Issue assignment</strong>
+          <span id="linearAssignmentViewer"></span>
         </div>
-
-        <div id="linearSlackControls">
-          <div class="linear-slack-grid" style="margin-top: 8px;">
-            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
-              <input id="linearSlackNotifyEnabledInput" type="checkbox">
-              Notify Slack
-            </label>
-            <button id="syncLinearSlackWorkspaceBtn" class="btn btn-sm btn-ghost" type="button">Sync Slack</button>
-          </div>
-          <div class="linear-slack-grid" style="margin-top: 6px;">
-            <div>
-              <label for="linearSlackTargetTypeInput">Slack Target Type</label>
-              <select id="linearSlackTargetTypeInput">
-                <option value="channel">Channel</option>
-                <option value="user">User (DM)</option>
-              </select>
-            </div>
-            <div>
-              <label for="linearSlackTargetInput">Slack Channel/User ID</label>
-              <input id="linearSlackTargetInput" type="text" autocomplete="off" list="linearSlackTargetSuggestions" placeholder="e.g. C0123ABCD or U0123ABCD">
-              <datalist id="linearSlackTargetSuggestions"></datalist>
-            </div>
-          </div>
-          <div id="linearSlackTargetHint" class="validation-badge neutral">Slack sync disabled.</div>
+        <label for="linearAssignmentMode">New issues</label>
+        <select id="linearAssignmentMode">
+          <option value="creator">Assign to the person creating it</option>
+          <option value="weighted">Distribute by percentage</option>
+          <option value="unassigned">Leave unassigned in Triage</option>
+        </select>
+        <div id="linearAssignmentWeightedFields" hidden>
+          <label for="linearAssignmentOwnerWeight">My share (%)</label>
+          <input id="linearAssignmentOwnerWeight" type="number" min="0" max="100" step="1" value="10">
+          <label for="linearAssignmentOthers">Other team members</label>
+          <input id="linearAssignmentOthers" type="text" autocomplete="off" list="linearAssignmentMemberSuggestions" placeholder="abby@example.com, colleague@example.com">
+          <datalist id="linearAssignmentMemberSuggestions"></datalist>
+          <div id="linearAssignmentSplitPreview" class="validation-badge neutral"></div>
         </div>
-
-        <div id="linearSlackStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Paste a Document ID and click Generate Details.</div>
-        <div id="linearActionButtonsRow" class="button-grid" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="createLinearSlackIssueBtn" class="btn btn-sm" style="background: #2563eb;">Create Linear Issue</button>
-          <button id="triggerLinearBotJobsBtn" class="btn btn-sm" style="background: #0f766e;">Trigger Linear</button>
-        </div>
-        <div id="linearDraftCopyButtonsRow" class="button-grid" style="margin-top: 8px; display: none; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button id="copyLinearIssueTitleBtn" class="btn btn-sm btn-ghost" type="button">Copy Title</button>
-          <button id="copyLinearIssueDescriptionBtn" class="btn btn-sm btn-ghost" type="button">Copy Description</button>
-        </div>
-        <div id="reconcileLinearControls" style="margin-top: 8px;">
-          <button id="reconcileLinearBotIssuesBtn" class="btn btn-sm" style="width: 100%; background: #1d4ed8;">Reconcile Linear</button>
-        </div>
-        <div id="linearServiceControls" style="margin-top: 8px;">
-          <button id="restartLinearTriggerServerBtn" class="btn btn-sm btn-ghost" style="width: 100%;" type="button">Restart Trigger Service</button>
-        </div>
-        <div style="margin-top: 8px;">
-          <label for="triggerServerBaseUrlInput" style="font-size: 12px;">Trigger server address (leave blank for this machine)</label>
-          <div style="display: flex; gap: 6px; margin-top: 4px;">
-            <input id="triggerServerBaseUrlInput" type="text" autocomplete="off" placeholder="http://192.168.1.42:4817" style="flex: 1;">
-            <button id="saveTriggerServerBaseUrlBtn" class="btn btn-sm btn-ghost" type="button">Save</button>
-          </div>
-          <div id="triggerServerBaseUrlStatus" class="validation-badge neutral" style="margin-top: 4px;">Using this machine's own trigger server.</div>
-        </div>
-        <div id="triggerServerSecretRow" style="margin-top: 8px; display: none;">
-          <label for="triggerServerSecretInput" style="font-size: 12px;">Trigger server secret (only needed if the server above requires one)</label>
-          <div style="display: flex; gap: 6px; margin-top: 4px;">
-            <input id="triggerServerSecretInput" type="password" autocomplete="off" placeholder="Type a new secret to set/change it">
-            <button id="saveTriggerServerSecretBtn" class="btn btn-sm btn-ghost" type="button">Save</button>
-            <button id="clearTriggerServerSecretBtn" class="btn btn-sm btn-ghost" type="button">Clear</button>
-          </div>
-          <div id="triggerServerSecretStatus" class="validation-badge neutral" style="margin-top: 4px;">No secret set.</div>
-        </div>
-        <label id="triggerLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px;">
-          <input id="triggerLinearDryRunInput" type="checkbox">
-          Trigger Linear in Dry Run mode (no new issues created)
-        </label>
-        <label id="reconcileLinearDryRunLabel" style="display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px;">
-          <input id="reconcileLinearDryRunInput" type="checkbox">
-          Reconcile Linear in Dry Run mode (preview done updates)
-        </label>
-        <div id="linearTriggerStatus" class="validation-badge neutral" style="margin-top: 8px; white-space: pre-wrap;">Local trigger ready.</div>
-        </div>
+        <button id="saveLinearAssignmentPolicyBtn" class="btn btn-sm btn-ghost" type="button">Save assignment rule</button>
+        <div id="linearAssignmentPolicyStatus" class="validation-badge neutral">Loading assignment rule...</div>
       </div>
+
+    <div id="linearReconcileView">
+      <div class="section-container focused-operation-panel">
+        <h3>Reconcile Linear</h3>
+        <label class="focused-operation-option">
+          <input id="reconcileLinearDryRunInput" type="checkbox">
+          Preview changes without updating issues
+        </label>
+        <button id="reconcileLinearBotIssuesBtn" class="btn btn-sm" type="button">Reconcile now</button>
+        <div id="linearTriggerStatus" class="validation-badge neutral">Ready to reconcile.</div>
+      </div>
+    </div>
+
+    <div id="linearServiceView">
+      <div class="section-container focused-operation-panel">
+        <h3>Trigger Service</h3>
+        <button id="restartLinearTriggerServerBtn" class="btn btn-sm btn-ghost" type="button">Restart service</button>
+        <div id="restartLinearServiceStatus" class="validation-badge neutral">Service controls ready.</div>
+      </div>
+    </div>
 
     </div>
 
