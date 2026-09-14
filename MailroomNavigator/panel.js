@@ -95,6 +95,8 @@ const DOCKED_PANEL_TITLES = {
     practiceNavigatorView: 'Practice Navigator',
     jobManagerView: 'Job Panel',
     emailFormatterView: 'Others',
+    linearReconcileView: 'Reconcile Linear',
+    linearServiceView: 'Restart Service',
     bookmarkletToolsView: 'Bookmarklet Tools'
 };
 const DOCKED_TOOL_TITLES = {
@@ -429,6 +431,16 @@ function applyServerlessLiteModeToUi(isServerlessLiteMode) {
             : 'Create issues, trigger runs, and Slack updates.';
     }
     const linearSlackStatus = document.getElementById('linearSlackStatus');
+    const linearAssignmentPolicyPanel = document.getElementById('linearAssignmentPolicyPanel');
+    const linearAssignmentViewer = document.getElementById('linearAssignmentViewer');
+    const linearAssignmentMode = document.getElementById('linearAssignmentMode');
+    const linearAssignmentWeightedFields = document.getElementById('linearAssignmentWeightedFields');
+    const linearAssignmentOwnerWeight = document.getElementById('linearAssignmentOwnerWeight');
+    const linearAssignmentOthers = document.getElementById('linearAssignmentOthers');
+    const linearAssignmentMemberSuggestions = document.getElementById('linearAssignmentMemberSuggestions');
+    const linearAssignmentSplitPreview = document.getElementById('linearAssignmentSplitPreview');
+    const saveLinearAssignmentPolicyBtn = document.getElementById('saveLinearAssignmentPolicyBtn');
+    const linearAssignmentPolicyStatus = document.getElementById('linearAssignmentPolicyStatus');
     if (linearSlackStatus && linearSlackStatus.dataset.mode !== (isServerlessLiteMode ? 'serverless-lite' : 'full')) {
         linearSlackStatus.dataset.mode = isServerlessLiteMode ? 'serverless-lite' : 'full';
         linearSlackStatus.classList.remove('valid', 'invalid');
@@ -753,6 +765,9 @@ async function initializePanel() {
     document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView'));
     document.getElementById("emailFormatterGlobalToggleBtn")?.addEventListener("click", () => showView('emailFormatterView'));
     document.getElementById("bookmarkletToolsGlobalToggleBtn")?.addEventListener("click", () => showView('bookmarkletToolsView'));
+
+    document.getElementById('linearReconcileGlobalToggleBtn')?.addEventListener('click', () => document.getElementById('reconcileLinearBotIssuesBtn')?.click());
+    document.getElementById('linearServiceGlobalToggleBtn')?.addEventListener('click', () => document.getElementById('restartLinearTriggerServerBtn')?.click());
 
     // D. PRACTICE NAVIGATOR LOGIC
     const pInput = document.getElementById('practiceInput');
@@ -1426,28 +1441,19 @@ async function initializePanel() {
             : '';
 
         return `
-            <div class="uuid-status-card practice-status-card ${loading ? 'is-loading' : ''}">
-                <div class="uuid-status-header">
-                    <div class="practice-status-kicker">UUID Lookup</div>
-                    ${documentLink && !loading ? `<button type="button" class="practice-status-chip practice-status-chip-button is-cdb uuid-status-open-button" data-uuid-open-link="${escapeHtml(documentLink)}">Open link</button>` : ''}
+            <div class="uuid-status-card practice-status-card uuid-compact-card ${loading ? 'is-loading' : ''}" data-card-uuid="${escapeHtml(uuid)}">
+                <div class="uuid-card-topline">
+                    ${documentId && !loading
+                        ? `<button type="button" class="uuid-document-copy" data-copy-value="${escapeHtml(documentId)}" data-copy-label="Document ID" title="Copy document ID" aria-label="Copy document ID ${escapeHtml(documentId)}"><strong>${escapeHtml(documentId)}</strong></button>`
+                        : `<span class="uuid-card-title">${escapeHtml(displayTitle)}</span>`}
+                ${uuid && !loading
+                    ? `<button type="button" class="uuid-card-uuid" data-copy-value="${escapeHtml(uuid)}" data-copy-label="UUID" title="Copy UUID"><span>${escapeHtml(displaySubtitle)}</span></button>`
+                    : `<div class="uuid-card-uuid">${escapeHtml(displaySubtitle)}</div>`}
+                    ${documentLink && !loading ? `<button type="button" class="uuid-card-open" data-uuid-open-link="${escapeHtml(documentLink)}" title="Open document">Open <span aria-hidden="true">↗</span></button>` : ''}
                 </div>
-                <div class="uuid-status-main">
-                    <div class="practice-status-title">${escapeHtml(displayTitle)}</div>
-                    ${uuid && !loading
-                        ? `<button type="button" class="practice-status-subtitle uuid-status-subtitle practice-status-meta-item-button" data-copy-value="${escapeHtml(uuid)}" data-copy-label="UUID" title="Copy UUID">${escapeHtml(displaySubtitle)}</button>`
-                        : `<div class="practice-status-subtitle uuid-status-subtitle" title="${escapeHtml(uuid || 'UUID lookup')}">${escapeHtml(displaySubtitle)}</div>`}
-                </div>
-                <div class="${summaryGridClass}">
-                    <${statusTagName} class="practice-status-summary-card ${statusToneClass}${statusTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${statusInteractiveAttrs}>
-                        <span class="practice-status-summary-label">${escapeHtml(statusLabel)}</span>
-                        <span class="practice-status-summary-value">${escapeHtml(loading ? 'Loading' : prettyStatus)}</span>
-                    </${statusTagName}>
-                    ${showReason ? `
-                        <${reasonTagName} class="practice-status-summary-card ${reasonToneClass}${reasonTagName === 'button' ? ' practice-status-meta-item-button' : ''}"${reasonInteractiveAttrs}>
-                            <span class="practice-status-summary-label">${escapeHtml(reasonLabel)}</span>
-                            <span class="practice-status-summary-value">${escapeHtml(loading ? 'Checking' : (prettyReason || 'N/A'))}</span>
-                        </${reasonTagName}>
-                    ` : ''}
+                <div class="uuid-card-details">
+                    <${statusTagName} class="uuid-status-pill ${statusToneClass}"${statusInteractiveAttrs}><span class="uuid-status-dot" aria-hidden="true"></span>${escapeHtml(loading ? 'Loading' : prettyStatus)}</${statusTagName}>
+                    ${showReason ? `<${reasonTagName} class="uuid-reason-text"${reasonInteractiveAttrs}>${escapeHtml(loading ? 'Checking…' : (prettyReason || 'N/A'))}</${reasonTagName}>` : ''}
                 </div>
             </div>
         `;
@@ -1529,7 +1535,7 @@ async function initializePanel() {
                     </div>
                 `;
             }
-            return buildUuidLookupCardHtml({ ...(item?.result || {}), uuid: item?.result?.uuid || item?.uuid || '' }, { loading: false });
+            return buildUuidLookupCardHtml({ ...(item?.result || {}), uuid: item?.result?.uuid || item?.uuid || '' }, { loading: !item?.result });
         }).join('');
         sectionEl.hidden = false;
     };
@@ -3411,7 +3417,16 @@ async function initializePanel() {
 
             if (!openBookmarkletToolModal('UUID Picker')) return;
 
-            let mode = 'SQL';
+            let mode = 'UUID';
+            const visitedStorageKey = 'uuidPickerVisitedV1';
+            const savedVisits = await chrome.storage.local.get(visitedStorageKey).catch(() => ({}));
+            const processedRowIds = new Set(savedVisits[visitedStorageKey]?.copied || []);
+            const checkedRowIds = new Set(savedVisits[visitedStorageKey]?.checked || []);
+            const clearedRowIds = new Set(savedVisits[visitedStorageKey]?.cleared || []);
+            const saveVisits = () => chrome.storage.local.set({
+                [visitedStorageKey]: { copied: [...processedRowIds].slice(-1000), checked: [...checkedRowIds].slice(-1000), cleared: [...clearedRowIds].slice(-2000) }
+            }).catch(() => undefined);
+            bookmarkletToolModalBody.classList.add('uuid-workspace');
             const getDisplayValue = (item) => {
                 if (mode === 'RAW') return item.raw || item.id;
                 if (mode === 'UUID') return item.id;
@@ -3453,10 +3468,19 @@ async function initializePanel() {
 
             const toolbar = document.createElement('div');
             toolbar.className = 'bookmarklet-tool-toolbar';
-            toolbar.append(sqlBtn, rawBtn, uuidBtn, copyAllBtn, exportBtn);
+            const formatGroup = document.createElement('div');
+            formatGroup.className = 'uuid-format-group';
+            formatGroup.setAttribute('aria-label', 'Copy format');
+            formatGroup.append(uuidBtn, sqlBtn, rawBtn);
+            sqlBtn.classList.remove('active');
+            uuidBtn.classList.add('active');
+            [uuidBtn, sqlBtn, rawBtn].forEach(btn => btn.setAttribute('aria-pressed', String(btn === uuidBtn)));
+            toolbar.append(formatGroup, copyAllBtn, exportBtn);
 
             const filters = document.createElement('div');
             filters.className = 'bookmarklet-tool-filter-grid';
+            searchInput.setAttribute('aria-label', 'Search UUIDs');
+            dateInput.setAttribute('aria-label', 'Filter by date');
             filters.append(searchInput, dateInput);
 
             const lookupPanel = document.createElement('div');
@@ -3464,14 +3488,15 @@ async function initializePanel() {
 
             const lookupTitle = document.createElement('div');
             lookupTitle.className = 'uuid-picker-lookup-title';
-            lookupTitle.textContent = 'Lookup status';
+            lookupTitle.textContent = 'Check a UUID';
 
             const lookupControls = document.createElement('div');
             lookupControls.className = 'uuid-picker-lookup-controls';
 
             const lookupInput = document.createElement('input');
             lookupInput.className = 'bookmarklet-tool-input';
-            lookupInput.placeholder = 'Paste UUID or fragment to check Cloud SQL...';
+            lookupInput.placeholder = 'UUID or fragment…';
+            lookupInput.setAttribute('aria-label', 'UUID to look up');
             lookupInput.autocomplete = 'off';
 
             const lookupBtn = document.createElement('button');
@@ -3483,7 +3508,8 @@ async function initializePanel() {
 
             const lookupStatus = document.createElement('div');
             lookupStatus.className = 'validation-badge neutral uuid-picker-lookup-status';
-            lookupStatus.textContent = 'Paste a UUID or click Lookup on a row.';
+            lookupStatus.textContent = 'Check a row below, or paste a UUID here.';
+            lookupStatus.setAttribute('aria-live', 'polite');
 
             lookupPanel.append(lookupTitle, lookupControls, lookupStatus);
 
@@ -3494,29 +3520,29 @@ async function initializePanel() {
             const list = document.createElement('div');
             list.className = 'bookmarklet-tool-list';
 
-            const batchSection = document.createElement('div');
-            batchSection.className = 'uuid-batch-results-section uuid-picker-batch-results';
-            batchSection.hidden = true;
-
-            const batchHead = document.createElement('div');
-            batchHead.className = 'uuid-batch-results-head';
-
-            const batchTitle = document.createElement('span');
-            batchTitle.textContent = 'Last batch check';
-
-            const batchClearBtn = document.createElement('button');
-            batchClearBtn.type = 'button';
-            batchClearBtn.className = 'uuid-batch-results-clear-btn';
-            batchClearBtn.textContent = 'Clear';
-
-            batchHead.append(batchTitle, batchClearBtn);
-
-            const batchList = document.createElement('div');
-            batchList.className = 'uuid-picker-batch-list';
-
-            batchSection.append(batchHead, batchList);
-
-            bookmarkletToolModalBody?.append(toolbar, filters, lookupPanel, summaryChip, list, batchSection);
+            let pickerBatch = null;
+            const listHeader = document.createElement('div');
+            listHeader.className = 'uuid-list-header';
+            const resetVisitsBtn = document.createElement('button');
+            resetVisitsBtn.type = 'button';
+            resetVisitsBtn.className = 'bookmarklet-tool-btn';
+            resetVisitsBtn.title = 'Reset copied and checked marks';
+            resetVisitsBtn.setAttribute('aria-label', 'Reset copied and checked marks');
+            resetVisitsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg>';
+            const clearListBtn = document.createElement('button');
+            clearListBtn.type = 'button';
+            clearListBtn.className = 'bookmarklet-tool-btn';
+            clearListBtn.title = 'Clear all UUIDs and results';
+            clearListBtn.setAttribute('aria-label', 'Clear all UUIDs and results');
+            clearListBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
+            const listActions = document.createElement('div');
+            listActions.className = 'uuid-list-actions';
+            listActions.append(resetVisitsBtn, clearListBtn);
+            listHeader.append(summaryChip, listActions);
+            const help = document.createElement('p');
+            help.className = 'uuid-picker-hint';
+            help.textContent = 'Click a document ID or UUID to copy. Marks are saved.';
+            bookmarkletToolModalBody?.append(lookupPanel, toolbar, filters, listHeader, help, list);
 
             let rowsSourceTabId = tab.id;
             let rowsSignature = '';
@@ -3541,29 +3567,34 @@ async function initializePanel() {
                 return pickerLookupController.run({ force: true });
             };
 
+            const updatePickerBatch = (batch) => {
+                pickerBatch = batch && isUuidBatchFresh(batch) ? batch : null;
+                render();
+            };
             const loadPickerBatchResults = async () => {
-                try {
-                    const stored = await chrome.storage.local.get(UUID_BATCH_RESULTS_STORAGE_KEY);
-                    const batch = stored?.[UUID_BATCH_RESULTS_STORAGE_KEY] || null;
-                    if (batch && !isUuidBatchFresh(batch)) {
-                        await clearUuidBatchResults();
-                        hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
-                        return;
-                    }
-                    renderUuidBatchResultsFor(batch, {
-                        sectionEl: batchSection,
-                        titleEl: batchTitle,
-                        listEl: batchList
-                    });
-                } catch {
-                    hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
+                const stored = await chrome.storage.local.get(UUID_BATCH_RESULTS_STORAGE_KEY);
+                updatePickerBatch(stored?.[UUID_BATCH_RESULTS_STORAGE_KEY]);
+            };
+            const handlePickerBatchStorageChange = (changes, area) => {
+                if (area !== 'local' || !changes[UUID_BATCH_RESULTS_STORAGE_KEY]) return;
+                for (const item of changes[UUID_BATCH_RESULTS_STORAGE_KEY].newValue?.items || []) clearedRowIds.delete(item.uuid);
+                saveVisits();
+                updatePickerBatch(changes[UUID_BATCH_RESULTS_STORAGE_KEY].newValue);
+            };
+            const getCombinedRows = () => {
+                const byId = new Map(rows.map(item => [item.id, item]));
+                const combined = new Map();
+                for (const item of pickerBatch?.items || []) {
+                    combined.set(item.uuid, { ...(byId.get(item.uuid) || { id: item.uuid, raw: item.uuid, date: 'N/A' }), batchItem: item });
                 }
+                for (const item of rows) if (!combined.has(item.id)) combined.set(item.id, item);
+                return [...combined.values()].filter(item => !clearedRowIds.has(item.id));
             };
 
             const getVisibleRows = () => {
                 const query = searchInput.value.trim().toLowerCase();
                 const dateQuery = dateInput.value.trim().toLowerCase();
-                return rows.filter((item) => {
+                return getCombinedRows().filter((item) => {
                     const hay = `${item.id} ${item.raw}`.toLowerCase();
                     const dateVal = String(item.date || '').toLowerCase();
                     const matchesQuery = !query || hay.includes(query);
@@ -3578,18 +3609,49 @@ async function initializePanel() {
                 if (newMode === 'SQL') sqlBtn.classList.add('active');
                 if (newMode === 'RAW') rawBtn.classList.add('active');
                 if (newMode === 'UUID') uuidBtn.classList.add('active');
+                [uuidBtn, sqlBtn, rawBtn].forEach(btn => btn.setAttribute('aria-pressed', String(btn.classList.contains('active'))));
                 render();
             };
 
             const render = () => {
                 const visibleRows = getVisibleRows();
-                summaryChip.textContent = `Showing ${visibleRows.length} of ${rows.length} UUIDs`;
+                summaryChip.textContent = `${visibleRows.length} of ${getCombinedRows().length} UUIDs · ${getCombinedRows().filter(item => processedRowIds.has(item.id) || checkedRowIds.has(item.id)).length} marked`;
                 list.innerHTML = '';
+                if (!visibleRows.length) {
+                    const empty = document.createElement('p');
+                    empty.className = 'uuid-picker-hint';
+                    empty.textContent = 'No UUIDs to show. Run a new batch check or look up a UUID above.';
+                    list.appendChild(empty);
+                }
                 visibleRows.forEach((item) => {
+                    if (item.batchItem) {
+                        const resultRow = document.createElement('div');
+                        resultRow.className = 'uuid-result-row';
+                        resultRow.dataset.uuid = item.id;
+                        renderUuidBatchResultsFor({ checkedAt: pickerBatch.checkedAt, items: [item.batchItem] }, {
+                            sectionEl: resultRow, listEl: resultRow
+                        });
+                        if (processedRowIds.has(item.id) || checkedRowIds.has(item.id)) {
+                            resultRow.classList.add('is-processed');
+                            const badge = document.createElement('span');
+                            badge.className = 'uuid-result-mark';
+                            badge.textContent = processedRowIds.has(item.id) ? '✓ Copied' : '✓ Checked';
+                            resultRow.appendChild(badge);
+                        }
+                        list.appendChild(resultRow);
+                        return;
+                    }
                     const rowEl = document.createElement('div');
                     rowEl.className = 'bookmarklet-tool-item uuid-picker-row';
+                    rowEl.dataset.uuid = item.id;
+                    if (processedRowIds.has(item.id) || checkedRowIds.has(item.id)) {
+                        rowEl.classList.add('is-processed');
+                    }
 
-                    const rowContent = document.createElement('div');
+                    const rowContent = document.createElement('button');
+                    rowContent.type = 'button';
+                    rowContent.title = 'Copy UUID in selected format';
+                    rowContent.setAttribute('aria-label', `Copy ${item.id}`);
                     rowContent.className = 'uuid-picker-row-content';
 
                     const main = document.createElement('div');
@@ -3598,9 +3660,14 @@ async function initializePanel() {
 
                     const meta = document.createElement('div');
                     meta.className = 'bookmarklet-tool-item-meta';
-                    meta.textContent = `Date: ${item.date || 'N/A'}`;
+                    meta.textContent = item.date && item.date !== 'N/A' ? item.date : 'Click to copy';
 
-                    rowContent.append(main, meta);
+                    const processedBadge = document.createElement('span');
+                    processedBadge.className = 'uuid-picker-row-processed-badge';
+                    processedBadge.setAttribute('aria-hidden', 'true');
+                    processedBadge.textContent = processedRowIds.has(item.id) ? 'Copied' : 'Checked';
+
+                    rowContent.append(main, meta, processedBadge);
 
                     const rowLookupBtn = document.createElement('button');
                     rowLookupBtn.type = 'button';
@@ -3609,13 +3676,22 @@ async function initializePanel() {
                     rowLookupBtn.title = 'Check this UUID in Cloud SQL';
 
                     rowEl.append(rowContent, rowLookupBtn);
-                    rowEl.addEventListener('click', async () => {
+                    rowContent.addEventListener('click', async () => {
                         const copied = await copyTextToClipboard(getDisplayValue(item));
+                        if (copied) {
+                            processedRowIds.add(item.id);
+                            saveVisits();
+                            render();
+                        }
                         showToast(copied ? 'Copied.' : 'Copy failed.');
                     });
                     rowLookupBtn.addEventListener('click', (event) => {
                         event.preventDefault();
                         event.stopPropagation();
+                        checkedRowIds.add(item.id);
+                        saveVisits();
+                        render();
+                        lookupPanel.scrollIntoView({ block: 'nearest' });
                         runPickerLookup(item.id).catch(() => undefined);
                     });
                     list.appendChild(rowEl);
@@ -3653,18 +3729,51 @@ async function initializePanel() {
                 refreshRowsFromActiveTab().catch(() => undefined);
             };
 
+            clearListBtn.addEventListener('click', async () => {
+                getCombinedRows().forEach(item => clearedRowIds.add(item.id));
+                pickerBatch = null;
+                pickerLookupController.reset();
+                searchInput.value = '';
+                dateInput.value = '';
+                await saveVisits();
+                await clearUuidBatchResults();
+                render();
+                showToast('UUID list cleared. New batch checks will appear here.');
+            });
+            resetVisitsBtn.addEventListener('click', () => {
+                processedRowIds.clear();
+                checkedRowIds.clear();
+                saveVisits();
+                render();
+            });
             searchInput.addEventListener('input', render);
             dateInput.addEventListener('input', render);
             lookupInput.addEventListener('input', pickerLookupController.handleInput);
             lookupInput.addEventListener('focus', pickerLookupController.warm);
             lookupInput.addEventListener('keydown', pickerLookupController.handleKeydown);
             lookupBtn.addEventListener('click', () => pickerLookupController.run({ force: true }).catch(() => undefined));
-            lookupStatus.addEventListener('click', handleUuidCardClick);
-            batchList.addEventListener('click', handleUuidCardClick);
-            batchClearBtn.addEventListener('click', () => {
-                clearUuidBatchResults().catch(() => undefined);
-                hideUuidBatchResultsFor({ sectionEl: batchSection, listEl: batchList });
-            });
+            const handlePickerCardClick = async (event) => {
+                const target = event.target.closest('[data-copy-value]');
+                if (!target) return handleUuidCardClick(event);
+                event.preventDefault();
+                const value = target.getAttribute('data-copy-value');
+                const label = target.getAttribute('data-copy-label');
+                const uuid = target.closest('[data-card-uuid]')?.getAttribute('data-card-uuid') || value;
+                const row = getCombinedRows().find(item => item.id === uuid) || { id: uuid };
+                const copied = await copyTextToClipboard(label === 'UUID' ? getDisplayValue(row) : value);
+                if (copied) {
+                    processedRowIds.add(uuid);
+                    await saveVisits();
+                    render();
+                    const card = [...list.querySelectorAll('[data-card-uuid]')].find(el => el.getAttribute('data-card-uuid') === uuid)
+                        || target.closest('[data-card-uuid]');
+                    card?.classList.add('is-copy-confirming');
+                    window.setTimeout(() => card?.classList.remove('is-copy-confirming'), 500);
+                }
+                showToast(copied ? `${label} copied.` : 'Copy failed.');
+            };
+            lookupStatus.addEventListener('click', handlePickerCardClick);
+            list.addEventListener('click', handlePickerCardClick);
             sqlBtn.addEventListener('click', () => setMode('SQL'));
             rawBtn.addEventListener('click', () => setMode('RAW'));
             uuidBtn.addEventListener('click', () => setMode('UUID'));
@@ -3688,6 +3797,7 @@ async function initializePanel() {
             });
 
             render();
+            chrome.storage.onChanged.addListener(handlePickerBatchStorageChange);
             loadPickerBatchResults().catch(() => undefined);
             refreshTimer = window.setInterval(() => {
                 refreshRowsFromActiveTab().catch(() => undefined);
@@ -3695,6 +3805,9 @@ async function initializePanel() {
             window.addEventListener('focus', handleUuidPickerFocus);
             document.addEventListener('visibilitychange', handleUuidPickerFocus);
             bookmarkletToolModalCleanup = () => {
+                bookmarkletToolModalBody.classList.remove('uuid-workspace');
+                chrome.storage.onChanged.removeListener(handlePickerBatchStorageChange);
+                pickerLookupController.cancel();
                 if (refreshTimer !== null) {
                     window.clearInterval(refreshTimer);
                     refreshTimer = null;
@@ -4465,13 +4578,21 @@ async function initializePanel() {
         throw lastError || new Error('Local trigger service did not come back online.');
     };
 
+    const setRestartLinearServiceStatus = (message, tone = 'neutral') => {
+        const status = document.getElementById('restartLinearServiceStatus');
+        if (!status) return;
+        status.textContent = message;
+        status.classList.remove('neutral', 'valid', 'invalid');
+        status.classList.add(tone);
+    };
+
     const restartLinearTriggerService = async () => {
         try {
             dismissedLinearTriggerRunId = '';
             clearLinearTriggerStatusAutoClearTimer();
             setRestartLinearTriggerServerButtonState(true);
             setLinearTriggerButtonState('idle');
-            setLinearTriggerStatus('Requesting local trigger service restart…', 'neutral');
+            setRestartLinearServiceStatus('Requesting local trigger service restart…', 'neutral');
 
             const response = await chrome.runtime.sendMessage({
                 action: 'restartLinearTriggerServer'
@@ -4481,18 +4602,18 @@ async function initializePanel() {
                 throw new Error(trimField(response?.error, 260) || 'Could not restart local trigger service.');
             }
 
-            setLinearTriggerStatus(
+            setRestartLinearServiceStatus(
                 trimField(response?.message, 240) || 'Restart requested. Waiting for the local trigger service to come back…',
                 'neutral'
             );
 
             await waitForMs(1200);
             await waitForLinearTriggerServiceReady();
-            setLinearTriggerStatus('Local trigger service restarted.', 'valid');
+            setRestartLinearServiceStatus('Local trigger service restarted.', 'valid');
             showToast('Trigger service restarted.');
         } catch (error) {
             const message = trimField(error?.message, 260) || 'Could not restart local trigger service.';
-            setLinearTriggerStatus(message, 'invalid');
+            setRestartLinearServiceStatus(message, 'invalid');
             showToast(message);
         } finally {
             setRestartLinearTriggerServerButtonState(false);
@@ -4817,6 +4938,66 @@ async function initializePanel() {
         }
     };
 
+    const parseAssignmentEmails = () => [...new Set(String(linearAssignmentOthers?.value || '')
+        .split(/[\s,;]+/)
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean))];
+
+    const updateLinearAssignmentPolicyUi = () => {
+        const weighted = linearAssignmentMode?.value === 'weighted';
+        if (linearAssignmentWeightedFields) linearAssignmentWeightedFields.hidden = !weighted;
+        if (!weighted || !linearAssignmentSplitPreview) return;
+        const myShare = Math.min(100, Math.max(0, Number.parseInt(linearAssignmentOwnerWeight?.value || '0', 10) || 0));
+        const others = parseAssignmentEmails();
+        const colleagueShare = others.length > 0 ? (100 - myShare) / others.length : 0;
+        linearAssignmentSplitPreview.textContent = others.length > 0
+            ? `You ${myShare}% · ${others.length} colleague${others.length === 1 ? '' : 's'} ${colleagueShare.toFixed(colleagueShare % 1 ? 1 : 0)}% each`
+            : `You ${myShare}% · add colleagues for the remaining ${100 - myShare}%`;
+    };
+
+    const loadLinearAssignmentPolicy = async () => {
+        const response = await chrome.runtime.sendMessage({ action: 'getLinearAssignmentPolicy' });
+        if (!response?.success || !response?.canManage) {
+            if (linearAssignmentPolicyPanel) linearAssignmentPolicyPanel.hidden = true;
+            return;
+        }
+        linearAssignmentPolicyPanel.hidden = false;
+        if (linearAssignmentViewer) linearAssignmentViewer.textContent = response?.viewer?.name || response?.viewer?.email || '';
+        if (linearAssignmentMode) linearAssignmentMode.value = response?.policy?.mode || 'creator';
+        if (linearAssignmentOwnerWeight) linearAssignmentOwnerWeight.value = String(response?.policy?.ownerWeight ?? 10);
+        if (linearAssignmentOthers) linearAssignmentOthers.value = (response?.policy?.otherEmails || []).join(', ');
+        if (linearAssignmentMemberSuggestions) {
+            linearAssignmentMemberSuggestions.replaceChildren(...(response?.members || []).map((member) => {
+                const option = document.createElement('option');
+                option.value = member.email || '';
+                option.label = member.name || member.email || '';
+                return option;
+            }));
+        }
+        if (linearAssignmentPolicyStatus) linearAssignmentPolicyStatus.textContent = 'This rule applies to every newly created issue.';
+        updateLinearAssignmentPolicyUi();
+    };
+
+    const saveLinearAssignmentPolicy = async () => {
+        const payload = {
+            mode: linearAssignmentMode?.value || 'creator',
+            ownerWeight: Number.parseInt(linearAssignmentOwnerWeight?.value || '0', 10) || 0,
+            otherEmails: parseAssignmentEmails()
+        };
+        if (saveLinearAssignmentPolicyBtn) saveLinearAssignmentPolicyBtn.disabled = true;
+        if (linearAssignmentPolicyStatus) linearAssignmentPolicyStatus.textContent = 'Saving assignment rule...';
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'setLinearAssignmentPolicy', payload });
+            if (!response?.success) throw new Error(response?.error || 'Could not save assignment rule.');
+            if (linearAssignmentPolicyStatus) linearAssignmentPolicyStatus.textContent = 'Assignment rule saved.';
+            showToast('Assignment rule saved.');
+        } catch (error) {
+            if (linearAssignmentPolicyStatus) linearAssignmentPolicyStatus.textContent = trimField(error?.message, 260) || 'Could not save assignment rule.';
+        } finally {
+            if (saveLinearAssignmentPolicyBtn) saveLinearAssignmentPolicyBtn.disabled = false;
+        }
+    };
+
     const formatEta = (ms) => {
         if (!Number.isFinite(ms) || ms <= 0) return '—';
         const seconds = Math.ceil(ms / 1000);
@@ -5092,6 +5273,9 @@ ${error?.message || String(error)}`, 'invalid');
         await loadSlackTargetCache();
     }
     await loadLinearSlackPrefs();
+    loadLinearAssignmentPolicy().catch(() => {
+        if (linearAssignmentPolicyPanel) linearAssignmentPolicyPanel.hidden = true;
+    });
     if (linearSlackNotifyEnabledInput?.checked) {
         maybeWarmSlackTargetSuggestions().catch(() => undefined);
     }
@@ -5126,6 +5310,10 @@ ${error?.message || String(error)}`, 'invalid');
     linearIssueSourceInput?.addEventListener('input', () => {
         linearIssueContext = null;
     });
+    linearAssignmentMode?.addEventListener('change', updateLinearAssignmentPolicyUi);
+    linearAssignmentOwnerWeight?.addEventListener('input', updateLinearAssignmentPolicyUi);
+    linearAssignmentOthers?.addEventListener('input', updateLinearAssignmentPolicyUi);
+    saveLinearAssignmentPolicyBtn?.addEventListener('click', () => saveLinearAssignmentPolicy());
 
     syncLinearSlackWorkspaceBtn?.addEventListener('click', () => {
         syncSlackWorkspaceTargets({ force: true }).catch(() => undefined);
@@ -5187,7 +5375,7 @@ ${error?.message || String(error)}`, 'invalid');
     });
     restartLinearTriggerServerBtn?.addEventListener('click', () => {
         restartLinearTriggerService().catch(() => {
-            setLinearTriggerStatus('Could not restart local trigger service.', 'invalid');
+            setRestartLinearServiceStatus('Could not restart local trigger service.', 'invalid');
             showToast('Could not restart local trigger service.');
         });
     });

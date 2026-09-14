@@ -44,6 +44,7 @@ cp .env.example .env
 
 2. Edit `.env` and provide real values:
    - `LINEAR_API_KEY`, `LINEAR_TEAM_KEY` (for extension "Create Linear Issue")
+   - `LINEAR_ASSIGNMENT_ADMIN_EMAIL` (optional; defaults to `nur.siddique@dyad.net`) controls which Linear account can edit issue assignment rules
    - `SLACK_BOT_TOKEN` (only if you want Slack sync from the Linear Issue panel)
    - optional Cloud SQL UUID lookup settings:
      - `MAILROOMNAV_SQL_HOST`
@@ -123,6 +124,8 @@ For scheduled runs:
 ## 5. Trigger Linear + Linear Issue Requirements
 
 Both the `Trigger Linear` button and `Create Linear Issue` button call a localhost service on `127.0.0.1:4817`.
+
+New Linear issues default to the Linear user who owns that machine's `LINEAR_API_KEY`. The assignment administrator can open **Others > Linear Issue** and switch this to weighted distribution or leave new issues unassigned in Triage. Weighted distribution uses smooth round-robin allocation, so the configured percentages converge accurately over a sequence of issues rather than relying on random selection.
 
 Required local setup:
 

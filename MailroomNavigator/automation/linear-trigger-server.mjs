@@ -900,6 +900,115 @@ function sanitizeLinearIssuePayload(rawPayload = {}) {
   };
 }
 
+const LINEAR_ASSIGNMENT_POLICY_PATH = join(STATE_DIR, "linear-assignment-policy.json");
+const LINEAR_ASSIGNMENT_STATE_PATH = join(STATE_DIR, "linear-assignment-state.json");
+const LINEAR_ASSIGNMENT_ADMIN_EMAIL = sanitizeSingleLine(
+  process.env.LINEAR_ASSIGNMENT_ADMIN_EMAIL || "nur.siddique@dyad.net",
+  240,
+).toLowerCase();
+
+function normalizeLinearAssignmentMode(value) {
+  const mode = String(value || "").toLowerCase();
+  return ["creator", "weighted", "unassigned"].includes(mode) ? mode : "creator";
+}
+
+function sanitizeLinearAssignmentPolicy(raw = {}) {
+  const otherEmails = [...new Set((Array.isArray(raw.otherEmails) ? raw.otherEmails : [])
+    .map((email) => sanitizeSingleLine(email, 240).toLowerCase())
+    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))]
+    .slice(0, 20);
+  const parsedWeight = Number.parseInt(String(raw.ownerWeight ?? "10"), 10);
+  const ownerWeight = Math.min(100, Math.max(0, Number.isFinite(parsedWeight) ? parsedWeight : 10));
+  return { mode: normalizeLinearAssignmentMode(raw.mode), ownerWeight, otherEmails };
+}
+
+async function readLinearAssignmentPolicy() {
+  try {
+    const raw = await readFile(LINEAR_ASSIGNMENT_POLICY_PATH, "utf8");
+    return sanitizeLinearAssignmentPolicy(raw.trim() ? JSON.parse(raw) : {});
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return sanitizeLinearAssignmentPolicy({ mode: "creator" });
+  }
+}
+
+async function writeLinearAssignmentPolicy(policy) {
+  await mkdir(dirname(LINEAR_ASSIGNMENT_POLICY_PATH), { recursive: true });
+  await writeFile(LINEAR_ASSIGNMENT_POLICY_PATH, `${JSON.stringify(policy, null, 2)}\n`, "utf8");
+}
+
+async function resolveLinearViewer() {
+  const data = await runLinearGraphqlRequest(`query AssignmentViewer { viewer { id name email active } }`);
+  const viewer = data?.viewer;
+  if (!viewer?.id) throw new Error("Could not identify the current Linear user.");
+  return {
+    id: sanitizeSingleLine(viewer.id, 80),
+    name: sanitizeSingleLine(viewer.name, 160),
+    email: sanitizeSingleLine(viewer.email, 240).toLowerCase(),
+    active: viewer.active !== false,
+  };
+}
+
+async function listLinearAssignmentMembers() {
+  const data = await runLinearGraphqlRequest(`query AssignmentMembers { users(first: 250) { nodes { id name email active } } }`);
+  return (Array.isArray(data?.users?.nodes) ? data.users.nodes : [])
+    .filter((user) => user?.id && user?.active !== false)
+    .map((user) => ({
+      id: sanitizeSingleLine(user.id, 80),
+      name: sanitizeSingleLine(user.name, 160),
+      email: sanitizeSingleLine(user.email, 240).toLowerCase(),
+    }))
+    .filter((user) => user.email);
+}
+
+async function getLinearAssignmentPolicyPublic() {
+  const [policy, viewer] = await Promise.all([readLinearAssignmentPolicy(), resolveLinearViewer()]);
+  const canManage = Boolean(LINEAR_ASSIGNMENT_ADMIN_EMAIL && viewer.email === LINEAR_ASSIGNMENT_ADMIN_EMAIL);
+  return { policy, viewer, canManage, members: canManage ? await listLinearAssignmentMembers() : [] };
+}
+
+async function resolveLinearIssueAssignee() {
+  const policy = await readLinearAssignmentPolicy();
+  if (policy.mode === "unassigned") return null;
+  const viewer = await resolveLinearViewer();
+  if (policy.mode === "creator") return viewer;
+
+  const members = await listLinearAssignmentMembers();
+  const byEmail = new Map(members.map((member) => [member.email, member]));
+  const candidates = [];
+  if (policy.ownerWeight > 0) candidates.push({ ...viewer, weight: policy.ownerWeight });
+  const remainingWeight = 100 - policy.ownerWeight;
+  if (remainingWeight > 0 && policy.otherEmails.length > 0) {
+    const eachWeight = remainingWeight / policy.otherEmails.length;
+    for (const email of policy.otherEmails) {
+      const member = byEmail.get(email);
+      if (member) candidates.push({ ...member, weight: eachWeight });
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  let state = { current: {} };
+  try {
+    const raw = await readFile(LINEAR_ASSIGNMENT_STATE_PATH, "utf8");
+    state = raw.trim() ? JSON.parse(raw) : state;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  if (!state.current || typeof state.current !== "object") state.current = {};
+  const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+  for (const candidate of candidates) {
+    state.current[candidate.id] = (Number(state.current[candidate.id]) || 0) + candidate.weight;
+  }
+  let winner = candidates[0];
+  for (const candidate of candidates) {
+    if (state.current[candidate.id] > state.current[winner.id]) winner = candidate;
+  }
+  state.current[winner.id] -= totalWeight;
+  await mkdir(dirname(LINEAR_ASSIGNMENT_STATE_PATH), { recursive: true });
+  await writeFile(LINEAR_ASSIGNMENT_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  return winner;
+}
+
 function isDocumentOptionalLinearIssuePayload(payload) {
   const normalizedTitle = sanitizeSingleLine(payload?.title, 240);
   const failedJobId = sanitizeSingleLine(payload?.failedJobId, 120);
@@ -1194,82 +1303,6 @@ const BOT_JOB_TITLE_PREFIX = "Bot Job Error:";
 const BOT_JOB_SPIKE_TITLE_PREFIX = "Bot Job Spike:";
 const PRACTICE_SUPPORT_TITLE_PREFIX = "Practice Support Ticket:";
 const MAILROOM_REJECTED_TITLE_PREFIX = "Mailroom Rejected:";
-
-// New issues created via the bulk "Create Issue" action (payload.bulk) or as
-// a combined Bot Job Spike issue - not reopened duplicates, and not issues
-// created one at a time via a single-row button - get auto-assigned between
-// these two on a running 60/40 split. See pickNextBotJobBulkAssignee.
-const BOT_JOB_BULK_ASSIGNEES = [
-  { id: "08fbc9ef-b958-406b-b7be-fb956452f18b", name: "Nur Siddique", weight: 60 },
-  { id: "f2e5964e-f773-40e5-aada-5d05ea6d885e", name: "Abby Buckley", weight: 40 },
-];
-const BOT_JOB_BULK_ASSIGNMENT_STATE_PATH = join(STATE_DIR, "bot-job-bulk-assignment-state.json");
-
-async function readBotJobBulkAssignmentState() {
-  const current = {};
-  for (const candidate of BOT_JOB_BULK_ASSIGNEES) current[candidate.id] = 0;
-
-  try {
-    const raw = await readFile(BOT_JOB_BULK_ASSIGNMENT_STATE_PATH, "utf8");
-    const parsed = raw.trim() ? JSON.parse(raw) : {};
-    for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
-      const stored = Number(parsed?.current?.[candidate.id]);
-      if (Number.isFinite(stored)) current[candidate.id] = stored;
-    }
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      await appendServerLog(
-        `[${nowIso()}] bot job spike assignment state read failed, restarting from even split: ${sanitizeSingleLine(error?.message, 200)}`,
-      ).catch(() => undefined);
-    }
-  }
-
-  return { current };
-}
-
-async function writeBotJobBulkAssignmentState(state) {
-  await mkdir(dirname(BOT_JOB_BULK_ASSIGNMENT_STATE_PATH), { recursive: true });
-  await writeFile(
-    BOT_JOB_BULK_ASSIGNMENT_STATE_PATH,
-    `${JSON.stringify(state, null, 2)}\n`,
-    "utf8",
-  );
-}
-
-// Smooth weighted round-robin (the same algorithm nginx uses for weighted
-// load balancing): each candidate's running "current" value increases by its
-// own weight every pick, the highest current wins, and the winner's current
-// then drops by the total weight. This converges on the exact target ratio
-// over time instead of drifting the way an independent random 60/40 coin
-// flip per issue would (a short run of spikes could otherwise land on the
-// same person several times in a row purely by chance).
-async function pickNextBotJobBulkAssignee() {
-  const totalWeight = BOT_JOB_BULK_ASSIGNEES.reduce((sum, candidate) => sum + candidate.weight, 0);
-  const state = await readBotJobBulkAssignmentState();
-  const current = { ...state.current };
-
-  for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
-    current[candidate.id] = (Number(current[candidate.id]) || 0) + candidate.weight;
-  }
-
-  let winner = BOT_JOB_BULK_ASSIGNEES[0];
-  for (const candidate of BOT_JOB_BULK_ASSIGNEES) {
-    if ((current[candidate.id] || 0) > (current[winner.id] || 0)) winner = candidate;
-  }
-
-  current[winner.id] = (current[winner.id] || 0) - totalWeight;
-
-  await writeBotJobBulkAssignmentState({ current }).catch((error) => {
-    // Non-fatal: worst case the next pick recomputes from a stale/reset
-    // state and briefly drifts from the exact 60/40 target, rather than
-    // blocking issue creation over a state-file write failure.
-    appendServerLog(
-      `[${nowIso()}] bot job spike assignment state write failed: ${sanitizeSingleLine(error?.message, 200)}`,
-    ).catch(() => undefined);
-  });
-
-  return winner;
-}
 
 function normalizeIssueText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -1899,13 +1932,9 @@ async function createLinearIssue(payload) {
     const labelIds = await resolveLinearLabelIds(payload.labels);
     if (labelIds.length > 0) issueInput.labelIds = labelIds;
   }
-  const isBulkCreatedIssue = payload?.bulk === true
-    || sanitizeSingleLine(payload?.title, 240).toLowerCase().startsWith(BOT_JOB_SPIKE_TITLE_PREFIX.toLowerCase());
-  if (isBulkCreatedIssue) {
-    const assignee = await pickNextBotJobBulkAssignee().catch(() => null);
-    if (assignee?.id) {
-      issueInput.assigneeId = assignee.id;
-    }
+  const assignee = await resolveLinearIssueAssignee();
+  if (assignee?.id) {
+    issueInput.assigneeId = assignee.id;
   }
 
   const mutation = `
@@ -2040,6 +2069,153 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
   }
 
   const runPromise = (async () => {
+    // Dashboard errors contain the bot job's complete UUID. Resolve that
+    // indexed primary key first so the common path does not scan every
+    // document filename (the fallback query below intentionally supports
+    // partial UUID fragments and is therefore more expensive).
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizedUuid)) {
+      const exactBotJobQuery = `
+        SELECT
+          d.id AS document_id,
+          SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
+          d.input_file_name,
+          d.status AS document_status,
+          CONCAT('https://app.betterletter.ai/mailroom/annotations/', d.id) AS document_link,
+          bj.id::text AS bot_job_id,
+          bj.type::text AS bot_job_type,
+          bj.status::text AS bot_job_status,
+          bj.status_reason::text AS bot_job_status_reason,
+          NULL::text AS rejection_id,
+          NULL::text AS rejection_reason,
+          NULL::text AS rejection_marked_by,
+          NULL::text AS rejection_processing_status,
+          'Exact bot job UUID match'::text AS match_type
+        FROM bot_jobs bj
+        LEFT JOIN documents d
+          ON d.id = bj.document_id
+        WHERE bj.id = $1::uuid
+        LIMIT 1
+      `;
+      const exactResult = await runSqlQueryWithConnectionRetry(exactBotJobQuery, [normalizedUuid], {
+        timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS,
+        attempts: 2,
+      });
+      const exactMatch = sanitizeUuidLookupRow(exactResult?.rows?.[0] || {});
+      if (exactMatch.botJobId) {
+        const lookup = {
+          uuid: normalizedUuid,
+          found: true,
+          source: "cloud_sql",
+          status: exactMatch.status || exactMatch.botJobStatus,
+          detail: `Bot job ${exactMatch.botJobType || exactMatch.botJobId} -> ${exactMatch.inputFileName || exactMatch.botJobStatus || exactMatch.matchType}`,
+          documentId: exactMatch.documentId,
+          documentLink: exactMatch.documentLink,
+          rejectionReason: exactMatch.rejectionReason,
+          matchedUuid: exactMatch.matchedUuid,
+          inputFileName: exactMatch.inputFileName,
+          botJobId: exactMatch.botJobId,
+          botJobType: exactMatch.botJobType,
+          botJobStatus: exactMatch.botJobStatus,
+          botJobStatusReason: exactMatch.botJobStatusReason,
+          rejectionId: exactMatch.rejectionId,
+          rejectionMarkedBy: exactMatch.rejectionMarkedBy,
+          rejectionProcessingStatus: exactMatch.rejectionProcessingStatus,
+          matchType: exactMatch.matchType,
+          matches: [exactMatch],
+          checkedAt: nowIso(),
+          matchedStatusPath: "cloud_sql.bot_jobs.id -> documents.status",
+        };
+        rememberUuidLookup(normalizedUuid, lookup);
+        return lookup;
+      }
+
+      // Validation errors commonly contain the document's source filename
+      // UUID rather than the bot job ID. Restrict this full-UUID lookup to a
+      // filename prefix (UUID + extension) before using the broad fragment
+      // fallback. The production replica has no input_file_name index, but
+      // this anchored scan is substantially cheaper than `%fragment%`.
+      const exactDocumentQuery = `
+        SELECT
+          d.id AS document_id,
+          SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
+          d.input_file_name,
+          d.status AS document_status,
+          CONCAT('https://app.betterletter.ai/mailroom/annotations/', d.id) AS document_link,
+          NULL::text AS bot_job_id,
+          NULL::text AS bot_job_type,
+          NULL::text AS bot_job_status,
+          NULL::text AS bot_job_status_reason,
+          dr.id AS rejection_id,
+          dr.rejection_reason,
+          drv.origin->>'user' AS rejection_marked_by,
+          drv.changes->>'processing_status' AS rejection_processing_status,
+          'Exact document UUID match'::text AS match_type
+        FROM documents d
+        LEFT JOIN document_rejections dr
+          ON dr.mailroom_document_id = d.id
+        LEFT JOIN LATERAL (
+          SELECT version.origin, version.changes
+          FROM document_rejections_versions version
+          WHERE version.mailroom_document_id = d.id
+            AND version.changes->>'processing_status' = 'done'
+          ORDER BY version.id DESC
+          LIMIT 1
+        ) drv ON TRUE
+        WHERE d.input_file_name = $1
+          OR d.input_file_name LIKE $1 || '.%'
+        ORDER BY d.id DESC
+        LIMIT 1
+      `;
+      const exactDocumentResult = await runSqlQueryWithConnectionRetry(exactDocumentQuery, [normalizedUuid], {
+        timeoutMs: SQL_UUID_LOOKUP_TIMEOUT_MS,
+        attempts: 2,
+      });
+      const exactDocumentMatch = sanitizeUuidLookupRow(exactDocumentResult?.rows?.[0] || {});
+      if (exactDocumentMatch.documentId) {
+        const lookup = {
+          uuid: normalizedUuid,
+          found: true,
+          source: "cloud_sql",
+          status: exactDocumentMatch.status,
+          detail: exactDocumentMatch.inputFileName || exactDocumentMatch.matchType,
+          documentId: exactDocumentMatch.documentId,
+          documentLink: exactDocumentMatch.documentLink,
+          rejectionReason: exactDocumentMatch.rejectionReason,
+          matchedUuid: exactDocumentMatch.matchedUuid,
+          inputFileName: exactDocumentMatch.inputFileName,
+          botJobId: "",
+          botJobType: "",
+          botJobStatus: "",
+          botJobStatusReason: "",
+          rejectionId: exactDocumentMatch.rejectionId,
+          rejectionMarkedBy: exactDocumentMatch.rejectionMarkedBy,
+          rejectionProcessingStatus: exactDocumentMatch.rejectionProcessingStatus,
+          matchType: exactDocumentMatch.matchType,
+          matches: [exactDocumentMatch],
+          checkedAt: nowIso(),
+          matchedStatusPath: "cloud_sql.documents.input_file_name -> documents.status",
+        };
+        rememberUuidLookup(normalizedUuid, lookup);
+        return lookup;
+      }
+
+      const notFoundLookup = {
+        uuid: normalizedUuid,
+        found: false,
+        source: "cloud_sql",
+        status: "",
+        detail: `No document or bot job found for UUID ${normalizedUuid}.`,
+        documentId: "",
+        documentLink: "",
+        rejectionReason: "",
+        matches: [],
+        checkedAt: nowIso(),
+        matchedStatusPath: "cloud_sql.documents.input_file_name + cloud_sql.bot_jobs.id",
+      };
+      rememberUuidLookup(normalizedUuid, notFoundLookup);
+      return notFoundLookup;
+    }
+
     const query = `
       WITH search_input AS (
         SELECT TRIM(
@@ -2817,6 +2993,7 @@ function summarizeBotJobsReport(report) {
 
 const SQL_RECONCILE_PRACTICE_MATCH_JOB_TYPES = new Set([
   "docman_import",
+  "docman_password_update",
   "docman_validate",
 ]);
 const SQL_RECONCILE_DOC_MATCH_JOB_TYPES = new Set([
@@ -2839,6 +3016,7 @@ function normalizeSqlReconcileJobType(value) {
   const normalized = sanitizeSingleLine(value, 120).toLowerCase();
   if (!normalized) return "";
   if (normalized.includes("docman_validate") || normalized.includes("validatejob.create")) return "docman_validate";
+  if (normalized === "password_update" || normalized.includes("docman_password_update")) return "docman_password_update";
   if (normalized.includes("docman_import")) return "docman_import";
   return normalized;
 }
@@ -4300,6 +4478,36 @@ const server = createServer(async (req, res) => {
         database: getSqlPublicConfig(),
         serverTime: nowIso(),
       });
+      return;
+    }
+
+    if (method === "GET" && path === "/linear/assignment-policy") {
+      sendJson(res, 200, origin, { ok: true, ...await getLinearAssignmentPolicyPublic() });
+      return;
+    }
+
+    if (method === "PUT" && path === "/linear/assignment-policy") {
+      const viewer = await resolveLinearViewer();
+      if (!LINEAR_ASSIGNMENT_ADMIN_EMAIL || viewer.email !== LINEAR_ASSIGNMENT_ADMIN_EMAIL) {
+        sendJson(res, 403, origin, { ok: false, error: "Only the assignment administrator can change this policy." });
+        return;
+      }
+      const policy = sanitizeLinearAssignmentPolicy(await parseJsonBody(req).catch(() => ({})));
+      if (policy.mode === "weighted") {
+        if (policy.otherEmails.length === 0 && policy.ownerWeight < 100) {
+          sendJson(res, 400, origin, { ok: false, error: "Add at least one colleague for the remaining share." });
+          return;
+        }
+        const members = await listLinearAssignmentMembers();
+        const memberEmails = new Set(members.map((member) => member.email));
+        const unknownEmails = policy.otherEmails.filter((email) => !memberEmails.has(email));
+        if (unknownEmails.length > 0) {
+          sendJson(res, 400, origin, { ok: false, error: `Not an active Linear member: ${unknownEmails.join(", ")}` });
+          return;
+        }
+      }
+      await writeLinearAssignmentPolicy(policy);
+      sendJson(res, 200, origin, { ok: true, policy, viewer, canManage: true });
       return;
     }
 

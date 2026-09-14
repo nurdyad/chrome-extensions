@@ -724,6 +724,34 @@ async function handleCreateLinearIssueFromEnv(rawPayload, sender = null) {
     }
 }
 
+async function handleGetLinearAssignmentPolicy() {
+    try {
+        const { response, payload } = await callLinearTriggerServer('/linear/assignment-policy', { method: 'GET' });
+        if (!response.ok || !payload?.ok) throw new Error(payload?.error || `Trigger service failed with status ${response.status}.`);
+        return { success: true, ...payload };
+    } catch (error) {
+        return { success: false, error: normalizeLinearTriggerError(error) };
+    }
+}
+
+async function handleSetLinearAssignmentPolicy(rawPolicy) {
+    try {
+        const mode = ['creator', 'weighted', 'unassigned'].includes(String(rawPolicy?.mode || '').toLowerCase())
+            ? String(rawPolicy.mode).toLowerCase()
+            : 'creator';
+        const ownerWeight = Math.min(100, Math.max(0, Number.parseInt(String(rawPolicy?.ownerWeight ?? '10'), 10) || 0));
+        const otherEmails = [...new Set((Array.isArray(rawPolicy?.otherEmails) ? rawPolicy.otherEmails : [])
+            .map(normalizeEmail).filter(Boolean))].slice(0, 20);
+        const { response, payload } = await callLinearTriggerServer('/linear/assignment-policy', {
+            method: 'PUT', body: { mode, ownerWeight, otherEmails }
+        });
+        if (!response.ok || !payload?.ok) throw new Error(payload?.error || `Trigger service failed with status ${response.status}.`);
+        return { success: true, ...payload };
+    } catch (error) {
+        return { success: false, error: normalizeLinearTriggerError(error) };
+    }
+}
+
 async function handleSyncLinearSlackWorkspaceTargets(rawOptions = null) {
     if (isServerlessLiteModeEnabled()) {
         return buildServerlessLiteUnsupportedResponse(
@@ -3919,6 +3947,8 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 { key: 'navigator', view: 'practiceNavigatorView', label: 'Navigator', color: '#3b82f6' },
                 { key: 'jobmanager', view: 'jobManagerView', label: 'Job Panel', color: '#10b981' },
                 { key: 'others', view: 'emailFormatterView', label: 'Others', color: '#9b59b6' },
+                { key: 'reconcile', action: 'triggerLinearReconcileRun', label: 'Reconcile', color: '#0891b2' },
+                { key: 'service', action: 'restartLinearTriggerServer', label: 'Restart Service', color: '#dc2626' },
                 // UUID Picker is used often enough on its own to warrant a
                 // dedicated handle that opens straight to it (?tool= tells
                 // panel.js to trigger that tool's modal immediately instead
@@ -3945,7 +3975,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '21';
+            const UI_VERSION = '23';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4283,7 +4313,8 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 return dock;
             };
 
-            const mountOne = ({ key, view, tool, label }) => {
+            const mountOne = ({ key, view, tool, label, action }) => {
+                if (action) return;
                 const rootId = rootIdFor(key);
                 const existingPanel = document.getElementById(rootId);
                 if (existingPanel) {
@@ -4341,7 +4372,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 });
                 rail.appendChild(collapseButton);
 
-                getOrderedViews().forEach(({ key, view, tool, label, color }) => {
+                getOrderedViews().forEach(({ key, view, tool, label, color, action }) => {
                     const toggleButton = document.createElement('button');
                     toggleButton.type = 'button';
                     toggleButton.className = 'bl-sidebar-toggle';
@@ -4365,6 +4396,24 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             return;
                         }
                         spawnRipple(toggleButton, event);
+                        if (action) {
+                            toggleButton.disabled = true;
+                            labelSpan.textContent = action === 'triggerLinearReconcileRun' ? 'Reconciling…' : 'Restarting…';
+                            chrome.runtime.sendMessage({ action, payload: { dryRun: false } }).then(response => {
+                                if (!response?.success) throw new Error(response?.error || 'Action failed');
+                                labelSpan.textContent = '✓ Requested';
+                                toggleButton.title = 'Request accepted. See Others for controls and status.';
+                            }).catch(error => {
+                                labelSpan.textContent = '⚠ Failed';
+                                toggleButton.title = String(error?.message || error);
+                            }).finally(() => {
+                                window.setTimeout(() => {
+                                    toggleButton.disabled = false;
+                                    labelSpan.textContent = label;
+                                }, 3000);
+                            });
+                            return;
+                        }
                         const panelEl = document.getElementById(rootIdFor(key));
                         if (!panelEl) return;
                         const willExpand = panelEl.classList.contains('collapsed');
@@ -4646,6 +4695,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         if (message.action === 'setTriggerServerSecret') {
             return await handleSetTriggerServerSecret(message.payload);
+        }
+
+        if (message.action === 'getLinearAssignmentPolicy') {
+            return await handleGetLinearAssignmentPolicy();
+        }
+
+        if (message.action === 'setLinearAssignmentPolicy') {
+            return await handleSetLinearAssignmentPolicy(message.payload);
         }
 
         if (CACHE_REQUIRED_ACTIONS.has(message?.action)) {
