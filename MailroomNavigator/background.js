@@ -3929,7 +3929,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
     const isDarkModeEnabled = await getStoredDarkModePreference();
     await chrome.scripting.executeScript({
         target: { tabId },
-        func: (panelUrl, hostTabId, shouldForceCollapsed, storedIsDark) => {
+        func: (panelUrl, hostTabId, shouldForceCollapsed, storedIsDark, fullSidebarCollapse) => {
             // storedIsDark is null when the user hasn't explicitly chosen a
             // mode yet - fall back to the OS/Chrome theme so a fresh install
             // (or a browser already running in dark mode) starts out dark
@@ -3975,7 +3975,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '25';
+            const UI_VERSION = '26';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4037,6 +4037,23 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                     const button = rail.querySelector(`[data-key="${key}"]`);
                     if (button) button.classList.toggle('is-open', isOpen);
                 });
+            };
+            const SIDEBAR_HIDDEN_KEY = '__BL_SIDEBAR_HIDDEN_V1__';
+            const setSidebarHidden = (hidden, { persist = true } = {}) => {
+                const dock = document.getElementById(DOCK_ID);
+                if (!dock) return;
+                const resolvedHidden = Boolean(fullSidebarCollapse && hidden);
+                dock.classList.toggle('bl-sidebar-hidden', resolvedHidden);
+                const button = dock.querySelector('[data-role="collapse"]');
+                if (button && fullSidebarCollapse) {
+                    button.title = resolvedHidden ? 'Expand sidebar' : 'Collapse sidebar';
+                    button.setAttribute('aria-label', button.title);
+                    button.setAttribute('aria-expanded', String(!resolvedHidden));
+                    button.innerHTML = railIcon(resolvedHidden ? 'expand' : 'close');
+                }
+                if (persist && fullSidebarCollapse) {
+                    try { window.sessionStorage.setItem(SIDEBAR_HIDDEN_KEY, String(resolvedHidden)); } catch { /* In-memory toggle still works. */ }
+                }
             };
             const collapseAllPanels = () => {
                 getOrderedViews().forEach(({ key }) => {
@@ -4225,6 +4242,27 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                         @media (prefers-reduced-motion: reduce) {
                             .bl-sidebar-icon-toggle[aria-busy="true"] svg { animation: none; }
                         }
+                        #${DOCK_ID}.bl-sidebar-hidden > .bl-allinone-sidebar-root,
+                        #${DOCK_ID}.bl-sidebar-hidden .bl-allinone-handle-rail > :not([data-role="collapse"]) {
+                            display: none !important;
+                        }
+                        #${DOCK_ID}.bl-sidebar-hidden [data-role="collapse"] {
+                            background: #eef2ff;
+                            color: #4f46e5;
+                            border-color: #c7d2fe;
+                            box-shadow: 0 3px 12px rgba(79,70,229,.16);
+                            margin-bottom: 0;
+                        }
+                        #${DOCK_ID}.bl-dark.bl-sidebar-hidden [data-role="collapse"] {
+                            background: #312e81;
+                            color: #e0e7ff;
+                            border-color: #6366f1;
+                        }
+                        @media (prefers-reduced-motion: reduce) {
+                            #${DOCK_ID} .bl-sidebar-toggle,
+                            #${DOCK_ID} .bl-allinone-sidebar-root { transition: none; }
+                            #${DOCK_ID} .bl-sidebar-toggle-ripple { animation: none; }
+                        }
                         .bl-sidebar-toggle.is-dragging {
                             opacity: 0.42;
                             transform: translateX(4px) scale(0.98);
@@ -4393,6 +4431,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
             const railIcon = (name) => {
                 const paths = {
+                    expand: '<path d="m14 6-6 6 6 6"/>',
                     close: '<path d="m6 6 12 12M6 18 18 6"/>',
                     reconcile: '<path d="M20 7H4m12-4 4 4-4 4M4 17h16M8 13l-4 4 4 4"/>',
                     restart: '<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>',
@@ -4444,11 +4483,16 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 collapseButton.title = 'Collapse panel';
                 collapseButton.setAttribute('aria-label', 'Collapse panel');
                 collapseButton.innerHTML = railIcon('close');
+                collapseButton.setAttribute('aria-controls', RAIL_ID);
+                if (fullSidebarCollapse) collapseButton.setAttribute('aria-expanded', 'true');
                 collapseButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     event.stopPropagation();
                     spawnRipple(collapseButton, event);
-                    collapseAllPanels();
+                    if (fullSidebarCollapse) {
+                        setSidebarHidden(!document.getElementById(DOCK_ID)?.classList.contains('bl-sidebar-hidden'));
+                        collapseButton.focus({ preventScroll: true });
+                    } else collapseAllPanels();
                 });
                 rail.appendChild(collapseButton);
 
@@ -4599,6 +4643,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                                 || event.data?.type !== 'BL_SHORTCUT_READY' || event.data.requestId !== requestId) return;
                             cleanup();
                             if (event.data.needsPractice) {
+                                setSidebarHidden(false);
                                 panel.classList.remove('collapsed');
                                 collapseAllExcept('navigator');
                                 syncRailState();
@@ -4644,6 +4689,9 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureRailMounted();
                 getOrderedViews().forEach(mountOne);
                 ensurePageToolbarMounted();
+                let sidebarHidden = document.getElementById(DOCK_ID)?.classList.contains('bl-sidebar-hidden');
+                try { sidebarHidden = window.sessionStorage.getItem(SIDEBAR_HIDDEN_KEY) === 'true'; } catch { /* Keep in-memory state. */ }
+                setSidebarHidden(sidebarHidden, { persist: false });
                 syncRailState();
             };
 
@@ -4659,7 +4707,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
             mountSidebar();
         },
-        args: [chrome.runtime.getURL('panel.html'), tabId, Boolean(forceCollapsed), isDarkModeEnabled]
+        args: [chrome.runtime.getURL('panel.html'), tabId, Boolean(forceCollapsed), isDarkModeEnabled, globalThis.MAILROOMNAV_DEPLOYMENT_DEFAULTS?.fullSidebarCollapse === true]
     });
 }
 

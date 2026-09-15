@@ -271,3 +271,16 @@ cd MailroomNavigator/automation
 tail -f ../logs/linear-trigger-server.log
 curl http://127.0.0.1:4817/health
 ```
+
+## Sidebar collapse feature flag
+
+`deployment_defaults.js` enables `fullSidebarCollapse: true`. Close hides the
+entire docked sidebar, leaving one expand icon. Expanding restores its tabs and
+any still-open panel. The floating shortcuts remain available; a shortcut that
+requires practice selection reveals Navigator. Hidden state is remembered in
+session storage for that browser tab and site, including page reloads.
+
+Set `fullSidebarCollapse: false` to retain the previous behavior: Close collapses
+panel content while leaving the tab rail visible. Reload the extension and
+refresh BetterLetter after changing this deployment flag. The flag does not
+invoke reconciliation, restart, or other service actions.
