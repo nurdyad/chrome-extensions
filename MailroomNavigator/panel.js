@@ -948,6 +948,23 @@ async function initializePanel() {
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/letter_protocols');
     });
 
+    // Only the host page can invoke this navigation-only shortcut allowlist.
+    if (PANEL_FORCED_VIEW_ID === 'practiceNavigatorView') {
+        const shortcutIds = new Set(["compactCollectionLinkBtn", "compactBotDashboardLinkBtn", "compactPreparingLinkBtn", "compactRejectedLinkBtn", "compactEhrSettingsLinkBtn", "compactTaskRecipientsLinkBtn", "compactLettersLinkBtn", "compactFeatureFlagsLinkBtn", "compactBetterFlowLinkBtn", "compactBetterSweepLinkBtn"]);
+        const scopedIds = new Set(['compactCollectionLinkBtn', 'compactPreparingLinkBtn', 'compactRejectedLinkBtn', 'compactEhrSettingsLinkBtn', 'compactTaskRecipientsLinkBtn']);
+        window.addEventListener('message', event => {
+            if (event.source !== window.parent || !shortcutIds.has(event.data?.buttonId)) return;
+            if (event.data.type === 'BL_SHORTCUT_PING') {
+                const scope = getSelectedPracticeScope();
+                const requiresConcrete = ['compactEhrSettingsLinkBtn', 'compactTaskRecipientsLinkBtn'].includes(event.data.buttonId);
+                const needsPractice = scopedIds.has(event.data.buttonId) && !scope.hasPracticeFilter && (requiresConcrete || !scope.isAllPractices);
+                window.parent.postMessage({ type: 'BL_SHORTCUT_READY', requestId: event.data.requestId, needsPractice }, event.origin);
+            } else if (event.data.type === 'BL_SHORTCUT_RUN') {
+                document.getElementById(event.data.buttonId)?.click();
+            }
+        });
+    }
+
     // Job Dashboard Filters (checkbox multi-select)
     const botJobsChecklistNav = document.getElementById('botJobsChecklistNav');
     const clearBotJobsNavBtn = document.getElementById('clearBotJobsNavBtn');

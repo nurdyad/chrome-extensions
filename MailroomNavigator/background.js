@@ -3975,7 +3975,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '23';
+            const UI_VERSION = '25';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4124,6 +4124,35 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             background: #f7f8fb;
                         }
 
+                        #bl-page-shortcut-toolbar {
+                            position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+                            display: flex; align-items: center; gap: 7px; padding: 7px 9px;
+                            max-width: calc(100vw - 80px); box-sizing: border-box;
+                            border: 1px solid #e2e8f0; border-radius: 24px;
+                            background: rgba(248,250,252,.96); box-shadow: 0 3px 14px #0f172a12;
+                            pointer-events: auto; overflow-x: auto; scrollbar-width: none;
+                        }
+                        #bl-page-shortcut-toolbar button {
+                            display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+                            height: 28px; min-width: 28px; padding: 0 6px; border: 1px solid #d1d5db;
+                            border-radius: 50px; background: #fff; color: #475569;
+                            box-shadow: 0 1px 3px #0f172a20; cursor: pointer;
+                            font: 600 11px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+                            transition: background .18s ease, box-shadow .18s ease;
+                        }
+                        #bl-page-shortcut-toolbar svg { flex: 0 0 14px; width: 14px; height: 14px; }
+                        #bl-page-shortcut-toolbar button span { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; transition: max-width .2s ease, opacity .2s ease, margin .2s ease; }
+                        #bl-page-shortcut-toolbar button:hover,
+                        #bl-page-shortcut-toolbar button:focus-visible { background: #eef2ff; box-shadow: 0 2px 6px #0f172a25; }
+                        #bl-page-shortcut-toolbar button:hover span,
+                        #bl-page-shortcut-toolbar button:focus-visible span { max-width: 95px; margin-left: 6px; opacity: 1; }
+                        #bl-page-shortcut-toolbar button:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+                        #bl-page-shortcut-toolbar button:disabled { opacity: .6; cursor: wait; }
+                        #${DOCK_ID}.bl-dark #bl-page-shortcut-toolbar { background: #1f2937; border-color: #475569; }
+                        #${DOCK_ID}.bl-dark #bl-page-shortcut-toolbar button { background: #334155; color: #f1f5f9; border-color: #64748b; }
+                        @media (prefers-reduced-motion: reduce) {
+                            #bl-page-shortcut-toolbar button, #bl-page-shortcut-toolbar button span { transition: none; }
+                        }
                         .bl-allinone-handle-rail {
                             position: relative;
                             flex: 0 0 auto;
@@ -4181,6 +4210,21 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             margin-bottom: 8px;
                         }
 
+                        .bl-sidebar-toggle.bl-sidebar-icon-toggle {
+                            min-height: 34px;
+                            height: 34px;
+                            flex: 0 0 34px;
+                            padding: 0;
+                        }
+                        .bl-sidebar-icon-toggle span { display: flex; }
+                        #${DOCK_ID} .bl-theme-sun { display: none; }
+                        #${DOCK_ID}.bl-dark .bl-theme-sun { display: flex; }
+                        #${DOCK_ID}.bl-dark .bl-theme-moon { display: none; }
+                        .bl-sidebar-icon-toggle[aria-busy="true"] svg { animation: bl-rail-busy 1s linear infinite; }
+                        @keyframes bl-rail-busy { to { transform: rotate(360deg); } }
+                        @media (prefers-reduced-motion: reduce) {
+                            .bl-sidebar-icon-toggle[aria-busy="true"] svg { animation: none; }
+                        }
                         .bl-sidebar-toggle.is-dragging {
                             opacity: 0.42;
                             transform: translateX(4px) scale(0.98);
@@ -4347,6 +4391,18 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureDockMounted().appendChild(panelEl);
             };
 
+            const railIcon = (name) => {
+                const paths = {
+                    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+                    reconcile: '<path d="M20 7H4m12-4 4 4-4 4M4 17h16M8 13l-4 4 4 4"/>',
+                    restart: '<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>',
+                    success: '<path d="m5 12 4 4L19 6"/>',
+                    error: '<path d="M12 8v5m0 3h.01M10 3 2 19h20L14 3z"/>',
+                    moon: '<path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/>',
+                    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>'
+                };
+                return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
+            };
             const ensureRailMounted = () => {
                 if (document.getElementById(RAIL_ID)) return;
 
@@ -4356,14 +4412,38 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 let draggedKey = '';
                 let suppressNextClick = false;
 
+                const themeButton = document.createElement('button');
+                themeButton.id = 'bl-sidebar-theme-toggle';
+                themeButton.type = 'button';
+                themeButton.className = 'bl-sidebar-toggle bl-sidebar-icon-toggle';
+                themeButton.style.setProperty('--tab-color', '#64748b');
+                themeButton.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+                themeButton.setAttribute('aria-label', themeButton.title);
+                themeButton.innerHTML = `<span class="bl-theme-moon">${railIcon('moon')}</span><span class="bl-theme-sun">${railIcon('sun')}</span>`;
+                themeButton.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const nextDark = !document.getElementById(DOCK_ID)?.classList.contains('bl-dark');
+                    themeButton.disabled = true;
+                    try {
+                        const response = await chrome.runtime.sendMessage({ action: 'setDarkModePreference', payload: { isDark: nextDark, persist: true } });
+                        if (!response?.success) throw new Error('Could not change theme');
+                    } catch (error) {
+                        themeButton.title = String(error?.message || error);
+                    } finally {
+                        themeButton.disabled = false;
+                    }
+                });
+                rail.appendChild(themeButton);
+
                 const collapseButton = document.createElement('button');
                 collapseButton.type = 'button';
-                collapseButton.className = 'bl-sidebar-toggle bl-sidebar-collapse-toggle';
+                collapseButton.className = 'bl-sidebar-toggle bl-sidebar-collapse-toggle bl-sidebar-icon-toggle';
                 collapseButton.dataset.role = 'collapse';
                 collapseButton.style.setProperty('--tab-color', '#64748b');
                 collapseButton.title = 'Collapse panel';
                 collapseButton.setAttribute('aria-label', 'Collapse panel');
-                collapseButton.innerHTML = '<span class="bl-sidebar-toggle-label">Close</span>';
+                collapseButton.innerHTML = railIcon('close');
                 collapseButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -4384,8 +4464,12 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                     toggleButton.setAttribute('aria-label', label);
 
                     const labelSpan = document.createElement('span');
-                    labelSpan.className = 'bl-sidebar-toggle-label';
-                    labelSpan.textContent = label;
+                    labelSpan.className = action ? 'bl-sidebar-action-icon' : 'bl-sidebar-toggle-label';
+                    const actionIcon = action === 'triggerLinearReconcileRun' ? 'reconcile' : 'restart';
+                    if (action) {
+                        toggleButton.classList.add('bl-sidebar-icon-toggle');
+                        labelSpan.innerHTML = railIcon(actionIcon);
+                    } else labelSpan.textContent = label;
                     toggleButton.appendChild(labelSpan);
 
                     toggleButton.addEventListener('click', (event) => {
@@ -4398,18 +4482,21 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                         spawnRipple(toggleButton, event);
                         if (action) {
                             toggleButton.disabled = true;
-                            labelSpan.textContent = action === 'triggerLinearReconcileRun' ? 'Reconciling…' : 'Restarting…';
+                            toggleButton.setAttribute('aria-busy', 'true');
+                            toggleButton.title = action === 'triggerLinearReconcileRun' ? 'Reconciling…' : 'Restarting…';
                             chrome.runtime.sendMessage({ action, payload: { dryRun: false } }).then(response => {
                                 if (!response?.success) throw new Error(response?.error || 'Action failed');
-                                labelSpan.textContent = '✓ Requested';
+                                labelSpan.innerHTML = railIcon('success');
                                 toggleButton.title = 'Request accepted. See Others for controls and status.';
                             }).catch(error => {
-                                labelSpan.textContent = '⚠ Failed';
+                                labelSpan.innerHTML = railIcon('error');
                                 toggleButton.title = String(error?.message || error);
                             }).finally(() => {
+                                toggleButton.removeAttribute('aria-busy');
                                 window.setTimeout(() => {
                                     toggleButton.disabled = false;
-                                    labelSpan.textContent = label;
+                                    labelSpan.innerHTML = railIcon(actionIcon);
+                                    toggleButton.removeAttribute('aria-busy');
                                 }, 3000);
                             });
                             return;
@@ -4477,6 +4564,64 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureDockMounted().appendChild(rail);
             };
 
+            const ensurePageToolbarMounted = () => {
+                if (document.getElementById('bl-page-shortcut-toolbar')) return;
+                const toolbar = document.createElement('nav');
+                toolbar.id = 'bl-page-shortcut-toolbar';
+                toolbar.setAttribute('aria-label', 'BetterLetter shortcuts');
+                const shortcuts = [{"id": "compactCollectionLinkBtn", "label": "Open Collection", "text": "Collection", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"></path>\n            <polyline points=\"3.27 6.96 12 12.01 20.73 6.96\"></polyline>\n            <line x1=\"12\" y1=\"22.08\" x2=\"12\" y2=\"12\"></line>\n          </svg>"}, {"id": "compactBotDashboardLinkBtn", "label": "Open Bot Jobs Dashboard", "text": "Dashboard", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <rect x=\"3\" y=\"3\" width=\"7\" height=\"7\"></rect>\n            <rect x=\"14\" y=\"3\" width=\"7\" height=\"7\"></rect>\n            <rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"></rect>\n            <rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"></rect>\n          </svg>"}, {"id": "compactPreparingLinkBtn", "label": "Open Preparing queue", "text": "Preparing", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <circle cx=\"12\" cy=\"12\" r=\"10\"></circle>\n            <polyline points=\"12 6 12 12 16 14\"></polyline>\n          </svg>"}, {"id": "compactRejectedLinkBtn", "label": "Open Rejected queue", "text": "Rejected", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"></line>\n            <line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"></line>\n          </svg>"}, {"id": "compactEhrSettingsLinkBtn", "label": "Open EHR Settings", "text": "Settings", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"></rect>\n            <line x1=\"12\" y1=\"8\" x2=\"12\" y2=\"16\"></line>\n            <line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\"></line>\n          </svg>"}, {"id": "compactTaskRecipientsLinkBtn", "label": "Open Task Recipients", "text": "Recipients", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <circle cx=\"8.5\" cy=\"7\" r=\"4\"></circle>\n            <line x1=\"20\" y1=\"8\" x2=\"20\" y2=\"14\"></line>\n            <line x1=\"23\" y1=\"11\" x2=\"17\" y2=\"11\"></line>\n          </svg>"}, {"id": "compactLettersLinkBtn", "label": "Open Letters list", "text": "Letters", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <path d=\"M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z\"></path>\n            <polyline points=\"22 6 12 13 2 6\"></polyline>\n          </svg>"}, {"id": "compactFeatureFlagsLinkBtn", "label": "Open Feature Flags", "text": "Flags", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <path d=\"M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z\"></path>\n            <line x1=\"4\" y1=\"22\" x2=\"4\" y2=\"15\"></line>\n          </svg>"}, {"id": "compactBetterFlowLinkBtn", "label": "Open BetterFlow", "text": "BetterFlow", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <polyline points=\"16 3 21 3 21 8\"></polyline>\n            <line x1=\"4\" y1=\"20\" x2=\"21\" y2=\"3\"></line>\n            <polyline points=\"21 16 21 21 16 21\"></polyline>\n            <line x1=\"15\" y1=\"15\" x2=\"21\" y2=\"21\"></line>\n            <line x1=\"4\" y1=\"4\" x2=\"9\" y2=\"9\"></line>\n          </svg>"}, {"id": "compactBetterSweepLinkBtn", "label": "Open BetterSweep", "text": "BetterSweep", "svg": "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n            <path d=\"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2\"></path>\n            <rect x=\"8\" y=\"2\" width=\"8\" height=\"4\" rx=\"1\" ry=\"1\"></rect>\n          </svg>"}];
+                shortcuts.forEach(shortcut => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.title = shortcut.label;
+                    button.setAttribute('aria-label', shortcut.label);
+                    button.innerHTML = shortcut.svg;
+                    const label = document.createElement('span');
+                    label.textContent = shortcut.text;
+                    button.appendChild(label);
+                    toolbar.appendChild(button);
+                    button.addEventListener('click', () => {
+                        const panel = document.getElementById(rootIdFor('navigator'));
+                        const iframe = panel?.querySelector('iframe');
+                        if (!iframe) return;
+                        button.disabled = true;
+                        const requestId = crypto.randomUUID();
+                        const extensionOrigin = new URL(panelUrl).origin;
+                        let timer;
+                        let attempts = 0;
+                        const cleanup = () => {
+                            clearInterval(timer);
+                            window.removeEventListener('message', onReady);
+                            button.disabled = false;
+                        };
+                        const onReady = event => {
+                            if (event.source !== iframe.contentWindow || event.origin !== extensionOrigin
+                                || event.data?.type !== 'BL_SHORTCUT_READY' || event.data.requestId !== requestId) return;
+                            cleanup();
+                            if (event.data.needsPractice) {
+                                panel.classList.remove('collapsed');
+                                collapseAllExcept('navigator');
+                                syncRailState();
+                            }
+                            iframe.contentWindow.postMessage({ type: 'BL_SHORTCUT_RUN', buttonId: shortcut.id }, extensionOrigin);
+                        };
+                        window.addEventListener('message', onReady);
+                        ensureIframeLoaded(iframe, 'practiceNavigatorView');
+                        const ping = () => {
+                            if (!toolbar.isConnected || ++attempts > 50) {
+                                cleanup();
+                                button.title = 'Shortcut unavailable. Refresh the page and try again.';
+                                return;
+                            }
+                            iframe.contentWindow?.postMessage({ type: 'BL_SHORTCUT_PING', requestId, buttonId: shortcut.id }, extensionOrigin);
+                        };
+                        timer = window.setInterval(ping, 200);
+                        ping();
+                    });
+                });
+                ensureDockMounted().appendChild(toolbar);
+            };
+
             const cleanupStaleUi = () => {
                 if (!document.documentElement) return;
                 if (document.documentElement.getAttribute(VERSION_ATTR) === UI_VERSION) return;
@@ -4498,6 +4643,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureStyleInjected();
                 ensureRailMounted();
                 getOrderedViews().forEach(mountOne);
+                ensurePageToolbarMounted();
                 syncRailState();
             };
 
@@ -4553,6 +4699,11 @@ async function applyDarkModeToHostRail(tabId, isDark) {
             target: { tabId },
             func: (dark) => {
                 document.getElementById('bl-allinone-sidebar-dock')?.classList.toggle('bl-dark', Boolean(dark));
+                const themeButton = document.getElementById('bl-sidebar-theme-toggle');
+                if (themeButton) {
+                    themeButton.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+                    themeButton.setAttribute('aria-label', themeButton.title);
+                }
             },
             args: [Boolean(isDark)]
         });

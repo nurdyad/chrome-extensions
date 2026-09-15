@@ -1827,3 +1827,9 @@ body.bl-panel-single-view .job-manager-container {
 .uuid-card-topline > .uuid-card-title { min-width: 0; overflow-wrap: anywhere; }
 .uuid-list-actions { display: flex; gap: 5px; flex-shrink: 0; }
 .uuid-workspace .uuid-list-actions > button { display: grid; place-items: center; width: 30px; height: 30px; padding: 5px; }
+
+/* Docked panels use the external rail theme control; keep it in popups. */
+body.bl-panel-single-view #darkModeToggleBtn { display: none; }
+
+/* The docked shortcut row lives in the host page toolbar. */
+body.bl-panel-single-view #compactQuickLinksBar { display: none; }
