@@ -4516,7 +4516,23 @@ const server = createServer(async (req, res) => {
         sendJson(res, 403, origin, { ok: false, error: "Only the assignment administrator can change this policy." });
         return;
       }
-      const policy = sanitizeLinearAssignmentPolicy(await parseJsonBody(req).catch(() => ({})));
+      let rawPolicy;
+      try {
+        rawPolicy = await parseJsonBody(req);
+      } catch (error) {
+        const tooLarge = error?.message === "Request body too large.";
+        sendJson(res, tooLarge ? 413 : 400, origin, {
+          ok: false,
+          error: tooLarge ? "Assignment policy body is too large." : "Assignment policy must be valid JSON.",
+        });
+        return;
+      }
+      if (!rawPolicy || typeof rawPolicy !== "object" || Array.isArray(rawPolicy)
+          || !["creator", "weighted", "unassigned"].includes(String(rawPolicy.mode || "").toLowerCase())) {
+        sendJson(res, 400, origin, { ok: false, error: "Assignment policy must be an object with a valid mode: creator, weighted, or unassigned." });
+        return;
+      }
+      const policy = sanitizeLinearAssignmentPolicy(rawPolicy);
       if (policy.mode === "weighted") {
         if (policy.otherEmails.length === 0 && policy.ownerWeight < 100) {
           sendJson(res, 400, origin, { ok: false, error: "Add at least one colleague for the remaining share." });
