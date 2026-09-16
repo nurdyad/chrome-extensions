@@ -4021,7 +4021,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '27';
+            const UI_VERSION = '28';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4334,12 +4334,12 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
 
                         .bl-sidebar-toggle:hover:not(.is-open) {
                             background: color-mix(in srgb, var(--tab-color, #1f2937) 12%, white);
-                            transform: translateX(2px);
+                            transform: none;
                             box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
                         }
 
                         .bl-sidebar-toggle:active {
-                            transform: translateX(1px) scale(0.97);
+                            transform: scale(0.97);
                         }
 
                         .bl-sidebar-toggle.is-open {
