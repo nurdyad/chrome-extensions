@@ -3151,10 +3151,23 @@ limit $1
 async function collectSqlReconcileDashboardRows(report) {
   const result = await runSqlQueryWithConnectionRetry(
     SQL_RECONCILE_PAUSED_BOT_JOBS_SQL,
-    [SQL_RECONCILE_MAX_ROWS],
+    [SQL_RECONCILE_MAX_ROWS + 1],
     { timeoutMs: SQL_RECONCILE_QUERY_TIMEOUT_MS },
   );
-  const rows = (Array.isArray(result?.rows) ? result.rows : [])
+  const rawRows = Array.isArray(result?.rows) ? result.rows : [];
+  report.scan_truncated = rawRows.length > SQL_RECONCILE_MAX_ROWS;
+  if (report.scan_truncated) {
+    report.pages_visited.push({
+      url: "cloud_sql.bot_jobs where status = paused",
+      rows_scanned: rawRows.length,
+      actionable_found: 0,
+      source: "cloud_sql",
+      truncated: true,
+      row_limit: SQL_RECONCILE_MAX_ROWS,
+    });
+    throw new Error(`Reconciliation stopped: paused jobs exceed the ${SQL_RECONCILE_MAX_ROWS}-row scan limit. No issues were changed. Increase MAILROOMNAV_SQL_RECONCILE_MAX_ROWS or reduce the backlog before retrying.`);
+  }
+  const rows = rawRows
     .map(sanitizeSqlReconcileDashboardRow)
     .filter((row) => row.job_type || row.document_id || row.practice_code);
 
@@ -3412,6 +3425,7 @@ function buildSqlReconcileSummary(report) {
     source: "cloud_sql",
     lines: [
       "It used Cloud SQL for the bot dashboard check.",
+      ...(report.scan_truncated ? ["The SQL scan was incomplete; reconciliation stopped without changing issues."] : []),
       `It scanned ${rowsScannedTotal} SQL bot-job rows and found ${actionableFoundTotal} actionable.`,
       `It scanned ${report.open_issues_scanned} open bot issues in Linear.`,
       `It marked ${report.issues_marked_done.length} issues as done.`,
@@ -3435,6 +3449,7 @@ async function runSqlReconcileBotIssues({ dryRun = false } = {}) {
     environment: "production",
     dry_run: Boolean(dryRun),
     source: "cloud_sql",
+    scan_truncated: false,
     run_started_at: nowIso(),
     run_finished_at: null,
     pages_visited: [],
