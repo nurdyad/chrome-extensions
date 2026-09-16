@@ -693,6 +693,7 @@
       display: block;
     }
   </style>
+  <link rel="stylesheet" href="css/polish.css">
 </head>
 <body>
   <div class="extension-wrapper">
@@ -926,15 +927,15 @@
         <h1>Practice Navigator</h1>
         
         <div id="practiceSearchBlock" style="margin-bottom: 15px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
-            <label for="practiceInput" style="margin-bottom: 0; flex-shrink: 0;">Create or View practices and users</label>
-            <div style="display: flex; gap: 4px;"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice">
+          <div class="practice-search-heading">
+            <label for="practiceInput">Create or View practices and users</label>
+            <div class="practice-search-actions"> <button id="createPracticeAdminBtn" class="btn btn-sm" title="New Practice" aria-label="Create new practice">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
                 </button>
-                <button id="usersBtn" class="btn btn-sm" disabled title="View Users">
+                <button id="usersBtn" class="btn btn-sm" disabled title="View Users" aria-label="View practice users">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                     <circle cx="9" cy="7" r="4"></circle>
@@ -942,7 +943,7 @@
                     <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
                 </svg>
                 </button>
-                <button id="practicesBtn" class="btn btn-sm" title="All Practices">
+                <button id="practicesBtn" class="btn btn-sm" title="All Practices" aria-label="Select all practices">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="11" cy="11" r="8"></circle>
                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
