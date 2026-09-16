@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BetterLetter All-in-One",
-  "version": "1.99.0",
+  "version": "1.100.0",
   "description": "Combines BetterLetter Mailroom document processing, Jobs Dashboard management, Practice Navigation, and Password Tools into a single extension.",
   "permissions": [
     "activeTab",
@@ -33,12 +33,23 @@
         "mac": "Command+Shift+M"
       },
       "description": "Show live BetterLetter summary tooltip on current tab"
+    },
+    "toggle_mailroom_toolbars": {
+      "suggested_key": {
+        "default": "Alt+Shift+H",
+        "mac": "Alt+Shift+H"
+      },
+      "description": "Hide or restore all MailroomNavigator toolbars on this tab"
     }
   },
   "content_scripts": [
     {
-      "matches": ["https://app.betterletter.ai/admin_panel/practices*"],
-      "js": ["password_content.js"],
+      "matches": [
+        "https://app.betterletter.ai/admin_panel/practices*"
+      ],
+      "js": [
+        "password_content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
@@ -51,7 +62,9 @@
         "https://app.betterletter.ai/mailroom/coding*",
         "https://app.betterletter.ai/mailroom/rejected*"
       ],
-      "js": ["bot_dashboard_navigator.js"],
+      "js": [
+        "bot_dashboard_navigator.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -61,8 +74,14 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "web_accessible_resources": [{
-    "resources": ["panel.html"],
-    "matches": ["<all_urls>"]
-  }]
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "panel.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }
