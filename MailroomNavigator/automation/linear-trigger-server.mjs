@@ -6,6 +6,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { writeJsonAtomic } from "./atomic-json.mjs";
 
 /**
  * Local trigger server used by the extension "Trigger Linear" button.
@@ -933,8 +934,7 @@ async function readLinearAssignmentPolicy() {
 }
 
 async function writeLinearAssignmentPolicy(policy) {
-  await mkdir(dirname(LINEAR_ASSIGNMENT_POLICY_PATH), { recursive: true });
-  await writeFile(LINEAR_ASSIGNMENT_POLICY_PATH, `${JSON.stringify(policy, null, 2)}\n`, "utf8");
+  await writeJsonAtomic(LINEAR_ASSIGNMENT_POLICY_PATH, policy);
 }
 
 async function resolveLinearViewer() {
