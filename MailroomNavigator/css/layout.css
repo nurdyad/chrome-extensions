@@ -1833,3 +1833,5 @@ body.bl-panel-single-view #darkModeToggleBtn { display: none; }
 
 /* The docked shortcut row lives in the host page toolbar. */
 body.bl-panel-single-view #compactQuickLinksBar { display: none; }
+
+body.bl-panel-single-view #showPageToolbarsBtn { display: none; }

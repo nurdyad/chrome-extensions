@@ -3925,6 +3925,52 @@ async function openPanelPopup(hostTabId = null) {
     });
 }
 
+// Runs in the host page's isolated world. Visibility leaves panel state intact.
+function setMailroomToolbarsVisibility(mode = 'toggle') {
+    const dock = document.getElementById('bl-allinone-sidebar-dock');
+    if (!dock) return { success: false, missing: true };
+    const key = '__BL_ALL_TOOLBARS_HIDDEN_V1__';
+    let saved = dock.dataset.allToolbarsHidden === 'true';
+    try { saved = window.sessionStorage.getItem(key) === 'true'; } catch { /* Use mounted state. */ }
+    const hidden = mode === 'restore' ? saved : mode === 'show' ? false : !saved;
+    if (hidden && mode !== 'restore' && dock.contains(document.activeElement)) {
+        window.__blToolbarPreviousFocus = document.activeElement;
+        const body = document.body;
+        const tabindex = body.getAttribute('tabindex');
+        body.setAttribute('tabindex', '-1');
+        body.focus({ preventScroll: true });
+        if (tabindex === null) body.removeAttribute('tabindex');
+        else body.setAttribute('tabindex', tabindex);
+    }
+    dock.dataset.allToolbarsHidden = String(hidden);
+    // visibility is also forced by the injected dock CSS, so use display.
+    if (hidden) dock.style.setProperty('display', 'none', 'important');
+    else dock.style.removeProperty('display');
+    if (mode !== 'restore') {
+        try { window.sessionStorage.setItem(key, String(hidden)); } catch { /* Still works in memory. */ }
+        if (!hidden) {
+            const previous = window.__blToolbarPreviousFocus;
+            if (previous?.isConnected && previous.getClientRects().length) previous.focus({ preventScroll: true });
+            window.__blToolbarPreviousFocus = null;
+        }
+    }
+    return { success: true, hidden };
+}
+
+async function toggleMailroomToolbars(tabId, mode = 'toggle') {
+    if (!Number.isInteger(tabId)) return { success: false, error: 'Open a BetterLetter webpage first.' };
+    try {
+        let [response] = await chrome.scripting.executeScript({ target: { tabId }, func: setMailroomToolbarsVisibility, args: [mode] });
+        if (response?.result?.missing) {
+            await ensureSidebarPanelMounted(tabId);
+            [response] = await chrome.scripting.executeScript({ target: { tabId }, func: setMailroomToolbarsVisibility, args: [mode] });
+        }
+        return response?.result || { success: false, error: 'Toolbar unavailable on this page.' };
+    } catch {
+        return { success: false, error: 'This page does not allow extension toolbars. Open a normal webpage and try again.' };
+    }
+}
+
 async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) {
     const isDarkModeEnabled = await getStoredDarkModePreference();
     await chrome.scripting.executeScript({
@@ -3975,7 +4021,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '26';
+            const UI_VERSION = '27';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4400,6 +4446,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 const rootId = rootIdFor(key);
                 const existingPanel = document.getElementById(rootId);
                 if (existingPanel) {
+                    if (document.getElementById(DOCK_ID)?.style.display === 'none') return;
                     const existingIframe = existingPanel.querySelector('iframe');
                     if (shouldForceCollapsed) {
                         existingPanel.classList.add('collapsed');
@@ -4689,6 +4736,11 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureRailMounted();
                 getOrderedViews().forEach(mountOne);
                 ensurePageToolbarMounted();
+                try {
+                    if (window.sessionStorage.getItem('__BL_ALL_TOOLBARS_HIDDEN_V1__') === 'true') {
+                        document.getElementById(DOCK_ID)?.style.setProperty('display', 'none', 'important');
+                    }
+                } catch { /* Existing dock retains its current visibility. */ }
                 let sidebarHidden = document.getElementById(DOCK_ID)?.classList.contains('bl-sidebar-hidden');
                 try { sidebarHidden = window.sessionStorage.getItem(SIDEBAR_HIDDEN_KEY) === 'true'; } catch { /* Keep in-memory state. */ }
                 setSidebarHidden(sidebarHidden, { persist: false });
@@ -4846,7 +4898,14 @@ if (chrome.idle?.setDetectionInterval && chrome.idle?.onStateChanged) {
 }
 
 if (chrome.commands?.onCommand) {
-    chrome.commands.onCommand.addListener((command) => {
+    chrome.commands.onCommand.addListener((command, tab) => {
+        if (command === 'toggle_mailroom_toolbars') {
+            (async () => {
+                const active = tab?.id ? tab : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+                await toggleMailroomToolbars(active?.id);
+            })().catch(() => undefined);
+            return;
+        }
         if (String(command || '') !== HOTKEY_SHOW_LIVE_SUMMARY_COMMAND) return;
         showLiveSummaryViaHotkey().catch(() => undefined);
     });
@@ -4856,6 +4915,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.target === 'offscreen') return false;
 
     const handle = async () => {
+        if (message.action === 'showMailroomToolbars') {
+            const candidates = await getOrderedBetterLetterTabCandidates(message.preferredTabId);
+            const result = await toggleMailroomToolbars(candidates[0]?.id, 'show');
+            if (result.success) await chrome.tabs.update(candidates[0].id, { active: true });
+            return result;
+        }
         if (message.action === 'setDarkModePreference') {
             return await handleSetDarkModePreference(message.payload);
         }

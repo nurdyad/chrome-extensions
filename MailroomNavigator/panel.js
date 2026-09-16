@@ -760,6 +760,13 @@ async function initializePanel() {
         { persist: false }
     );
 
+    document.getElementById('showPageToolbarsBtn')?.addEventListener('click', async () => {
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'showMailroomToolbars', ...getProtectedActionPayload() });
+            showToast(response?.success ? 'Page toolbars restored.' : response?.error || 'Could not restore toolbars.');
+        } catch (error) { showToast(describeExtensionError(error)); }
+    });
+
     // C. Setup Navigation Tabs
     document.getElementById("navigatorGlobalToggleBtn")?.addEventListener("click", () => showView('practiceNavigatorView'));
     document.getElementById("jobManagerGlobalToggleBtn")?.addEventListener("click", () => showView('jobManagerView'));

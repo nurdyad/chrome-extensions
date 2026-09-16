@@ -177,3 +177,18 @@ If Linear issue creation fails after a Chrome extension update:
 1. Reload the extension in `chrome://extensions`.
 2. Refresh the BetterLetter page.
 3. Run `./check-linear-trigger-service.sh` if the local service still shows unavailable.
+
+## Hide or restore page toolbars
+
+Press **Alt+Shift+H** (Mac: **Option+Shift+H**) to hide both the floating top
+toolbar and the entire right sidebar on the active tab. Press again to restore
+its previous layout. Hidden state survives reloads on that tab and site.
+
+After updating, reload the extension and refresh BetterLetter. Check
+`chrome://extensions/shortcuts` to assign or change the shortcut if Chrome or
+another extension already uses it. This command does not run reconciliation
+or restart the service.
+
+For recovery without a keyboard shortcut, click the extension icon to open
+its popup window, then click **Show toolbars**. It restores the associated
+BetterLetter tab (or the most relevant available BetterLetter tab).
