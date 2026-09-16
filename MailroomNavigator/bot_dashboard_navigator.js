@@ -3955,18 +3955,16 @@ ${hiddenBlock}
         return uuids;
     }
 
-    function persistUuidBatchResults(items) {
-        try {
-            chrome.storage.local.set({
-                [UUID_BATCH_RESULTS_STORAGE_KEY]: {
-                    checkedAt: new Date().toISOString(),
-                    items
-                }
-            });
-        } catch (error) {
-            // Ignore: syncing to the sidebar panel is a nice-to-have, not
-            // required for the check itself to run.
-        }
+    // Serialize writes across batches so a late old write cannot replace a
+    // newer batch. Chrome storage rejects asynchronously (for example quota).
+    let uuidBatchPersistenceQueue = Promise.resolve();
+    async function persistUuidBatchResults(items) {
+        await chrome.storage.local.set({
+            [UUID_BATCH_RESULTS_STORAGE_KEY]: {
+                checkedAt: new Date().toISOString(),
+                items
+            }
+        });
     }
 
     // No on-page popup: results are checked here but only ever displayed in
@@ -3977,9 +3975,24 @@ ${hiddenBlock}
     // which hides as soon as you move the mouse away from the cell.
     async function runUuidBatchCheck(uuids) {
         const batchItems = uuids.map((uuid) => ({ uuid, error: null, result: null }));
-        persistUuidBatchResults(batchItems);
-
         const requestSeq = ++uuidBatchCheckRequestSeq;
+        const saveResults = () => {
+            const snapshot = batchItems.map((item) => ({ ...item }));
+            const write = uuidBatchPersistenceQueue.then(async () => {
+                if (requestSeq !== uuidBatchCheckRequestSeq) return false;
+                await persistUuidBatchResults(snapshot);
+                return true;
+            });
+            uuidBatchPersistenceQueue = write.catch(() => undefined);
+            return write.catch(() => {
+                if (requestSeq === uuidBatchCheckRequestSeq) {
+                    setBotDashboardBulkStatus('Could not save UUID results to the sidebar. Reload the extension and retry Check UUIDs.');
+                }
+                return false;
+            });
+        };
+        await saveResults();
+        if (requestSeq !== uuidBatchCheckRequestSeq) return;
         let completed = 0;
         let nextIndex = 0;
         setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
@@ -4011,7 +4024,7 @@ ${hiddenBlock}
             if (requestSeq !== uuidBatchCheckRequestSeq) return;
             completed += 1;
             setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
-            persistUuidBatchResults(batchItems);
+            await saveResults();
         }
 
         async function worker() {
@@ -4032,6 +4045,8 @@ ${hiddenBlock}
         await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
         if (requestSeq !== uuidBatchCheckRequestSeq) return;
+        const saved = await saveResults();
+        if (!saved || requestSeq !== uuidBatchCheckRequestSeq) return;
         setBotDashboardBulkStatus(`Checked ${uuids.length} UUID${uuids.length === 1 ? '' : 's'} — see the sidebar panel for results.`);
         window.setTimeout(() => {
             if (requestSeq === uuidBatchCheckRequestSeq) setBotDashboardBulkStatus('');
