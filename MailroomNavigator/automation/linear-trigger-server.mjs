@@ -967,7 +967,16 @@ async function getLinearAssignmentPolicyPublic() {
   return { policy, viewer, canManage, members: canManage ? await listLinearAssignmentMembers() : [] };
 }
 
-async function resolveLinearIssueAssignee() {
+// This service is the single owner of the local allocation state. Queue the
+// entire read/compute/write transaction, and recover the queue after failures.
+let linearAssignmentQueue = Promise.resolve();
+function resolveLinearIssueAssignee() {
+  const allocation = linearAssignmentQueue.then(() => resolveLinearIssueAssigneeUnlocked());
+  linearAssignmentQueue = allocation.catch(() => undefined);
+  return allocation;
+}
+
+async function resolveLinearIssueAssigneeUnlocked() {
   const policy = await readLinearAssignmentPolicy();
   if (policy.mode === "unassigned") return null;
   const viewer = await resolveLinearViewer();
