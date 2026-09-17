@@ -990,6 +990,10 @@ async function resolveLinearIssueAssigneeUnlocked() {
   const candidates = [];
   if (policy.ownerWeight > 0) candidates.push({ ...viewer, weight: policy.ownerWeight });
   const remainingWeight = 100 - policy.ownerWeight;
+  const unavailable = policy.otherEmails.filter(email => email !== viewer.email && !byEmail.has(email));
+  if (remainingWeight > 0 && unavailable.length) {
+    throw new Error(`Assignment paused. Ask the assignment administrator to repair Others > Issue assignment: unavailable Linear members: ${unavailable.join(", ")}`);
+  }
   // Account IDs, rather than email aliases, define a single participant.
   const colleagueIds = new Set([viewer.id]);
   const colleagues = [];
@@ -998,6 +1002,9 @@ async function resolveLinearIssueAssigneeUnlocked() {
     if (email === viewer.email || !member || colleagueIds.has(member.id)) continue;
     colleagueIds.add(member.id);
     colleagues.push(member);
+  }
+  if (remainingWeight > 0 && colleagues.length === 0) {
+    throw new Error("Assignment paused. Ask the assignment administrator to add an active colleague in Others > Issue assignment or set the owner share to 100%.");
   }
   if (remainingWeight > 0 && colleagues.length > 0) {
     const eachWeight = remainingWeight / colleagues.length;
