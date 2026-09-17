@@ -5027,7 +5027,14 @@ async function initializePanel() {
                 return option;
             }));
         }
-        if (linearAssignmentPolicyStatus) linearAssignmentPolicyStatus.textContent = 'This rule applies to every newly created issue.';
+        if (linearAssignmentPolicyStatus) {
+            const activeEmails = new Set((response?.members || []).map(member => member.email));
+            const unavailable = parseAssignmentEmails().filter(email => !activeEmails.has(email));
+            const needsColleagues = response?.policy?.mode === 'weighted' && response.policy.ownerWeight < 100;
+            linearAssignmentPolicyStatus.textContent = needsColleagues && (unavailable.length || !parseAssignmentEmails().length)
+                ? `Assignment paused: ${unavailable.length ? 'unavailable members: ' + unavailable.join(', ') : 'no active colleagues'}. Replace these entries and save, or set your share to 100%.`
+                : 'This rule applies to every newly created issue.';
+        }
         updateLinearAssignmentPolicyUi();
     };
 

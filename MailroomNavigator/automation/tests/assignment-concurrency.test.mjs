@@ -71,3 +71,18 @@ test('creator and unassigned modes bypass weighted state',async t=>{
   const result=await h.allocate();assert.equal(result?.id||null,mode==='creator'?'owner':null);assert.equal(h.reads(),0);
  }
 });
+
+test('unavailable participants fail before state allocation rather than redistributing their share',async t=>{
+ const h=await harness(t,{
+ readLinearAssignmentPolicy:async()=>({mode:'weighted',ownerWeight:50,otherEmails:['other@test.invalid','departed@test.invalid']})});
+ await assert.rejects(h.allocate(),/Assignment paused.*Others > Issue assignment.*departed@test.invalid/);
+ assert.equal(h.reads(),0);
+});
+test('a saved creator-only colleague list requires repair when owner share is below 100',async t=>{
+ const h=await harness(t,{readLinearAssignmentPolicy:async()=>({mode:'weighted',ownerWeight:25,otherEmails:['owner@test.invalid']})});
+ await assert.rejects(h.allocate(),/add an active colleague/);assert.equal(h.reads(),0);
+});
+test('unavailable zero-weight colleagues do not block a 100-percent owner policy',async t=>{
+ const h=await harness(t,{readLinearAssignmentPolicy:async()=>({mode:'weighted',ownerWeight:100,otherEmails:['departed@test.invalid']})});
+ assert.equal((await h.allocate()).id,'owner');
+});
