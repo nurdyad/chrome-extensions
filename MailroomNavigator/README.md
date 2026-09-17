@@ -301,3 +301,5 @@ Use `npm --prefix MailroomNavigator/automation run check:syntax` for syntax/mani
 Failures return a nonzero exit code and identify the file. These checks do not replace browser smoke testing.
 
 Release process: [versioning and compatibility policy](docs/RELEASES.md).
+
+Lookup problems: [UUID troubleshooting decision tree](docs/UUID-TROUBLESHOOTING.md).
