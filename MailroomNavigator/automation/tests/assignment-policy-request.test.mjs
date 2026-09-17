@@ -27,3 +27,8 @@ for(const body of ['{bad','{"mode":','null','[]','true','"creator"','{}','','   
 test('oversized body returns 413 without writing',async t=>{const r=await request(t,'x'.repeat(65537));assert.equal(r.status,413);assert.equal(r.writes,0);assert.equal(r.saved,r.original);});
 test('unauthorized malformed request still returns 403 without writing',async t=>{const r=await request(t,'{broken',false);assert.equal(r.status,403);assert.equal(r.writes,0);});
 for(const mode of ['creator','weighted','unassigned']) test(`valid ${mode} policy saves once`,async t=>{const r=await request(t,JSON.stringify({mode,ownerWeight:100,otherEmails:[]}));assert.equal(r.status,200);assert.equal(r.writes,1);assert.equal(JSON.parse(r.saved).mode,mode);});
+
+test('saving a policy excludes the creator from colleague shares',async t=>{
+ const r=await request(t,JSON.stringify({mode:'weighted',ownerWeight:25,otherEmails:['ADMIN@test.invalid','other@test.invalid']}));
+ assert.equal(r.status,200);assert.deepEqual(JSON.parse(r.saved).otherEmails,['other@test.invalid']);
+});

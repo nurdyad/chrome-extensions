@@ -987,12 +987,18 @@ async function resolveLinearIssueAssigneeUnlocked() {
   const candidates = [];
   if (policy.ownerWeight > 0) candidates.push({ ...viewer, weight: policy.ownerWeight });
   const remainingWeight = 100 - policy.ownerWeight;
-  if (remainingWeight > 0 && policy.otherEmails.length > 0) {
-    const eachWeight = remainingWeight / policy.otherEmails.length;
-    for (const email of policy.otherEmails) {
-      const member = byEmail.get(email);
-      if (member) candidates.push({ ...member, weight: eachWeight });
-    }
+  // Account IDs, rather than email aliases, define a single participant.
+  const colleagueIds = new Set([viewer.id]);
+  const colleagues = [];
+  for (const email of policy.otherEmails) {
+    const member = byEmail.get(email);
+    if (email === viewer.email || !member || colleagueIds.has(member.id)) continue;
+    colleagueIds.add(member.id);
+    colleagues.push(member);
+  }
+  if (remainingWeight > 0 && colleagues.length > 0) {
+    const eachWeight = remainingWeight / colleagues.length;
+    for (const member of colleagues) candidates.push({ ...member, weight: eachWeight });
   }
   if (candidates.length === 0) return null;
 
@@ -4533,6 +4539,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       const policy = sanitizeLinearAssignmentPolicy(rawPolicy);
+      policy.otherEmails = policy.otherEmails.filter(email => email !== viewer.email);
       if (policy.mode === "weighted") {
         if (policy.otherEmails.length === 0 && policy.ownerWeight < 100) {
           sendJson(res, 400, origin, { ok: false, error: "Add at least one colleague for the remaining share." });
