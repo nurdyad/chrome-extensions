@@ -39,3 +39,35 @@ test('creator listed as a colleague retains exactly the configured owner share',
  assert.equal(values.filter(x=>x.id==='owner').length,25);
  assert.equal(values.filter(x=>x.id==='other').length,75);
 });
+
+for (const ownerWeight of [0,10,25,50,100]) test(`weighted allocation remains fair at ${ownerWeight}% owner share`,async t=>{
+ const colleagues=[{id:'a',email:'a@test.invalid'},{id:'b',email:'b@test.invalid'}];
+ const h=await harness(t,{
+  readLinearAssignmentPolicy:async()=>({mode:'weighted',ownerWeight,otherEmails:colleagues.map(x=>x.email)}),
+  listLinearAssignmentMembers:async()=>colleagues
+ });
+ const counts={owner:0,a:0,b:0};
+ const weights={owner:ownerWeight,a:(100-ownerWeight)/2,b:(100-ownerWeight)/2};
+ for(let n=1;n<=400;n++){
+  counts[(await h.allocate()).id]++;
+  for(const id of Object.keys(counts))assert.ok(Math.abs(counts[id]-n*weights[id]/100)<=1,
+   `${id} deviated by more than one allocation at prefix ${n}`);
+ }
+ for(const id of Object.keys(counts))assert.equal(counts[id],4*weights[id]);
+});
+test('equal-weight ties retain policy order deterministically across fresh runs',async t=>{
+ const sequences=[];
+ for(let run=0;run<2;run++){
+  const h=await harness(t,{readLinearAssignmentPolicy:async()=>({mode:'weighted',ownerWeight:0,otherEmails:['a@test.invalid','b@test.invalid']}),
+   listLinearAssignmentMembers:async()=>[{id:'a',email:'a@test.invalid'},{id:'b',email:'b@test.invalid'}]});
+  sequences.push((await Promise.all(Array.from({length:20},()=>h.allocate()))).map(x=>x.id));
+ }
+ assert.deepEqual(sequences[0],Array.from({length:20},(_,i)=>i%2?'b':'a'));
+ assert.deepEqual(sequences[1],sequences[0]);
+});
+test('creator and unassigned modes bypass weighted state',async t=>{
+ for(const mode of ['creator','unassigned']){
+  const h=await harness(t,{readLinearAssignmentPolicy:async()=>({mode}),listLinearAssignmentMembers:async()=>{throw Error('unexpected members read');}});
+  const result=await h.allocate();assert.equal(result?.id||null,mode==='creator'?'owner':null);assert.equal(h.reads(),0);
+ }
+});
