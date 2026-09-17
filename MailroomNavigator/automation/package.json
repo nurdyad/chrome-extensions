@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "trigger:start": "node linear-trigger-server.mjs"
+    "trigger:start": "node linear-trigger-server.mjs",
+    "check:syntax": "node check-extension.mjs",
+    "test": "node --test",
+    "check": "npm run check:syntax && npm test"
   },
   "dependencies": {
     "dotenv": "^17.3.1",
