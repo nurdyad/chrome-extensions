@@ -303,3 +303,5 @@ Failures return a nonzero exit code and identify the file. These checks do not r
 Release process: [versioning and compatibility policy](docs/RELEASES.md).
 
 Lookup problems: [UUID troubleshooting decision tree](docs/UUID-TROUBLESHOOTING.md).
+
+Before sharing a release: [colleague smoke-test checklist](docs/RELEASE-SMOKE-TEST.md).
