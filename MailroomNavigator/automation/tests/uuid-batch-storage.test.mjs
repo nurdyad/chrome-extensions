@@ -4,12 +4,12 @@ import {readFileSync} from 'node:fs';
 const s=readFileSync(new URL('../../bot_dashboard_navigator.js',import.meta.url),'utf8');
 const a=s.indexOf('    let uuidBatchPersistenceQueue ='),b=s.indexOf('    function makeUuidBatchCheckAction',a);
 function harness(set, lookup){
- const messages=[],writes=[];
+ const messages=[],writes=[],timers=new Map();
  const chrome={storage:{local:{set:payload=>{writes.push(structuredClone(payload));return set?.(payload,writes.length);}}}};
  const run=new Function('chrome','setBotDashboardBulkStatus','sendRuntimeMessage','collapseText','window',
  'let uuidBatchCheckRequestSeq=0; const UUID_BATCH_RESULTS_STORAGE_KEY="batch";'+s.slice(a,b)+'return runUuidBatchCheck;')(
- chrome,msg=>messages.push(msg),lookup || (async({payload})=>({success:true,result:{uuid:payload.uuid,found:true,status:'paused'}})),v=>String(v??''),{setTimeout(){}});
- return {run,messages,writes};
+ chrome,msg=>messages.push(msg),lookup || (async({payload})=>({success:true,result:{uuid:payload.uuid,found:true,status:'paused'}})),v=>String(v??''),{setTimeout(){},setInterval(fn){const id=timers.size+1;timers.set(id,fn);return id;},clearInterval(id){timers.delete(id);}});
+ return {run,messages,writes,timers};
 }
 for(const synchronous of [true,false]) test(`storage ${synchronous?'throw':'rejection'} reports failure without results-ready success`,async()=>{
  const h=harness(()=>{if(synchronous)throw Error('quota');return Promise.reject(Error('quota'));});
@@ -57,4 +57,13 @@ test('empty or non-array input performs no writes or lookups',async()=>{
  const h=harness(undefined,()=>{throw Error('must not call');});
  for(const input of [[],null,'uuid',[null,'bad']])await h.run(input);
  assert.equal(h.writes.length,0);assert.match(h.messages.at(-1),/No valid UUIDs/);
+});
+
+test('progress remains available while requests wait and timer is cleaned up',async()=>{
+ let release;const gate=new Promise(r=>release=r);
+ const h=harness(undefined,async()=>{await gate;return {success:true,result:{found:true}};});
+ const pending=h.run(['00000000-0000-0000-0000-000000000001']);
+ while(!h.timers.size)await new Promise(r=>setImmediate(r));
+ [...h.timers.values()][0]();assert.match(h.messages.at(-1),/Checking 0 \/ 1 UUIDs · 0 failed · \d+s elapsed/);
+ release();await pending;assert.equal(h.timers.size,0);
 });

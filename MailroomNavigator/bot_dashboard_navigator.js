@@ -4009,7 +4009,15 @@ ${hiddenBlock}
         if (requestSeq !== uuidBatchCheckRequestSeq) return;
         let completed = 0;
         let nextIndex = 0;
-        setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs${skippedLabel}...`);
+        const startedAt = Date.now();
+        const showProgress = () => {
+            if (requestSeq !== uuidBatchCheckRequestSeq) return;
+            const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+            const failed = batchItems.filter(item => item.error).length;
+            setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs · ${failed} failed · ${elapsed}s elapsed${skippedLabel}…`);
+        };
+        showProgress();
+        const progressTimer = window.setInterval(showProgress, 1000);
 
         async function checkOne(uuid, itemIndex) {
             try {
@@ -4037,7 +4045,7 @@ ${hiddenBlock}
             }
             if (requestSeq !== uuidBatchCheckRequestSeq) return;
             completed += 1;
-            setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs${skippedLabel}...`);
+            showProgress();
             await saveResults();
         }
 
@@ -4056,7 +4064,11 @@ ${hiddenBlock}
         // it for no benefit — this doubles throughput over strictly
         // sequential lookups.
         const workerCount = Math.min(2, uuids.length);
-        await Promise.all(Array.from({ length: workerCount }, () => worker()));
+        try {
+            await Promise.all(Array.from({ length: workerCount }, () => worker()));
+        } finally {
+            window.clearInterval(progressTimer);
+        }
 
         if (requestSeq !== uuidBatchCheckRequestSeq) return;
         const saved = await saveResults();
@@ -4065,7 +4077,7 @@ ${hiddenBlock}
             counts[item.error || !item.result ? 'failed' : item.result.found ? 'found' : 'notFound'] += 1;
             return counts;
         }, { found: 0, notFound: 0, failed: 0 });
-        setBotDashboardBulkStatus(`Checked ${uuids.length} UUIDs: ${totals.found} found · ${totals.notFound} not found · ${totals.failed} failed${skippedLabel} — see the sidebar panel for results.`);
+        setBotDashboardBulkStatus(`Checked ${uuids.length} UUIDs: ${totals.found} found · ${totals.notFound} not found · ${totals.failed} failed · ${Math.floor((Date.now() - startedAt) / 1000)}s elapsed${skippedLabel} — see the sidebar panel for results.`);
         window.setTimeout(() => {
             if (requestSeq === uuidBatchCheckRequestSeq) setBotDashboardBulkStatus('');
         }, 3500);
