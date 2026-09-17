@@ -4047,7 +4047,11 @@ ${hiddenBlock}
         if (requestSeq !== uuidBatchCheckRequestSeq) return;
         const saved = await saveResults();
         if (!saved || requestSeq !== uuidBatchCheckRequestSeq) return;
-        setBotDashboardBulkStatus(`Checked ${uuids.length} UUID${uuids.length === 1 ? '' : 's'} — see the sidebar panel for results.`);
+        const totals = batchItems.reduce((counts, item) => {
+            counts[item.error || !item.result ? 'failed' : item.result.found ? 'found' : 'notFound'] += 1;
+            return counts;
+        }, { found: 0, notFound: 0, failed: 0 });
+        setBotDashboardBulkStatus(`Checked ${uuids.length} UUIDs: ${totals.found} found · ${totals.notFound} not found · ${totals.failed} failed — see the sidebar panel for results.`);
         window.setTimeout(() => {
             if (requestSeq === uuidBatchCheckRequestSeq) setBotDashboardBulkStatus('');
         }, 3500);
