@@ -3974,6 +3974,20 @@ ${hiddenBlock}
     // visible regardless of mouse position — unlike the hover meta-panel,
     // which hides as soon as you move the mouse away from the cell.
     async function runUuidBatchCheck(uuids) {
+        const inputs = Array.isArray(uuids) ? uuids : [];
+        const valid = new Set();
+        for (const value of inputs) {
+            if (typeof value !== 'string') continue;
+            const uuid = value.trim().toLowerCase();
+            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) valid.add(uuid);
+        }
+        uuids = [...valid];
+        const skipped = inputs.length - uuids.length;
+        const skippedLabel = skipped ? ` · ${skipped} invalid or duplicate inputs skipped` : '';
+        if (!uuids.length) {
+            setBotDashboardBulkStatus(`No valid UUIDs to check${skippedLabel}.`);
+            return;
+        }
         const batchItems = uuids.map((uuid) => ({ uuid, error: null, result: null }));
         const requestSeq = ++uuidBatchCheckRequestSeq;
         const saveResults = () => {
@@ -3995,7 +4009,7 @@ ${hiddenBlock}
         if (requestSeq !== uuidBatchCheckRequestSeq) return;
         let completed = 0;
         let nextIndex = 0;
-        setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
+        setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs${skippedLabel}...`);
 
         async function checkOne(uuid, itemIndex) {
             try {
@@ -4023,7 +4037,7 @@ ${hiddenBlock}
             }
             if (requestSeq !== uuidBatchCheckRequestSeq) return;
             completed += 1;
-            setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs...`);
+            setBotDashboardBulkStatus(`Checking ${completed} / ${uuids.length} UUIDs${skippedLabel}...`);
             await saveResults();
         }
 
@@ -4051,7 +4065,7 @@ ${hiddenBlock}
             counts[item.error || !item.result ? 'failed' : item.result.found ? 'found' : 'notFound'] += 1;
             return counts;
         }, { found: 0, notFound: 0, failed: 0 });
-        setBotDashboardBulkStatus(`Checked ${uuids.length} UUIDs: ${totals.found} found · ${totals.notFound} not found · ${totals.failed} failed — see the sidebar panel for results.`);
+        setBotDashboardBulkStatus(`Checked ${uuids.length} UUIDs: ${totals.found} found · ${totals.notFound} not found · ${totals.failed} failed${skippedLabel} — see the sidebar panel for results.`);
         window.setTimeout(() => {
             if (requestSeq === uuidBatchCheckRequestSeq) setBotDashboardBulkStatus('');
         }, 3500);
