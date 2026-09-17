@@ -4989,10 +4989,11 @@ async function initializePanel() {
         }
     };
 
+    let linearAssignmentViewerEmail = '';
     const parseAssignmentEmails = () => [...new Set(String(linearAssignmentOthers?.value || '')
         .split(/[\s,;]+/)
         .map((value) => value.trim().toLowerCase())
-        .filter(Boolean))];
+        .filter(value => value && value !== linearAssignmentViewerEmail))];
 
     const updateLinearAssignmentPolicyUi = () => {
         const weighted = linearAssignmentMode?.value === 'weighted';
@@ -5013,6 +5014,7 @@ async function initializePanel() {
             return;
         }
         linearAssignmentPolicyPanel.hidden = false;
+        linearAssignmentViewerEmail = String(response?.viewer?.email || '').trim().toLowerCase();
         if (linearAssignmentViewer) linearAssignmentViewer.textContent = response?.viewer?.name || response?.viewer?.email || '';
         if (linearAssignmentMode) linearAssignmentMode.value = response?.policy?.mode || 'creator';
         if (linearAssignmentOwnerWeight) linearAssignmentOwnerWeight.value = String(response?.policy?.ownerWeight ?? 10);
