@@ -23,10 +23,14 @@ export function pickerStatusOptions(rows) {
 }
 
 export function filterPickerRows(rows, { query = '', date = '', outcome = '', status = '' } = {}) {
-    query = query.trim().toLowerCase();
+    query = query.trim().toLowerCase().replace(/_/g, ' ');
     date = date.trim().toLowerCase();
     return rows.filter(row => {
-        const haystack = `${row.id || ''} ${row.raw || ''}`.toLowerCase();
+        const result = row.batchItem?.result || {};
+        const haystack = [row.id, row.raw, result.documentId, result.status,
+            result.botJobId, result.botJobType, result.botJobStatus,
+            result.rejectionReason, result.botJobStatusReason, row.batchItem?.error]
+            .filter(value => value != null).join(' ').toLowerCase().replace(/_/g, ' ');
         return (!query || haystack.includes(query))
             && (!date || String(row.date || '').toLowerCase().includes(date))
             && (!outcome || lookupOutcome(row) === outcome)
