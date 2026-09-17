@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lookupOutcome, filterPickerRows, pickerStatusOptions } from '../../uuid-picker-data.mjs';
+import { lookupOutcome, filterPickerRows, pickerStatusOptions, sortPickerRows } from '../../uuid-picker-data.mjs';
 const rows = [
  {id:'a',raw:'alpha',date:'2026-09-17',batchItem:{result:{found:true,documentId:'123',status:'rejected',rejectionReason:'Patient inactive'}}},
  {id:'b',batchItem:{result:{found:false}}},
@@ -34,4 +34,14 @@ test('batch-only rows can be found by document ID, status, reason or lookup erro
  assert.equal(filterPickerRows(batchOnly,{query:'4860193'}).length,1);
  assert.equal(filterPickerRows(batchOnly,{query:'duplicate letter'}).length,1);
  assert.equal(filterPickerRows(batchOnly,{query:'should-not-be-indexed'}).length,0);
+});
+
+test('document sort is numeric and stable, missing values last; source order is recoverable',()=>{
+ const fixtures=[{id:'missing'},{id:'ten',batchItem:{result:{found:true,documentId:'10',status:'released'}}},
+ {id:'two',batchItem:{result:{found:true,documentId:'2',status:'rejected'}}},
+ {id:'tie',batchItem:{result:{found:true,documentId:'2',status:'rejected'}}}];
+ assert.deepEqual(sortPickerRows(fixtures,'document').map(r=>r.id),['two','tie','ten','missing']);
+ assert.deepEqual(sortPickerRows(fixtures,'status').map(r=>r.id),['two','tie','ten','missing']);
+ assert.deepEqual(sortPickerRows(fixtures).map(r=>r.id),['missing','ten','two','tie']);
+ assert.equal(sortPickerRows(fixtures,'document')[0],fixtures[2]);
 });
