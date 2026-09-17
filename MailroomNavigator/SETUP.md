@@ -288,3 +288,5 @@ invoke reconciliation, restart, or other service actions.
 ## Updating an existing installation
 
 Follow the [colleague upgrade and rollback guide](docs/UPGRADING.md). Pulling Git alone does not reload Chrome or restart the local service.
+
+Before enabling older overlapping packages, review the [extension support and overlap matrix](docs/EXTENSION-COMPATIBILITY.md).
