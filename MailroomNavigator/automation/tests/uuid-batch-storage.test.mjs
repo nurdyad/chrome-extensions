@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const s=readFileSync(new URL('../../bot_dashboard_navigator.js',import.meta.url),'utf8');
 const a=s.indexOf('    let uuidBatchPersistenceQueue ='),b=s.indexOf('    function makeUuidBatchCheckAction',a);
-function harness(set){
+function harness(set, lookup){
  const messages=[],writes=[];
  const chrome={storage:{local:{set:payload=>{writes.push(structuredClone(payload));return set?.(payload,writes.length);}}}};
  const run=new Function('chrome','setBotDashboardBulkStatus','sendRuntimeMessage','collapseText','window',
  'let uuidBatchCheckRequestSeq=0; const UUID_BATCH_RESULTS_STORAGE_KEY="batch";'+s.slice(a,b)+'return runUuidBatchCheck;')(
- chrome,msg=>messages.push(msg),async({payload})=>({success:true,result:{uuid:payload.uuid,found:true,status:'paused'}}),v=>String(v??''),{setTimeout(){}});
+ chrome,msg=>messages.push(msg),lookup || (async({payload})=>({success:true,result:{uuid:payload.uuid,found:true,status:'paused'}})),v=>String(v??''),{setTimeout(){}});
  return {run,messages,writes};
 }
 for(const synchronous of [true,false]) test(`storage ${synchronous?'throw':'rejection'} reports failure without results-ready success`,async()=>{
@@ -33,4 +33,16 @@ test('a new batch waits for older writes and becomes the final saved result',asy
  const first=h.run(['old']);while(!h.writes.length)await new Promise(r=>setImmediate(r));
  const second=h.run(['new']);release();await Promise.all([first,second]);
  assert.deepEqual(saved.batch.items.map(x=>x.uuid),['new']);assert.equal(saved.batch.items[0].result.found,true);
+});
+
+test('mixed outcomes report separate totals including thrown and returned failures',async()=>{
+ let call=0;
+ const h=harness(undefined,async()=>{
+  call++; if(call===1)return {success:true,result:{found:true}};
+  if(call===2)return {success:true,result:{found:false}};
+  if(call===3)return {success:false,error:'offline'};
+  throw Error('timeout');
+ });
+ await h.run(['a','b','c','d']);
+ assert.match(h.messages.at(-1),/Checked 4 UUIDs: 1 found · 1 not found · 2 failed/);
 });
