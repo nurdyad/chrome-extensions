@@ -284,3 +284,7 @@ Set `fullSidebarCollapse: false` to retain the previous behavior: Close collapse
 panel content while leaving the tab rail visible. Reload the extension and
 refresh BetterLetter after changing this deployment flag. The flag does not
 invoke reconciliation, restart, or other service actions.
+
+## Updating an existing installation
+
+Follow the [colleague upgrade and rollback guide](docs/UPGRADING.md). Pulling Git alone does not reload Chrome or restart the local service.
