@@ -3,7 +3,7 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, describeExtensionError, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
-import { filterPickerRows, pickerStatusOptions, sortPickerRows } from './uuid-picker-data.mjs';
+import { filterPickerRows, pickerStatusOptions, sortPickerRows, exportPickerOutcomes } from './uuid-picker-data.mjs';
 
 let practiceCacheLoadPromise = null;
 const PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY = 'mailroomNavPanelSectionCollapseV1';
@@ -3490,6 +3490,7 @@ async function initializePanel() {
             exportBtn.type = 'button';
             exportBtn.className = 'bookmarklet-tool-btn';
             exportBtn.textContent = 'Export';
+            exportBtn.title = 'Export visible lookup outcomes as CSV';
 
             const toolbar = document.createElement('div');
             toolbar.className = 'bookmarklet-tool-toolbar';
@@ -3837,12 +3838,13 @@ async function initializePanel() {
             exportBtn.addEventListener('click', () => {
                 const visibleRows = getVisibleRows();
                 if (!visibleRows.length) return showToast('No visible rows.');
-                const lines = visibleRows.map(item => `${item.id}\t${item.raw}\t${item.date || 'N/A'}`).join('\n');
-                const blob = new Blob([`UUID\tRAW\tDATE\n${lines}`], { type: 'text/plain' });
+                const blob = new Blob(['\ufeff', exportPickerOutcomes(visibleRows)], { type: 'text/csv;charset=utf-8' });
                 const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `uuid_export_${Date.now()}.txt`;
+                const url = URL.createObjectURL(blob);
+                a.href = url;
+                a.download = `uuid_outcomes_${Date.now()}.csv`;
                 a.click();
+                window.setTimeout(() => URL.revokeObjectURL(url), 1000);
             });
 
             render();

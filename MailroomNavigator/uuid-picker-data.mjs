@@ -49,3 +49,20 @@ export function sortPickerRows(rows, order = 'source') {
             return a.value.localeCompare(b.value, 'en', { numeric: true, sensitivity: 'base' }) || a.index - b.index;
         }).map(entry => entry.row);
 }
+
+export function exportPickerOutcomes(rows) {
+    const cell = value => {
+        let text = String(value ?? '');
+        // Treat external status/error text as data when opened in a spreadsheet.
+        if (/^[\s]*[=+\-@]/.test(text)) text = "'" + text;
+        return `"${text.replace(/"/g, '""')}"`;
+    };
+    const records = [['UUID', 'DATE', 'OUTCOME', 'DOCUMENT_ID', 'STATUS', 'REASON', 'ERROR']];
+    for (const row of rows) {
+        const result = row.batchItem?.result || {};
+        records.push([row.id, row.date || '', lookupOutcome(row), result.documentId,
+            result.status || result.botJobStatus, result.rejectionReason || result.botJobStatusReason,
+            row.batchItem?.error]);
+    }
+    return records.map(record => record.map(cell).join(',')).join('\r\n') + '\r\n';
+}

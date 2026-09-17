@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lookupOutcome, filterPickerRows, pickerStatusOptions, sortPickerRows } from '../../uuid-picker-data.mjs';
+import { lookupOutcome, filterPickerRows, pickerStatusOptions, sortPickerRows, exportPickerOutcomes } from '../../uuid-picker-data.mjs';
 const rows = [
  {id:'a',raw:'alpha',date:'2026-09-17',batchItem:{result:{found:true,documentId:'123',status:'rejected',rejectionReason:'Patient inactive'}}},
  {id:'b',batchItem:{result:{found:false}}},
@@ -44,4 +44,12 @@ test('document sort is numeric and stable, missing values last; source order is 
  assert.deepEqual(sortPickerRows(fixtures,'status').map(r=>r.id),['two','tie','ten','missing']);
  assert.deepEqual(sortPickerRows(fixtures).map(r=>r.id),['missing','ten','two','tie']);
  assert.equal(sortPickerRows(fixtures,'document')[0],fixtures[2]);
+});
+
+test('outcome export quotes delimiters/newlines, neutralizes formulas and excludes raw/credential fields',()=>{
+ const csv=exportPickerOutcomes([{id:'uuid',raw:'credential in source row',batchItem:{error:'=1+1',result:{documentId:'123',status:'rejected',rejectionReason:'A, "quoted"\nreason',password:'secret'}}}]);
+ assert.match(csv, /"UUID","DATE","OUTCOME","DOCUMENT_ID","STATUS","REASON","ERROR"/);
+ assert.ok(csv.includes('"A, ""quoted""\nreason"'));assert.ok(csv.includes('"\'=1+1"'));
+ assert.ok(!csv.includes('secret'));assert.ok(!csv.includes('credential'));
+ assert.equal(exportPickerOutcomes(rows).split('\r\n').length,7);
 });
