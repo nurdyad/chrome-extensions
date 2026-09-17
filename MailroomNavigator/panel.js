@@ -3,7 +3,7 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, describeExtensionError, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
-import { filterPickerRows, pickerStatusOptions } from './uuid-picker-data.mjs';
+import { filterPickerRows, pickerStatusOptions, sortPickerRows } from './uuid-picker-data.mjs';
 
 let practiceCacheLoadPromise = null;
 const PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY = 'mailroomNavPanelSectionCollapseV1';
@@ -3517,7 +3517,13 @@ async function initializePanel() {
             const statusFilter = document.createElement('select');
             statusFilter.className = 'bookmarklet-tool-input';
             statusFilter.setAttribute('aria-label', 'Filter result status');
-            filters.append(outcomeFilter, statusFilter);
+            const sortSelect = document.createElement('select');
+            sortSelect.className = 'bookmarklet-tool-input';
+            sortSelect.setAttribute('aria-label', 'Sort UUID results');
+            for (const [value, label] of [['source', 'Source order'], ['document', 'Document ID ↑'], ['status', 'Status A–Z']]) {
+                sortSelect.add(new Option(label, value));
+            }
+            filters.append(outcomeFilter, statusFilter, sortSelect);
 
             const lookupPanel = document.createElement('div');
             lookupPanel.className = 'uuid-picker-lookup-panel';
@@ -3628,9 +3634,9 @@ async function initializePanel() {
             };
 
             const getVisibleRows = () => {
-                return filterPickerRows(getCombinedRows(), {
+                return sortPickerRows(filterPickerRows(getCombinedRows(), {
                     query: searchInput.value, date: dateInput.value, outcome: outcomeFilter.value, status: statusFilter.value
-                });
+                }), sortSelect.value);
             };
 
             const setMode = (newMode) => {
@@ -3790,6 +3796,7 @@ async function initializePanel() {
             dateInput.addEventListener('input', render);
             outcomeFilter.addEventListener('change', render);
             statusFilter.addEventListener('change', render);
+            sortSelect.addEventListener('change', render);
             lookupInput.addEventListener('input', pickerLookupController.handleInput);
             lookupInput.addEventListener('focus', pickerLookupController.warm);
             lookupInput.addEventListener('keydown', pickerLookupController.handleKeydown);
