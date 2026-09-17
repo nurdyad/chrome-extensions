@@ -1,38 +1,75 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-const source = readFileSync(new URL('../../background.js', import.meta.url), 'utf8');
-const start = source.indexOf('function setMailroomToolbarsVisibility(');
-const end = source.indexOf('async function toggleMailroomToolbars(', start);
-function page({ blocked = false, focused = false } = {}) {
-    const storage = new Map();
-    const style = new Map();
-    let restored = 0, bodyFocused = 0;
-    const active = {isConnected:true,getClientRects:()=>[{}],focus:()=>restored++};
-    const dock = {dataset:{},contains:()=>focused,style:{setProperty:(k,v)=>style.set(k,v),removeProperty:k=>style.delete(k)}};
-    const window = {sessionStorage:{getItem:k=>{if(blocked)throw Error();return storage.get(k);},setItem:(k,v)=>{if(blocked)throw Error();storage.set(k,v);}}};
-    const document = {activeElement:active,getElementById:()=>dock,body:{getAttribute:()=>null,setAttribute(){},removeAttribute(){},focus:()=>bodyFocused++}};
-    const toggle = new Function('document','window',source.slice(start,end)+'return setMailroomToolbarsVisibility;')(document,window);
-    return {toggle,style,storage,dock,focus:()=>({restored,bodyFocused})};
+const source=readFileSync(new URL('../../background.js',import.meta.url),'utf8');
+const start=source.indexOf('async function installGlobalToolbarVisibility(');
+const queueStart=source.indexOf('let toolbarVisibilityQueue =',start);
+const end=source.indexOf('async function ensureSidebarPanelMounted',queueStart);
+const key='mailroomToolbarHiddenGlobalV1';
+function storage(initial=false){
+ const listeners=new Set();let value=initial;
+ return {onChanged:{addListener:fn=>listeners.add(fn),removeListener:fn=>listeners.delete(fn)},
+ local:{get:async()=>({[key]:value}),set:async data=>{value=data[key];for(const fn of listeners)fn({[key]:{newValue:value}},'local');}},listeners};
 }
-test('toggle hides the entire dock then restores it without changing panel classes',()=>{
-    const p=page();assert.equal(p.toggle().hidden,true);assert.equal(p.style.get('display'),'none');
-    assert.equal(p.toggle().hidden,false);assert.equal(p.style.has('display'),false);
+function page(shared,{mounted=true,focused=false}={}){
+ const style=new Map();let restored=0,bodyFocused=0;
+ const document={};
+ const active={isConnected:true,getClientRects:()=>[{}],focus:()=>{restored++;document.activeElement=active;}};
+ const dock={dataset:{},contains:el=>el===active,style:{setProperty:(k,v)=>style.set(k,v),removeProperty:k=>style.delete(k)}};
+ document.body={getAttribute:()=>null,setAttribute(){},removeAttribute(){},focus:()=>{bodyFocused++;document.activeElement=document.body;}};
+ document.activeElement=focused?active:document.body;
+ document.getElementById=()=>mounted?dock:null;
+ const window={};
+ const install=new Function('document','window','chrome',source.slice(start,queueStart)+'return installGlobalToolbarVisibility;')(document,window,{storage:shared});
+ return {install,style,dock,window,mount(){mounted=true;window.__blGlobalToolbarVisibilityV1.apply(dock);},focus:()=>({restored,bodyFocused})};
+}
+test('shared hide/show is idempotent across tabs and preserves focus/panel state',async()=>{
+ const shared=storage(),a=page(shared,{focused:true}),b=page(shared);
+ await Promise.all([a.install(),b.install()]);
+ await shared.local.set({[key]:true});await shared.local.set({[key]:true});
+ assert.equal(a.style.get('display'),'none');assert.equal(b.style.get('display'),'none');assert.equal(a.focus().bodyFocused,1);
+ await shared.local.set({[key]:false});await shared.local.set({[key]:false});
+ assert.equal(a.style.has('display'),false);assert.equal(b.style.has('display'),false);assert.equal(a.focus().restored,1);
 });
-test('show provides idempotent mouse recovery and restore reuses saved visibility',()=>{
-    const p=page();p.toggle();assert.equal(p.toggle('restore').hidden,true);
-    assert.equal(p.toggle('show').hidden,false);assert.equal(p.toggle('show').hidden,false);
+test('new/reloaded pages inherit hidden preference before attaching a dock',async()=>{
+ const shared=storage(true),p=page(shared,{mounted:false});await p.install();p.mount();
+ assert.equal(p.style.get('display'),'none');
+ const reloaded=page(shared);await reloaded.install();assert.equal(reloaded.style.get('display'),'none');
 });
-test('tab state is independent and storage failures permit in-memory toggling',()=>{
-    const a=page(),b=page();a.toggle();assert.equal(b.toggle('restore').hidden,false);
-    const c=page({blocked:true});assert.equal(c.toggle().hidden,true);assert.equal(c.toggle().hidden,false);
+test('repeated installation registers one storage listener',async()=>{
+ const shared=storage(),p=page(shared);await Promise.all([p.install(),p.install()]);await p.install();assert.equal(shared.listeners.size,1);
 });
-test('focus exits hidden dock and returns when shown',()=>{
-    const p=page({focused:true});p.toggle();assert.equal(p.focus().bodyFocused,1);
-    p.toggle();assert.equal(p.focus().restored,1);
+test('a stale initial read cannot undo a newer visibility event',async()=>{
+ const shared=storage();let resolveRead;shared.local.get=()=>new Promise(resolve=>resolveRead=resolve);
+ const p=page(shared);const pending=p.install();await shared.local.set({[key]:true});resolveRead({[key]:false});await pending;
+ assert.equal(p.style.get('display'),'none');
 });
-test('manifest includes a configurable shortcut distinct from live summary',()=>{
-    const manifest=JSON.parse(readFileSync(new URL('../../manifest.json',import.meta.url)));
-    assert.equal(manifest.commands.toggle_mailroom_toolbars.suggested_key.default,'Alt+Shift+H');
-    assert.notEqual(manifest.commands.show_live_dashboard_summary.suggested_key.default,'Alt+Shift+H');
+test('failed initialization can retry without leaking a listener',async()=>{
+ const shared=storage(),get=shared.local.get;shared.local.get=async()=>{throw Error('storage unavailable');};
+ const p=page(shared);await assert.rejects(p.install(),/storage unavailable/);assert.equal(shared.listeners.size,0);
+ shared.local.get=get;await p.install();assert.equal(shared.listeners.size,1);
+});
+function coordinator(shared,pages){
+ const chrome={storage:shared,tabs:{query:async query=>{assert.deepEqual(query,{});return [{id:1,windowId:1},{id:2,windowId:2},{id:3,windowId:2}];}},
+ scripting:{executeScript:async({target})=>{if(target.tabId===3)throw Error('restricted page');await pages[target.tabId-1].install();}}};
+ return new Function('chrome','installGlobalToolbarVisibility',source.slice(queueStart,end)+'return setGlobalMailroomToolbarsHidden;')(chrome,()=>{});
+}
+test('global commands reach all windows, tolerate restricted tabs and serialize rapid hide/show',async()=>{
+ const shared=storage(),pages=[page(shared),page(shared)],set=coordinator(shared,pages);
+ const results=await Promise.all([set(true),set(false),set(true)]);
+ assert.ok(results.every(r=>r.success && r.skippedTabs===1));
+ assert.ok(pages.every(p=>p.style.get('display')==='none'));
+ await set(false);assert.ok(pages.every(p=>!p.style.has('display')));
+});
+test('failed storage write rejects its command but does not poison the queue',async()=>{
+ const shared=storage(),save=shared.local.set;let first=true;shared.local.set=async data=>{if(first){first=false;throw Error('quota');}await save(data);};
+ const pages=[page(shared),page(shared)],set=coordinator(shared,pages);
+ const results=await Promise.allSettled([set(true),set(false)]);
+ assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');
+});
+test('manifest provides separate configurable hide and show commands',()=>{
+ const manifest=JSON.parse(readFileSync(new URL('../../manifest.json',import.meta.url)));
+ assert.equal(manifest.commands.toggle_mailroom_toolbars.suggested_key.mac,'Alt+Shift+H');
+ assert.equal(manifest.commands.show_mailroom_toolbars.suggested_key.mac,'Alt+Shift+J');
+ assert.match(manifest.commands.toggle_mailroom_toolbars.description,/Hide.*all tabs/);
 });

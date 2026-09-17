@@ -15,8 +15,8 @@ Record tester, date, OS/browser, extension version, Git commit and service commi
 | --- | --- |
 | Open Navigator, Job Panel, UUID Picker and Others | Correct surface opens; headings/inputs align and content remains scrollable. |
 | Collapse then expand the side panel | The full panel/rail hides as configured; the expand control restores access. No stuck overlay blocks the page. |
-| Press Alt+Shift+H twice | Top toolbar and right rail hide, then restore. If the shortcut is unassigned/conflicted, fix it in Chrome's extension shortcut settings and record that separately. |
-| Use popup Show page toolbars recovery | Toolbars reappear on the intended BetterLetter tab. |
+| Press Option/Alt+Shift+H twice, then Option/Alt+Shift+J | Both toolbars hide in every Chrome tab/window and remain hidden after the second H. J restores them globally. Test from a different tab, including a restricted Chrome page; new/refreshed pages inherit hidden state. If a command is unassigned/conflicted, configure it in Chrome's extension shortcut settings. |
+| Use popup Show page toolbars recovery | Toolbars reappear across all tabs/windows. |
 | Switch light/dark mode | Open surfaces are readable, with visible focus indicators and no unreadable status/reason text. Test switching between surfaces, not just the theme icon. |
 | Look up one approved known UUID | Expected document/job ID and status appear; copy the ID and UUID into a private scratch field to verify exact values. A not-found response is not success for a fixture expected to exist. |
 | Run a small mixed batch using approved fixtures | Progress is visible without hovering the row. Found/not-found/failed counts add up to the valid unique input count; invalid/duplicate skips are reported. Simulate failures only in a controlled test setup. |
