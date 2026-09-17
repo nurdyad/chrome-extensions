@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lookupOutcome, filterPickerRows } from '../../uuid-picker-data.mjs';
+import { lookupOutcome, filterPickerRows, pickerStatusOptions } from '../../uuid-picker-data.mjs';
 const rows = [
  {id:'a',raw:'alpha',date:'2026-09-17',batchItem:{result:{found:true,documentId:'123',status:'rejected',rejectionReason:'Patient inactive'}}},
  {id:'b',batchItem:{result:{found:false}}},
@@ -17,4 +17,12 @@ test('outcome filter intersects text and date filters without changing source da
  assert.equal(filterPickerRows(rows,{outcome:'failed',query:'alpha'}).length,0);
  assert.equal(filterPickerRows(rows,{query:'ALPHA',date:'09-17'}).length,1);
  assert.equal(filterPickerRows(rows).length,5);assert.equal(rows.length,5);
+});
+
+test('status choices include observed statuses and explicit pending/unchecked states',()=>{
+ assert.deepEqual(pickerStatusOptions(rows).map(x=>x.value),['failed','not-found','pending','status:rejected','unchecked']);
+ assert.deepEqual(filterPickerRows(rows,{status:'status:rejected'}).map(r=>r.id),['a']);
+ assert.deepEqual(filterPickerRows(rows,{status:'pending'}).map(r=>r.id),['d']);
+ assert.equal(filterPickerRows(rows,{status:'status:released'}).length,0);
+ assert.equal(filterPickerRows(rows,{status:'pending',outcome:'failed'}).length,0);
 });
