@@ -3,7 +3,7 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, describeExtensionError, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
-import { filterPickerRows } from './uuid-picker-data.mjs';
+import { filterPickerRows, pickerStatusOptions } from './uuid-picker-data.mjs';
 
 let practiceCacheLoadPromise = null;
 const PANEL_COLLAPSIBLE_SECTION_STATE_STORAGE_KEY = 'mailroomNavPanelSectionCollapseV1';
@@ -3513,7 +3513,10 @@ async function initializePanel() {
             for (const [value, label] of [['', 'All lookup outcomes'], ['failed', 'Failed lookups only'], ['not-found', 'Not found only']]) {
                 outcomeFilter.add(new Option(label, value));
             }
-            filters.append(outcomeFilter);
+            const statusFilter = document.createElement('select');
+            statusFilter.className = 'bookmarklet-tool-input';
+            statusFilter.setAttribute('aria-label', 'Filter result status');
+            filters.append(outcomeFilter, statusFilter);
 
             const lookupPanel = document.createElement('div');
             lookupPanel.className = 'uuid-picker-lookup-panel';
@@ -3625,7 +3628,7 @@ async function initializePanel() {
 
             const getVisibleRows = () => {
                 return filterPickerRows(getCombinedRows(), {
-                    query: searchInput.value, date: dateInput.value, outcome: outcomeFilter.value
+                    query: searchInput.value, date: dateInput.value, outcome: outcomeFilter.value, status: statusFilter.value
                 });
             };
 
@@ -3640,6 +3643,14 @@ async function initializePanel() {
             };
 
             const render = () => {
+                const selectedStatus = statusFilter.value;
+                const previousLabel = statusFilter.selectedOptions[0]?.textContent || selectedStatus;
+                const options = pickerStatusOptions(getCombinedRows());
+                if (selectedStatus && !options.some(option => option.value === selectedStatus)) {
+                    options.push({ value: selectedStatus, label: previousLabel });
+                }
+                statusFilter.replaceChildren(new Option('All result statuses', ''), ...options.map(option => new Option(option.label, option.value)));
+                statusFilter.value = selectedStatus;
                 const visibleRows = getVisibleRows();
                 summaryChip.textContent = `${visibleRows.length} of ${getCombinedRows().length} UUIDs · ${getCombinedRows().filter(item => processedRowIds.has(item.id) || checkedRowIds.has(item.id)).length} marked`;
                 list.innerHTML = '';
@@ -3762,6 +3773,7 @@ async function initializePanel() {
                 searchInput.value = '';
                 dateInput.value = '';
                 outcomeFilter.value = '';
+                statusFilter.value = '';
                 await saveVisits();
                 await clearUuidBatchResults();
                 render();
@@ -3776,6 +3788,7 @@ async function initializePanel() {
             searchInput.addEventListener('input', render);
             dateInput.addEventListener('input', render);
             outcomeFilter.addEventListener('change', render);
+            statusFilter.addEventListener('change', render);
             lookupInput.addEventListener('input', pickerLookupController.handleInput);
             lookupInput.addEventListener('focus', pickerLookupController.warm);
             lookupInput.addEventListener('keydown', pickerLookupController.handleKeydown);

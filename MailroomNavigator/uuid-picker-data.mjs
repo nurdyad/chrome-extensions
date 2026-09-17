@@ -7,13 +7,29 @@ export function lookupOutcome(row) {
     return item.result.found ? 'found' : 'not-found';
 }
 
-export function filterPickerRows(rows, { query = '', date = '', outcome = '' } = {}) {
+export function pickerStatus(row) {
+    const outcome = lookupOutcome(row);
+    if (outcome !== 'found') return outcome;
+    const result = row.batchItem.result;
+    return `status:${String(result.status || result.botJobStatus || 'unknown').trim().toLowerCase()}`;
+}
+
+export function pickerStatusOptions(rows) {
+    return [...new Set(rows.map(pickerStatus))].sort().map(value => ({
+        value,
+        label: value.startsWith('status:') ? `Status: ${value.slice(7).replace(/_/g, ' ')}`
+            : ({'not-found':'Not found', failed:'Lookup failed', pending:'Pending', unchecked:'Unchecked'}[value] || value)
+    }));
+}
+
+export function filterPickerRows(rows, { query = '', date = '', outcome = '', status = '' } = {}) {
     query = query.trim().toLowerCase();
     date = date.trim().toLowerCase();
     return rows.filter(row => {
         const haystack = `${row.id || ''} ${row.raw || ''}`.toLowerCase();
         return (!query || haystack.includes(query))
             && (!date || String(row.date || '').toLowerCase().includes(date))
-            && (!outcome || lookupOutcome(row) === outcome);
+            && (!outcome || lookupOutcome(row) === outcome)
+            && (!status || pickerStatus(row) === status);
     });
 }
