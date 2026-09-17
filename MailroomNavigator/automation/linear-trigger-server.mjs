@@ -941,6 +941,9 @@ async function resolveLinearViewer() {
   const data = await runLinearGraphqlRequest(`query AssignmentViewer { viewer { id name email active } }`);
   const viewer = data?.viewer;
   if (!viewer?.id) throw new Error("Could not identify the current Linear user.");
+  if (viewer.active !== true) {
+    throw new Error("The Linear API user is inactive or its active state could not be verified. Use an active account's API key before creating assigned issues.");
+  }
   return {
     id: sanitizeSingleLine(viewer.id, 80),
     name: sanitizeSingleLine(viewer.name, 160),
