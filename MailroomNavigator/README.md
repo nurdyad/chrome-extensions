@@ -12,12 +12,12 @@ Use `SETUP.md` for installation on a new machine.
 
 ### Global Navigation
 
-- Top buttons:
-  - `Navigator`
-  - `Job Panel`
-  - `Others`
-- The panel can be opened on any Chrome tab (`host_permissions: <all_urls>`).
-- Toast/status indicators are shown inline in the panel.
+- A floating shortcut toolbar sits at the top of the webpage, below Chrome's browser UI.
+- The right-side rail opens Navigator, Job Panel, UUID Picker, Bookmarklet Tools and Others.
+- Reconcile and Restart Service rail icons run actions; their full controls remain in Others.
+- The theme icon sits above the collapse/expand icon. Collapse hides the rail/panels while retaining an expand control.
+- `Alt+Shift+H` hides/restores both page toolbars. Change the shortcut in `chrome://extensions/shortcuts`; the extension popup also has a recovery control.
+- Toast/status indicators report action progress. Refresh a page after reloading the extension.
 
 ### Navigator Tab (Practice Navigator)
 
@@ -93,6 +93,25 @@ Use `SETUP.md` for installation on a new machine.
 - Looks up a full UUID or 6+ character UUID fragment through the local trigger service
 - Uses Cloud SQL/read-replica config through the local trigger service
 - Requires local trigger service plus `MAILROOMNAV_SQL_*` database config
+
+#### Unified UUID Picker
+
+Open **UUID Picker** from the right rail. **Check a UUID** performs an individual lookup; **Check N UUIDs** on a dashboard row runs a batch. One list combines the most recent batch with UUIDs extracted from the current page, deduplicated by UUID. Batch result cards come first in source order. A compact result card shows document ID and UUID together, an Open link and status/reason below; there is no separate copy-icon requirement.
+
+- Click the document ID or UUID to copy it. Click the status/reason text to copy that value. A successful card copy marks its UUID; a row Lookup action marks it checked. Saved marks gray completed rows and display Copied/Checked feedback.
+- **UUID / SQL / RAW** chooses UUID copying format: plain UUID, single-quoted UUID, or source row text (falling back to UUID). Clicking a document ID still copies just the document ID. **Copy Visible** copies the filtered list in that format, separated by commas.
+- **Search** matches UUID/source text, document ID, document/bot-job status and reason, or lookup error. The date filter matches available source date text; rows without a date do not gain one from lookup results.
+- **Lookup outcomes** separates failed requests from successful queries with no match. **Result statuses** includes actual result statuses plus Pending and Unchecked. Filters combine; counts and Copy Visible follow the filtered list.
+- **Sort** defaults to source order. Document ID sorts numerically; status sorts alphabetically. Ties retain source order and missing values appear last. Marks stay attached to UUIDs.
+- **Export** downloads visible outcomes as CSV (UUID, date, outcome, document ID, status, reason, error). It does not export arbitrary result fields or raw page text. Copy format does not change export columns.
+- The **trash icon (Clear)** removes current UUIDs/results from this workspace and clears the latest saved batch. A later batch may show those UUIDs again. Clear does not cancel a batch already running, so incoming results can reappear. There is currently no Undo.
+- The **circular-arrow icon (Reset marks)** removes copied/checked marks without removing rows. Clear and Reset are different actions; hover or focus the icons for their labels.
+
+Marks are stored locally in the Chrome profile (up to 1,000 copied and 1,000 checked UUIDs; up to 2,000 cleared IDs). They survive extension reloads but are not shared across colleagues. Live synchronization between separate picker instances is not guaranteed yet.
+
+Only the latest batch is retained. Saved batches older than 15 minutes are considered stale when loaded/rendered and are not shown as fresh results. Rerun a lookup for current status; copied marks can remain after results expire. Page UUIDs may still appear as unchecked rows. Progress on the page shows completed/total counts, failures and elapsed seconds; completion separates found, not-found and failed totals. A storage failure explicitly warns that sidebar results could not be saved.
+
+Lookups require the local service and its database connection. Use approved test data when checking behavior; copying a UUID is not proof that its lookup succeeded.
 
 #### Bulk ID Actions
 
