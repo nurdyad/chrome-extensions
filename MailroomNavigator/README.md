@@ -272,3 +272,11 @@ See:
   - `.automation-state/`
   - `logs/`
 - Do not commit real API tokens (Linear) or auth state files.
+
+## Repeatable checks
+
+From the repository root, run `npm --prefix MailroomNavigator/automation run check` (Node.js 18+).
+This checks the extension manifest, referenced assets and JavaScript syntax, then runs isolated regression tests.
+No service credentials, running database or installed automation dependencies are needed for these checks.
+Use `npm --prefix MailroomNavigator/automation run check:syntax` for syntax/manifest checks alone.
+Failures return a nonzero exit code and identify the file. These checks do not replace browser smoke testing.
