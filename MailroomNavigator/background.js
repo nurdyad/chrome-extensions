@@ -3925,54 +3925,76 @@ async function openPanelPopup(hostTabId = null) {
     });
 }
 
-// Runs in the host page's isolated world. Visibility leaves panel state intact.
-function setMailroomToolbarsVisibility(mode = 'toggle') {
-    const dock = document.getElementById('bl-allinone-sidebar-dock');
-    if (!dock) return { success: false, missing: true };
-    const key = '__BL_ALL_TOOLBARS_HIDDEN_V1__';
-    let saved = dock.dataset.allToolbarsHidden === 'true';
-    try { saved = window.sessionStorage.getItem(key) === 'true'; } catch { /* Use mounted state. */ }
-    const hidden = mode === 'restore' ? saved : mode === 'show' ? false : !saved;
-    if (hidden && mode !== 'restore' && dock.contains(document.activeElement)) {
-        window.__blToolbarPreviousFocus = document.activeElement;
-        const body = document.body;
-        const tabindex = body.getAttribute('tabindex');
-        body.setAttribute('tabindex', '-1');
-        body.focus({ preventScroll: true });
-        if (tabindex === null) body.removeAttribute('tabindex');
-        else body.setAttribute('tabindex', tabindex);
+// Installed once per host-page isolated world. Storage is the shared source of
+// truth, including when the service worker restarts or another tab navigates.
+async function installGlobalToolbarVisibility() {
+    const controllerKey = '__blGlobalToolbarVisibilityV1';
+    if (!window[controllerKey]) {
+        let hidden = false;
+        let revision = 0;
+        let previousFocus = null;
+        const apply = (dock = document.getElementById('bl-allinone-sidebar-dock')) => {
+            if (!dock) return;
+            const wasHidden = dock.dataset.allToolbarsHidden === 'true';
+            if (hidden && !wasHidden && dock.contains(document.activeElement)) {
+                previousFocus = document.activeElement;
+                const body = document.body;
+                const tabindex = body.getAttribute('tabindex');
+                body.setAttribute('tabindex', '-1');
+                body.focus({ preventScroll: true });
+                if (tabindex === null) body.removeAttribute('tabindex');
+                else body.setAttribute('tabindex', tabindex);
+            }
+            dock.dataset.allToolbarsHidden = String(hidden);
+            if (hidden) dock.style.setProperty('display', 'none', 'important');
+            else dock.style.removeProperty('display');
+            if (!hidden && wasHidden) {
+                if (previousFocus?.isConnected && previousFocus.getClientRects().length) previousFocus.focus({ preventScroll: true });
+                previousFocus = null;
+            }
+        };
+        const storageKey = 'mailroomToolbarHiddenGlobalV1';
+        const onChanged = (changes, area) => {
+            if (area !== 'local' || !changes[storageKey]) return;
+            revision += 1;
+            hidden = changes[storageKey].newValue === true;
+            apply();
+        };
+        chrome.storage.onChanged.addListener(onChanged);
+        const controller = { apply, ready: null };
+        window[controllerKey] = controller;
+        controller.ready = chrome.storage.local.get(storageKey).then(stored => {
+            // Do not let an older initial read overwrite a newer hide/show event.
+            if (revision === 0) hidden = stored[storageKey] === true;
+            apply();
+        }).catch(error => {
+            chrome.storage.onChanged.removeListener(onChanged);
+            delete window[controllerKey];
+            throw error;
+        });
     }
-    dock.dataset.allToolbarsHidden = String(hidden);
-    // visibility is also forced by the injected dock CSS, so use display.
-    if (hidden) dock.style.setProperty('display', 'none', 'important');
-    else dock.style.removeProperty('display');
-    if (mode !== 'restore') {
-        try { window.sessionStorage.setItem(key, String(hidden)); } catch { /* Still works in memory. */ }
-        if (!hidden) {
-            const previous = window.__blToolbarPreviousFocus;
-            if (previous?.isConnected && previous.getClientRects().length) previous.focus({ preventScroll: true });
-            window.__blToolbarPreviousFocus = null;
-        }
-    }
-    return { success: true, hidden };
+    await window[controllerKey].ready;
+    window[controllerKey].apply();
+    return { success: true };
 }
 
-async function toggleMailroomToolbars(tabId, mode = 'toggle') {
-    if (!Number.isInteger(tabId)) return { success: false, error: 'Open a BetterLetter webpage first.' };
-    try {
-        let [response] = await chrome.scripting.executeScript({ target: { tabId }, func: setMailroomToolbarsVisibility, args: [mode] });
-        if (response?.result?.missing) {
-            await ensureSidebarPanelMounted(tabId);
-            [response] = await chrome.scripting.executeScript({ target: { tabId }, func: setMailroomToolbarsVisibility, args: [mode] });
-        }
-        return response?.result || { success: false, error: 'Toolbar unavailable on this page.' };
-    } catch {
-        return { success: false, error: 'This page does not allow extension toolbars. Open a normal webpage and try again.' };
-    }
+let toolbarVisibilityQueue = Promise.resolve();
+function setGlobalMailroomToolbarsHidden(hidden) {
+    const operation = toolbarVisibilityQueue.then(async () => {
+        await chrome.storage.local.set({ mailroomToolbarHiddenGlobalV1: hidden === true });
+        const tabs = await chrome.tabs.query({});
+        // Initialize old/unmounted pages too; restricted pages cannot block others.
+        const results = await Promise.allSettled(tabs.filter(tab => Number.isInteger(tab.id)).map(tab =>
+            chrome.scripting.executeScript({ target: { tabId: tab.id }, func: installGlobalToolbarVisibility })));
+        return { success: true, hidden: hidden === true, skippedTabs: results.filter(result => result.status === 'rejected').length };
+    });
+    toolbarVisibilityQueue = operation.catch(() => undefined);
+    return operation;
 }
 
 async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) {
     const isDarkModeEnabled = await getStoredDarkModePreference();
+    await chrome.scripting.executeScript({ target: { tabId }, func: installGlobalToolbarVisibility });
     await chrome.scripting.executeScript({
         target: { tabId },
         func: (panelUrl, hostTabId, shouldForceCollapsed, storedIsDark, fullSidebarCollapse) => {
@@ -4435,6 +4457,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 if (!dock) {
                     dock = document.createElement('div');
                     dock.id = DOCK_ID;
+                    window.__blGlobalToolbarVisibilityV1?.apply(dock);
                     (document.body || document.documentElement).appendChild(dock);
                 }
                 dock.classList.toggle('bl-dark', Boolean(isDark));
@@ -4736,11 +4759,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureRailMounted();
                 getOrderedViews().forEach(mountOne);
                 ensurePageToolbarMounted();
-                try {
-                    if (window.sessionStorage.getItem('__BL_ALL_TOOLBARS_HIDDEN_V1__') === 'true') {
-                        document.getElementById(DOCK_ID)?.style.setProperty('display', 'none', 'important');
-                    }
-                } catch { /* Existing dock retains its current visibility. */ }
+                window.__blGlobalToolbarVisibilityV1?.apply();
                 let sidebarHidden = document.getElementById(DOCK_ID)?.classList.contains('bl-sidebar-hidden');
                 try { sidebarHidden = window.sessionStorage.getItem(SIDEBAR_HIDDEN_KEY) === 'true'; } catch { /* Keep in-memory state. */ }
                 setSidebarHidden(sidebarHidden, { persist: false });
@@ -4899,11 +4918,9 @@ if (chrome.idle?.setDetectionInterval && chrome.idle?.onStateChanged) {
 
 if (chrome.commands?.onCommand) {
     chrome.commands.onCommand.addListener((command, tab) => {
-        if (command === 'toggle_mailroom_toolbars') {
-            (async () => {
-                const active = tab?.id ? tab : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
-                await toggleMailroomToolbars(active?.id);
-            })().catch(() => undefined);
+        // Retain the existing command ID so customized H bindings survive updates.
+        if (command === 'toggle_mailroom_toolbars' || command === 'show_mailroom_toolbars') {
+            setGlobalMailroomToolbarsHidden(command === 'toggle_mailroom_toolbars').catch(error => console.error('Could not update global toolbar visibility:', error));
             return;
         }
         if (String(command || '') !== HOTKEY_SHOW_LIVE_SUMMARY_COMMAND) return;
@@ -4916,10 +4933,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const handle = async () => {
         if (message.action === 'showMailroomToolbars') {
-            const candidates = await getOrderedBetterLetterTabCandidates(message.preferredTabId);
-            const result = await toggleMailroomToolbars(candidates[0]?.id, 'show');
-            if (result.success) await chrome.tabs.update(candidates[0].id, { active: true });
-            return result;
+            return await setGlobalMailroomToolbarsHidden(false);
         }
         if (message.action === 'setDarkModePreference') {
             return await handleSetDarkModePreference(message.payload);

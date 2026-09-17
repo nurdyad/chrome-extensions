@@ -764,7 +764,7 @@ async function initializePanel() {
     document.getElementById('showPageToolbarsBtn')?.addEventListener('click', async () => {
         try {
             const response = await chrome.runtime.sendMessage({ action: 'showMailroomToolbars', ...getProtectedActionPayload() });
-            showToast(response?.success ? 'Page toolbars restored.' : response?.error || 'Could not restore toolbars.');
+            showToast(response?.success ? 'Toolbars restored across all tabs.' : response?.error || 'Could not restore toolbars.');
         } catch (error) { showToast(describeExtensionError(error)); }
     });
 
