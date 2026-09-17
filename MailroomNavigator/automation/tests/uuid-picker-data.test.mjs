@@ -26,3 +26,12 @@ test('status choices include observed statuses and explicit pending/unchecked st
  assert.equal(filterPickerRows(rows,{status:'status:released'}).length,0);
  assert.equal(filterPickerRows(rows,{status:'pending',outcome:'failed'}).length,0);
 });
+
+test('batch-only rows can be found by document ID, status, reason or lookup error',()=>{
+ for(const query of ['123','REJECTED','patient inactive'])assert.deepEqual(filterPickerRows(rows,{query}).map(r=>r.id),['a']);
+ assert.deepEqual(filterPickerRows(rows,{query:'timeout'}).map(r=>r.id),['c']);
+ const batchOnly=[{id:'uuid',batchItem:{result:{found:true,documentId:4860193,rejectionReason:'duplicate_letter',secret:'should-not-be-indexed'}}}];
+ assert.equal(filterPickerRows(batchOnly,{query:'4860193'}).length,1);
+ assert.equal(filterPickerRows(batchOnly,{query:'duplicate letter'}).length,1);
+ assert.equal(filterPickerRows(batchOnly,{query:'should-not-be-indexed'}).length,0);
+});

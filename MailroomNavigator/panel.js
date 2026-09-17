@@ -3504,7 +3504,8 @@ async function initializePanel() {
 
             const filters = document.createElement('div');
             filters.className = 'bookmarklet-tool-filter-grid';
-            searchInput.setAttribute('aria-label', 'Search UUIDs');
+            searchInput.setAttribute('aria-label', 'Search UUID, document ID, status or reason');
+            searchInput.placeholder = 'Search UUID, document ID or reason…';
             dateInput.setAttribute('aria-label', 'Filter by date');
             filters.append(searchInput, dateInput);
             const outcomeFilter = document.createElement('select');
