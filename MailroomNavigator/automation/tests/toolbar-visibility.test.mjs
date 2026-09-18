@@ -49,10 +49,10 @@ test('failed initialization can retry without leaking a listener',async()=>{
  const p=page(shared);await assert.rejects(p.install(),/storage unavailable/);assert.equal(shared.listeners.size,0);
  shared.local.get=get;await p.install();assert.equal(shared.listeners.size,1);
 });
-function coordinator(shared,pages){
+function coordinator(shared,pages,mounts=[]){
  const chrome={storage:shared,tabs:{query:async query=>{assert.deepEqual(query,{});return [{id:1,windowId:1},{id:2,windowId:2},{id:3,windowId:2}];}},
- scripting:{executeScript:async({target})=>{if(target.tabId===3)throw Error('restricted page');await pages[target.tabId-1].install();}}};
- return new Function('chrome','installGlobalToolbarVisibility',source.slice(queueStart,end)+'return setGlobalMailroomToolbarsHidden;')(chrome,()=>{});
+ scripting:{executeScript:async({target})=>{if(target.tabId===3)throw Error('restricted page');return [{result:await pages[target.tabId-1].install()}];}}};
+ return new Function('chrome','installGlobalToolbarVisibility','ensureSidebarPanelMounted',source.slice(queueStart,end)+'return setGlobalMailroomToolbarsHidden;')(chrome,()=>{},async id=>{mounts.push(id);pages[id-1].mount();});
 }
 test('global commands reach all windows, tolerate restricted tabs and serialize rapid hide/show',async()=>{
  const shared=storage(),pages=[page(shared),page(shared)],set=coordinator(shared,pages);
@@ -72,4 +72,20 @@ test('manifest provides separate configurable hide and show commands',()=>{
  assert.equal(manifest.commands.toggle_mailroom_toolbars.suggested_key.mac,'Alt+Shift+H');
  assert.equal(manifest.commands.show_mailroom_toolbars.suggested_key.mac,'Alt+Shift+J');
  assert.match(manifest.commands.toggle_mailroom_toolbars.description,/Hide.*all tabs/);
+});
+
+test('show rebuilds missing docks after reload without changing already mounted pages',async()=>{
+ const shared=storage(true),pages=[page(shared,{mounted:false}),page(shared)],mounts=[];
+ const set=coordinator(shared,pages,mounts);
+ await set(true);assert.deepEqual(mounts,[]);
+ const result=await set(false);assert.equal(result.success,true);assert.deepEqual(mounts,[1]);
+ assert.equal(pages[0].dock.dataset.allToolbarsHidden,'false');
+ await set(false);assert.deepEqual(mounts,[1]);
+});
+test('show does not claim toolbars were restored when no page is available',async()=>{
+ const shared=storage();
+ const chrome={storage:shared,tabs:{query:async()=>[]},scripting:{executeScript:async()=>{throw Error('must not inject');}}};
+ const set=new Function('chrome','installGlobalToolbarVisibility','ensureSidebarPanelMounted',source.slice(queueStart,end)+'return setGlobalMailroomToolbarsHidden;')(chrome,()=>{},()=>{});
+ const result=await set(false);assert.equal(result.success,false);assert.match(result.error,/Open or refresh a normal webpage/);
+ assert.equal((await shared.local.get())[key],false);
 });
