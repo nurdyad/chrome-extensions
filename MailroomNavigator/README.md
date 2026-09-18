@@ -16,7 +16,7 @@ Use `SETUP.md` for installation on a new machine.
 - The right-side rail opens Navigator, Job Panel, UUID Picker, Bookmarklet Tools and Others.
 - Reconcile and Restart Service rail icons run actions; their full controls remain in Others.
 - The theme icon sits above the collapse/expand icon. Collapse hides the rail/panels while retaining an expand control.
-- `Option/Alt+Shift+H` hides the top toolbar and right rail across all tabs/windows; `Option/Alt+Shift+J` shows them again. Repeating Hide keeps them hidden. The setting is saved for this Chrome profile, and new/refreshed tabs inherit it. Chrome must be focused; these are not system-wide desktop shortcuts. Customize both commands in `chrome://extensions/shortcuts`; the popup recovery control also shows toolbars globally.
+- `Option/Alt+Shift+H` toggles the top toolbar and right rail across all tabs/windows: press once to hide and again to show. There is no separate J shortcut. The setting is saved for this Chrome profile, and new/refreshed tabs inherit it. Chrome must be focused; these are not system-wide desktop shortcuts. Customize the toggle command in `chrome://extensions/shortcuts`; the popup recovery control also shows toolbars globally.
 - Toast/status indicators report action progress. Refresh a page after reloading the extension.
 
 ### Navigator Tab (Practice Navigator)

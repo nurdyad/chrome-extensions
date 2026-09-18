@@ -7,7 +7,7 @@ A lookup follows this path: dashboard/picker → extension background worker →
 | Symptom | Check next | Meaning / safe next step |
 | --- | --- | --- |
 | No UUID rows | Confirm the active BetterLetter page contains UUIDs. Clear search/date/outcome/status filters. | The picker combines page rows and the latest fresh batch. Paste one approved full UUID into Check a UUID to isolate page extraction. |
-| All controls disappeared | Press Option/Alt+Shift+J, check `chrome://extensions/shortcuts`, or use the popup's Show page toolbars recovery control. | Visibility is shared across tabs/windows in this Chrome profile. Option/Alt+Shift+H hides globally; J shows globally. Reloading retains the saved preference. |
+| All controls disappeared | Press Option/Alt+Shift+H, check `chrome://extensions/shortcuts`, or use the popup's Show page toolbars recovery control. | Visibility is shared across tabs/windows in this Chrome profile. Option/Alt+Shift+H toggles globally: press again to show. Reloading retains the saved preference. |
 | No valid UUIDs / skipped inputs | Use a complete hyphenated UUID for batches. | Invalid values and duplicates are skipped. Individual lookup accepts a supported fragment, but a fragment can be ambiguous. |
 | Pending / elapsed time increases | Wait for the current request and watch completed/total counts. | Batches run two requests at a time. Pending is not a successful match and elapsed time is not an ETA. |
 | Found, with document or bot-job status | Read the result's ID/status. | A found job may have no document ID. Rejected is a document outcome, not a network failure. |

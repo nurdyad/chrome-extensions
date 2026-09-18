@@ -67,11 +67,11 @@ test('failed storage write rejects its command but does not poison the queue',as
  const results=await Promise.allSettled([set(true),set(false)]);
  assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');
 });
-test('manifest provides separate configurable hide and show commands',()=>{
+test('manifest provides one configurable global toggle command',()=>{
  const manifest=JSON.parse(readFileSync(new URL('../../manifest.json',import.meta.url)));
  assert.equal(manifest.commands.toggle_mailroom_toolbars.suggested_key.mac,'Alt+Shift+H');
- assert.equal(manifest.commands.show_mailroom_toolbars.suggested_key.mac,'Alt+Shift+J');
- assert.match(manifest.commands.toggle_mailroom_toolbars.description,/Hide.*all tabs/);
+ assert.equal(manifest.commands.show_mailroom_toolbars,undefined);
+ assert.match(manifest.commands.toggle_mailroom_toolbars.description,/Hide or show.*all tabs/);
 });
 
 test('show rebuilds missing docks after reload without changing already mounted pages',async()=>{
@@ -87,5 +87,20 @@ test('show does not claim toolbars were restored when no page is available',asyn
  const chrome={storage:shared,tabs:{query:async()=>[]},scripting:{executeScript:async()=>{throw Error('must not inject');}}};
  const set=new Function('chrome','installGlobalToolbarVisibility','ensureSidebarPanelMounted',source.slice(queueStart,end)+'return setGlobalMailroomToolbarsHidden;')(chrome,()=>{},()=>{});
  const result=await set(false);assert.equal(result.success,false);assert.match(result.error,/Open or refresh a normal webpage/);
+ assert.equal((await shared.local.get())[key],false);
+});
+
+test('rapid toggle presses alternate global state instead of reading a stale value',async()=>{
+ const shared=storage(),pages=[page(shared),page(shared)],set=coordinator(shared,pages);
+ const results=await Promise.all([set('toggle'),set('toggle'),set('toggle'),set('toggle')]);
+ assert.deepEqual(results.map(r=>r.hidden),[true,false,true,false]);
+ assert.ok(pages.every(p=>!p.style.has('display')));
+});
+test('toggle reads persisted hidden state after worker restart and recovers missing docks',async()=>{
+ const shared=storage(true),pages=[page(shared,{mounted:false}),page(shared)],mounts=[];
+ const set=coordinator(shared,pages,mounts);
+ assert.equal((await set('toggle')).hidden,false);assert.deepEqual(mounts,[1]);
+ assert.equal((await set('toggle')).hidden,true);
+ await set(false); // Popup recovery must remain an explicit show action.
  assert.equal((await shared.local.get())[key],false);
 });
