@@ -2154,12 +2154,17 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
         return lookup;
       }
 
-      // Validation errors commonly contain the document's source filename
-      // UUID rather than the bot job ID. Restrict this full-UUID lookup to a
-      // filename prefix (UUID + extension) before using the broad fragment
-      // fallback. The production replica has no input_file_name index, but
-      // this anchored scan is substantially cheaper than `%fragment%`.
+      // Without a filename index, ORDER BY id DESC LIMIT 1 can persuade
+      // PostgreSQL to walk the primary key backwards, fetching heap rows
+      // until it finds an older filename. Materialize filename matches first
+      // so ordering/joins operate on the small match set, not the entire table.
       const exactDocumentQuery = `
+        WITH exact_document_matches AS MATERIALIZED (
+          SELECT id, input_file_name, status
+          FROM documents
+          WHERE input_file_name = $1
+            OR input_file_name LIKE $1 || '.%'
+        )
         SELECT
           d.id AS document_id,
           SPLIT_PART(d.input_file_name, '.', 1) AS matched_uuid,
@@ -2175,7 +2180,7 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
           drv.origin->>'user' AS rejection_marked_by,
           drv.changes->>'processing_status' AS rejection_processing_status,
           'Exact document UUID match'::text AS match_type
-        FROM documents d
+        FROM exact_document_matches d
         LEFT JOIN document_rejections dr
           ON dr.mailroom_document_id = d.id
         LEFT JOIN LATERAL (
@@ -2186,8 +2191,6 @@ async function runUuidStatusLookup(uuid, { forceRefresh = false } = {}) {
           ORDER BY version.id DESC
           LIMIT 1
         ) drv ON TRUE
-        WHERE d.input_file_name = $1
-          OR d.input_file_name LIKE $1 || '.%'
         ORDER BY d.id DESC
         LIMIT 1
       `;
