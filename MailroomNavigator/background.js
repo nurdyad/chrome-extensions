@@ -3981,23 +3981,27 @@ async function installGlobalToolbarVisibility() {
 let toolbarVisibilityQueue = Promise.resolve();
 function setGlobalMailroomToolbarsHidden(hidden) {
     const operation = toolbarVisibilityQueue.then(async () => {
-        await chrome.storage.local.set({ mailroomToolbarHiddenGlobalV1: hidden === true });
+        // Read inside the queue so rapid presses each flip the latest state.
+        const nextHidden = hidden === 'toggle'
+            ? (await chrome.storage.local.get('mailroomToolbarHiddenGlobalV1')).mailroomToolbarHiddenGlobalV1 !== true
+            : hidden === true;
+        await chrome.storage.local.set({ mailroomToolbarHiddenGlobalV1: nextHidden });
         const tabs = await chrome.tabs.query({});
         // Initialize old/unmounted pages too; restricted pages cannot block others.
         const results = await Promise.allSettled(tabs.filter(tab => Number.isInteger(tab.id)).map(async tab => {
             const [response] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: installGlobalToolbarVisibility });
             // Extension reloads leave some existing tabs without a mounted dock.
             // Showing must recover those pages without waiting for a tab switch.
-            if (hidden !== true && response?.result?.missing) {
+            if (!nextHidden && response?.result?.missing) {
                 await ensureSidebarPanelMounted(tab.id);
             }
         }));
         const skippedTabs = results.filter(result => result.status === 'rejected').length;
         const appliedTabs = results.length - skippedTabs;
-        if (hidden !== true && !appliedTabs) {
+        if (!nextHidden && !appliedTabs) {
             return { success: false, hidden: false, skippedTabs, error: 'Visibility is enabled. Open or refresh a normal webpage to restore the toolbars.' };
         }
-        return { success: true, hidden: hidden === true, skippedTabs, appliedTabs };
+        return { success: true, hidden: nextHidden, skippedTabs, appliedTabs };
     });
     toolbarVisibilityQueue = operation.catch(() => undefined);
     return operation;
@@ -5021,8 +5025,8 @@ if (chrome.idle?.setDetectionInterval && chrome.idle?.onStateChanged) {
 if (chrome.commands?.onCommand) {
     chrome.commands.onCommand.addListener((command, tab) => {
         // Retain the existing command ID so customized H bindings survive updates.
-        if (command === 'toggle_mailroom_toolbars' || command === 'show_mailroom_toolbars') {
-            setGlobalMailroomToolbarsHidden(command === 'toggle_mailroom_toolbars').catch(error => console.error('Could not update global toolbar visibility:', error));
+        if (command === 'toggle_mailroom_toolbars') {
+            setGlobalMailroomToolbarsHidden('toggle').catch(error => console.error('Could not update global toolbar visibility:', error));
             return;
         }
         if (String(command || '') !== HOTKEY_SHOW_LIVE_SUMMARY_COMMAND) return;
