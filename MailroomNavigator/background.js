@@ -3975,7 +3975,7 @@ async function installGlobalToolbarVisibility() {
     }
     await window[controllerKey].ready;
     window[controllerKey].apply();
-    return { success: true };
+    return { success: true, missing: !document.getElementById('bl-allinone-sidebar-dock') };
 }
 
 let toolbarVisibilityQueue = Promise.resolve();
@@ -3984,9 +3984,20 @@ function setGlobalMailroomToolbarsHidden(hidden) {
         await chrome.storage.local.set({ mailroomToolbarHiddenGlobalV1: hidden === true });
         const tabs = await chrome.tabs.query({});
         // Initialize old/unmounted pages too; restricted pages cannot block others.
-        const results = await Promise.allSettled(tabs.filter(tab => Number.isInteger(tab.id)).map(tab =>
-            chrome.scripting.executeScript({ target: { tabId: tab.id }, func: installGlobalToolbarVisibility })));
-        return { success: true, hidden: hidden === true, skippedTabs: results.filter(result => result.status === 'rejected').length };
+        const results = await Promise.allSettled(tabs.filter(tab => Number.isInteger(tab.id)).map(async tab => {
+            const [response] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: installGlobalToolbarVisibility });
+            // Extension reloads leave some existing tabs without a mounted dock.
+            // Showing must recover those pages without waiting for a tab switch.
+            if (hidden !== true && response?.result?.missing) {
+                await ensureSidebarPanelMounted(tab.id);
+            }
+        }));
+        const skippedTabs = results.filter(result => result.status === 'rejected').length;
+        const appliedTabs = results.length - skippedTabs;
+        if (hidden !== true && !appliedTabs) {
+            return { success: false, hidden: false, skippedTabs, error: 'Visibility is enabled. Open or refresh a normal webpage to restore the toolbars.' };
+        }
+        return { success: true, hidden: hidden === true, skippedTabs, appliedTabs };
     });
     toolbarVisibilityQueue = operation.catch(() => undefined);
     return operation;
