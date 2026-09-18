@@ -4054,7 +4054,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
             // positioned relative to their own panel next to a new panel
             // that assumes an independent rail, producing a stray gap
             // between them. Bumping this forces a clean rebuild instead.
-            const UI_VERSION = '28';
+            const UI_VERSION = '29';
             const VERSION_ATTR = 'data-bl-sidebar-ui-version';
 
             const rootIdFor = (key) => `bl-allinone-sidebar-panel-${key}`;
@@ -4236,6 +4236,9 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                             font: 600 11px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
                             transition: background .18s ease, box-shadow .18s ease;
                         }
+                        #bl-page-shortcut-toolbar .bl-toolbar-drag-grip { cursor: grab; touch-action: none; user-select: none; background: transparent; border-color: transparent; box-shadow: none; min-width: 20px; padding: 0 2px; }
+                        #bl-page-shortcut-toolbar.is-dragging { user-select: none; box-shadow: 0 8px 24px #0f172a30; }
+                        #bl-page-shortcut-toolbar.is-dragging .bl-toolbar-drag-grip { cursor: grabbing; }
                         #bl-page-shortcut-toolbar svg { flex: 0 0 14px; width: 14px; height: 14px; }
                         #bl-page-shortcut-toolbar button span { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; transition: max-width .2s ease, opacity .2s ease, margin .2s ease; }
                         #bl-page-shortcut-toolbar button:hover,
@@ -4689,6 +4692,92 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 ensureDockMounted().appendChild(rail);
             };
 
+            function makeToolbarDraggable(toolbar) {
+                window.__blToolbarDragCleanup?.();
+                const storageKey = '__BL_TOOLBAR_POSITION_V1__';
+                const grip = document.createElement('button');
+                grip.type = 'button';
+                grip.className = 'bl-toolbar-drag-grip';
+                grip.setAttribute('aria-label', 'Move toolbar. Arrow keys move; Home resets position.');
+                grip.title = 'Drag to move · Arrow keys to move · Home or double-click to reset';
+                grip.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"/><circle cx="9" cy="3" r="1"/><circle cx="5" cy="7" r="1"/><circle cx="9" cy="7" r="1"/><circle cx="5" cy="11" r="1"/><circle cx="9" cy="11" r="1"/></svg>';
+                toolbar.prepend(grip);
+                let position = null;
+                let drag = null;
+                try {
+                    const saved = JSON.parse(window.localStorage.getItem(storageKey));
+                    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) position = { x: saved.x, y: saved.y };
+                } catch { /* Drag still works if site storage is unavailable. */ }
+                const persist = () => {
+                    try {
+                        if (position) window.localStorage.setItem(storageKey, JSON.stringify(position));
+                        else window.localStorage.removeItem(storageKey);
+                    } catch { /* Keep the current in-memory position. */ }
+                };
+                const place = () => {
+                    if (!position) {
+                        toolbar.style.removeProperty('left');
+                        toolbar.style.removeProperty('top');
+                        toolbar.style.removeProperty('transform');
+                        return;
+                    }
+                    const rect = toolbar.getBoundingClientRect();
+                    if (!rect.width || !rect.height) return; // Hidden globally; resize observer restores on show.
+                    position.x = Math.max(8, Math.min(position.x, Math.max(8, window.innerWidth - rect.width - 8)));
+                    position.y = Math.max(8, Math.min(position.y, Math.max(8, window.innerHeight - rect.height - 8)));
+                    toolbar.style.left = `${position.x}px`;
+                    toolbar.style.top = `${position.y}px`;
+                    toolbar.style.transform = 'none';
+                };
+                const reset = () => { position = null; place(); persist(); };
+                toolbar.addEventListener('pointerdown', event => {
+                    if (event.button !== 0 || (event.target.closest('button') && event.target.closest('button') !== grip)) return;
+                    const rect = toolbar.getBoundingClientRect();
+                    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, original: position && { ...position } };
+                    toolbar.setPointerCapture(event.pointerId);
+                    toolbar.classList.add('is-dragging');
+                    event.preventDefault();
+                });
+                toolbar.addEventListener('pointermove', event => {
+                    if (!drag || event.pointerId !== drag.id) return;
+                    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+                    if (Math.abs(dx) + Math.abs(dy) < 4 && !drag.moved) return;
+                    drag.moved = true;
+                    position = { x: drag.left + dx, y: drag.top + dy };
+                    place();
+                });
+                const finish = (event, cancel = false) => {
+                    if (!drag || event.pointerId !== drag.id) return;
+                    if (cancel) { position = drag.original; place(); }
+                    if (drag.moved && !cancel) persist();
+                    const pointerId = drag.id;
+                    drag = null;
+                    toolbar.classList.remove('is-dragging');
+                    if (toolbar.hasPointerCapture(pointerId)) toolbar.releasePointerCapture(pointerId);
+                };
+                toolbar.addEventListener('pointerup', event => finish(event));
+                toolbar.addEventListener('pointercancel', event => finish(event, true));
+                toolbar.addEventListener('lostpointercapture', event => finish(event, true));
+                grip.addEventListener('dblclick', reset);
+                grip.addEventListener('keydown', event => {
+                    if (event.key === 'Home') { event.preventDefault(); reset(); return; }
+                    const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+                    if (!delta) return;
+                    event.preventDefault();
+                    const rect = toolbar.getBoundingClientRect();
+                    const step = event.shiftKey ? 1 : 10;
+                    position = { x: rect.left + delta[0] * step, y: rect.top + delta[1] * step };
+                    place(); persist();
+                });
+                const resize = () => { if (!toolbar.isConnected) { cleanup(); return; } place(); };
+                const observer = new ResizeObserver(resize);
+                const cleanup = () => { window.removeEventListener('resize', resize); observer.disconnect(); };
+                window.__blToolbarDragCleanup = cleanup;
+                window.addEventListener('resize', resize);
+                observer.observe(toolbar);
+                place();
+            }
+
             const ensurePageToolbarMounted = () => {
                 if (document.getElementById('bl-page-shortcut-toolbar')) return;
                 const toolbar = document.createElement('nav');
@@ -4746,6 +4835,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                     });
                 });
                 ensureDockMounted().appendChild(toolbar);
+                makeToolbarDraggable(toolbar);
             };
 
             const cleanupStaleUi = () => {
@@ -4756,6 +4846,7 @@ async function ensureSidebarPanelMounted(tabId, { forceCollapsed = true } = {}) 
                 // (they're all its children); the individual lookups below
                 // exist only to catch stray leftovers from older versions
                 // that appended those elements directly to <body> instead.
+                window.__blToolbarDragCleanup?.();
                 document.getElementById(DOCK_ID)?.remove();
                 document.getElementById(RAIL_ID)?.remove();
                 VIEWS.forEach(({ key }) => document.getElementById(rootIdFor(key))?.remove());
