@@ -12,7 +12,7 @@ Use `SETUP.md` for installation on a new machine.
 
 ### Global Navigation
 
-- A floating shortcut toolbar sits at the top of the webpage, below Chrome's browser UI.
+- A floating shortcut toolbar sits at the top of the webpage, below Chrome's browser UI. Drag its left-hand grip to reposition it; the position is saved per website. Focus the grip and use arrow keys to move (Shift for 1-pixel steps), or press Home/double-click the grip to reset to the top centre. Its position adjusts to stay within the window.
 - The right-side rail opens Navigator, Job Panel, UUID Picker, Bookmarklet Tools and Others.
 - Reconcile and Restart Service rail icons run actions; their full controls remain in Others.
 - The theme icon sits above the collapse/expand icon. Collapse hides the rail/panels while retaining an expand control.
