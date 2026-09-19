@@ -12,6 +12,7 @@ export const state = {
 
 export function setCurrentSelectedOdsCode(code) {
     state.currentSelectedOdsCode = code;
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('mailroom-practice-change'));
 }
 
 export function setCachedPractices(data) {

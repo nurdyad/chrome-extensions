@@ -305,3 +305,7 @@ Release process: [versioning and compatibility policy](docs/RELEASES.md).
 Lookup problems: [UUID troubleshooting decision tree](docs/UUID-TROUBLESHOOTING.md).
 
 Before sharing a release: [colleague smoke-test checklist](docs/RELEASE-SMOKE-TEST.md).
+
+## Optional desktop companion preview
+
+The native floating toolbar for Windows and macOS is in [desktop/README.md](desktop/README.md). It is an opt-in 2.0 alpha; extension-only workflows remain available. See the [release checklist](desktop/RELEASE-CHECKLIST.md) for outstanding platform validation.

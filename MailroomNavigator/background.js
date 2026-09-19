@@ -118,10 +118,10 @@ function isPracticeAdminRootUrl(url, odsCode) {
     }
 }
 
-async function findAndFocusPracticeTab(odsCode) {
+async function findAndFocusPracticeTab(odsCode, windowId = null) {
     const targetUrl = buildPracticeAdminUrl(odsCode);
     const tabs = await chrome.tabs.query({ url: `${targetUrl}*` });
-    const exactPracticeTab = tabs.find((tab) => isPracticeAdminRootUrl(getTabUrl(tab), odsCode));
+    const exactPracticeTab = tabs.find((tab) => (windowId === null || tab.windowId === windowId) && isPracticeAdminRootUrl(getTabUrl(tab), odsCode));
 
     if (!exactPracticeTab) return null;
 
@@ -241,7 +241,7 @@ async function clickLiveViewTab(tabId, settingType) {
     }
 }
 
-async function handleOpenPractice(input, settingType = "ehr_settings") {
+async function handleOpenPractice(input, settingType = "ehr_settings", windowId = null) {
     const normalizedInput = String(input || '').trim();
     const odsMatch = normalizedInput.match(/\(([^)]+)\)$/);
     const odsCode = String(odsMatch ? odsMatch[1] : normalizedInput).trim().toUpperCase();
@@ -250,10 +250,10 @@ async function handleOpenPractice(input, settingType = "ehr_settings") {
     }
 
     const targetUrl = buildPracticeAdminUrl(odsCode);
-    let tabId = await findAndFocusPracticeTab(odsCode);
+    let tabId = await findAndFocusPracticeTab(odsCode, windowId);
 
     if (!tabId) {
-        const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
+        const newTab = await chrome.tabs.create({ url: targetUrl, active: true, ...(windowId === null ? {} : { windowId }) });
         tabId = newTab.id;
     }
 
@@ -5035,7 +5035,7 @@ if (chrome.commands?.onCommand) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.target === 'offscreen') return false;
+    if (message.target === 'offscreen' || message.action === 'desktopCompanionSettings') return false;
 
     const handle = async () => {
         if (message.action === 'showMailroomToolbars') {
@@ -5127,7 +5127,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 error: result?.error || ''
             };
         }
-        if (message.action === 'openPractice') return await handleOpenPractice(message.input, message.settingType);
+        if (message.action === 'openPractice') {
+            const windowId = sender?.tab?.windowId ?? (Number.isInteger(message.preferredTabId)
+                ? (await chrome.tabs.get(message.preferredTabId)).windowId : null);
+            return await handleOpenPractice(message.input, message.settingType, windowId);
+        }
         if (message.action === 'createLinearIssueFromEnv' || message.action === 'createLinearIssueAndNotifySlack') {
             return await handleCreateLinearIssueFromEnv(message.payload, sender);
         }
@@ -5388,3 +5392,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handle().then(sendResponse);
     return true; 
 });
+
+// Optional desktop companion; initialized after the existing extension handlers.
+try { importScripts('desktop/shared/protocol.js', 'desktop-bridge.js'); }
+catch (error) { console.error('Desktop companion could not initialize:', error); }
