@@ -3,6 +3,7 @@
 import { state, setCachedPractices } from './state.js';
 import { hideStatus, showToast, describeExtensionError, openTabWithTimeout, extractNameFromEmail, copyTextToClipboard } from './utils.js';
 import * as Navigator from './navigator.js';
+import { startDesktopPanel } from './desktop-panel.mjs';
 import { filterPickerRows, pickerStatusOptions, sortPickerRows, exportPickerOutcomes } from './uuid-picker-data.mjs';
 
 let practiceCacheLoadPromise = null;
@@ -955,6 +956,13 @@ async function initializePanel() {
     document.getElementById('compactBetterSweepLinkBtn')?.addEventListener('click', () => {
         openTabWithTimeout('https://app.betterletter.ai/admin_panel/letter_protocols');
     });
+
+    document.getElementById('desktopCompanionSettingsBtn')?.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('desktop-settings.html') });
+    });
+    if ((!PANEL_FORCED_VIEW_ID || PANEL_FORCED_VIEW_ID === 'practiceNavigatorView') && Number.isInteger(PANEL_HOST_TAB_ID)) {
+        startDesktopPanel({ tabId: PANEL_HOST_TAB_ID, getScope: () => state.currentSelectedOdsCode || '' });
+    }
 
     // Only the host page can invoke this navigation-only shortcut allowlist.
     if (PANEL_FORCED_VIEW_ID === 'practiceNavigatorView') {

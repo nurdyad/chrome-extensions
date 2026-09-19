@@ -1,0 +1,7 @@
+const $=id=>document.getElementById(id),status=text=>$('status').textContent=text;
+$('extensionId').textContent=chrome.runtime.id;
+$('copyId').addEventListener('click',()=>navigator.clipboard.writeText(chrome.runtime.id).then(()=>status('Extension ID copied.')).catch(()=>status('Select and copy the extension ID manually.')));
+$('pair').addEventListener('submit',async event=>{event.preventDefault();try{const response=await chrome.runtime.sendMessage({action:'desktopCompanionSettings',token:$('token').value.trim(),profile:$('profile').value});if(!response?.success)throw Error(response?.error||'Could not pair');$('token').value='';status('Pairing saved. Connecting to the desktop app…');}catch(error){status(error.message);}});
+$('disconnect').addEventListener('click',async()=>{try{const response=await chrome.runtime.sendMessage({action:'desktopCompanionSettings',disable:true});if(!response?.success)throw Error(response?.error||'Could not disconnect');$('token').value='';status('Disconnected and key removed from this profile.');}catch(error){status(error.message);}});
+chrome.storage.local.get(['mailroomDesktopCompanionStatusV1','mailroomDesktopCompanionV1']).then(data=>{status(data.mailroomDesktopCompanionStatusV1||'Desktop companion disabled');$('profile').value=data.mailroomDesktopCompanionV1?.profile||'Work Chrome';});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.mailroomDesktopCompanionStatusV1)status(changes.mailroomDesktopCompanionStatusV1.newValue||'Disconnected');});

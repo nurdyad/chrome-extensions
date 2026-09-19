@@ -7,7 +7,7 @@ const root = resolve(process.argv[2] || resolve(dirname(fileURLToPath(import.met
 async function scripts(dir) {
     const found = [];
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+        if (entry.name.startsWith('.') || ['node_modules', 'dist', 'build'].includes(entry.name)) continue;
         const path = resolve(dir, entry.name);
         if (entry.isDirectory()) found.push(...await scripts(path));
         else if (/\.(?:js|mjs|cjs)$/.test(entry.name)) found.push(path);
